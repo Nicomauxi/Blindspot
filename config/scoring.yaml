@@ -1,0 +1,19 @@
+# Scoring configuration — Phase 3 placeholder
+# Weights and rules for lead scoring will be defined here.
+# Each dimension will produce a 0-100 score that combines into a final score.
+
+version: 1
+
+dimensions:
+  # digital_gap: how absent is the business online
+  # online_reputation: rating + review volume
+  # contact_availability: phone, whatsapp, etc.
+  # business_activity: hours, last review date, etc.
+
+# Example (to be expanded in Phase 3):
+# digital_gap:
+#   weight: 0.4
+#   rules:
+#     - no_website: 40
+#     - social_web_only: 25
+#     - no_phone: 15
