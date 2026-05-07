@@ -26,34 +26,54 @@ export async function createRun(params: {
   return data as Run;
 }
 
-export async function completeRun(
-  runId: string,
-  counts: {
-    discovered: number;
-    filtered: number;
-    createdNew: number;
-    updatedExisting: number;
-  }
-): Promise<void> {
+export interface RunStats {
+  /** Total candidates returned by Places API text search */
+  places_requests: number;
+  /** Candidates that passed the profile filter */
+  leads_discovered: number;
+  /** New leads inserted */
+  leads_new: number;
+  /** Existing leads updated */
+  leads_updated: number;
+  /** Wall-clock duration of the full discover command */
+  duration_ms: number;
+}
+
+export async function completeRun(runId: string, stats: RunStats): Promise<void> {
+  const log = getLogger();
+
+  log.info(
+    { runId, duration_ms: stats.duration_ms },
+    "Completing run (duration_ms logged — no DB column)"
+  );
+
   const { error } = await getSupabase()
     .from("runs")
     .update({
       status: "completed" satisfies RunStatus,
-      discovered: counts.discovered,
-      filtered: counts.filtered,
-      created_new: counts.createdNew,
-      updated_existing: counts.updatedExisting,
+      discovered: stats.places_requests,
+      filtered: stats.leads_discovered,
+      created_new: stats.leads_new,
+      updated_existing: stats.leads_updated,
       completed_at: new Date().toISOString(),
     })
     .eq("id", runId);
 
   if (error) {
-    getLogger().error({ runId, error }, "Failed to complete run");
+    log.error({ runId, error }, "Failed to complete run");
     throw new Error(`Failed to complete run: ${error.message}`);
   }
 }
 
-export async function failRun(runId: string, errMsg: string): Promise<void> {
+export async function failRun(
+  runId: string,
+  errMsg: string,
+  duration_ms: number
+): Promise<void> {
+  const log = getLogger();
+
+  log.error({ runId, duration_ms, errMsg }, "Run failed");
+
   const { error } = await getSupabase()
     .from("runs")
     .update({
@@ -64,6 +84,6 @@ export async function failRun(runId: string, errMsg: string): Promise<void> {
     .eq("id", runId);
 
   if (error) {
-    getLogger().error({ runId, error }, "Failed to mark run as failed");
+    log.error({ runId, error }, "Failed to mark run as failed");
   }
 }

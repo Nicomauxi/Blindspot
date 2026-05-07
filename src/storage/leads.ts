@@ -1,10 +1,10 @@
 import { getSupabase } from "../shared/supabase.js";
 import { getLogger } from "../shared/logger.js";
-import type { PlaceCandidate } from "../shared/types.js";
+import type { Lead, PlaceCandidate } from "../shared/types.js";
 
 export interface UpsertResult {
-  created: number;
-  updated: number;
+  inserted: Lead[];
+  updated: Lead[];
 }
 
 export async function upsertLeads(
@@ -13,7 +13,7 @@ export async function upsertLeads(
   profile: string,
   tagsFn: (c: PlaceCandidate) => string[]
 ): Promise<UpsertResult> {
-  if (candidates.length === 0) return { created: 0, updated: 0 };
+  if (candidates.length === 0) return { inserted: [], updated: [] };
 
   const log = getLogger();
   const db = getSupabase();
@@ -22,7 +22,7 @@ export async function upsertLeads(
   const placeIds = candidates.map((c) => c.placeId);
   const { data: existing, error: fetchError } = await db
     .from("leads")
-    .select("id, place_id, tags, score, notes")
+    .select("id, place_id, tags, score, notes, state")
     .in("place_id", placeIds);
 
   if (fetchError) throw new Error(`Failed to fetch existing leads: ${fetchError.message}`);
@@ -31,15 +31,16 @@ export async function upsertLeads(
     (existing ?? []).map((r) => [r.place_id as string, r])
   );
 
-  let created = 0;
-  let updated = 0;
+  const inserted: Lead[] = [];
+  const updated: Lead[] = [];
 
   for (const candidate of candidates) {
-    const existing = existingMap.get(candidate.placeId);
+    const alreadyExists = existingMap.get(candidate.placeId);
 
-    if (existing) {
-      // Update metadata but preserve score, tags, notes
-      const { error } = await db
+    if (alreadyExists) {
+      // Update Google-sourced fields only.
+      // Preserved (user-managed): first_seen_run_id, tags, state, notes, score, score_breakdown.
+      const { data, error } = await db
         .from("leads")
         .update({
           name: candidate.name,
@@ -49,44 +50,50 @@ export async function upsertLeads(
           website_uri: candidate.websiteUri,
           phone: candidate.phone,
           business_status: candidate.businessStatus,
-          last_seen_run_id: runId,
           raw_place_data: candidate.raw,
-          // DO NOT overwrite: score, tags, notes, state
+          last_seen_run_id: runId,
+          // updated_at handled by DB trigger
         })
-        .eq("place_id", candidate.placeId);
+        .eq("place_id", candidate.placeId)
+        .select()
+        .single();
 
       if (error) {
         log.error({ placeId: candidate.placeId, error }, "Failed to update lead");
-      } else {
-        updated++;
+      } else if (data) {
+        updated.push(data as Lead);
       }
     } else {
       const tags = tagsFn(candidate);
 
-      const { error } = await db.from("leads").insert({
-        place_id: candidate.placeId,
-        name: candidate.name,
-        formatted_address: candidate.formattedAddress,
-        rating: candidate.rating,
-        user_rating_count: candidate.userRatingCount,
-        website_uri: candidate.websiteUri,
-        phone: candidate.phone,
-        business_status: candidate.businessStatus,
-        state: "discovered",
-        tags,
-        first_seen_run_id: runId,
-        last_seen_run_id: runId,
-        discovery_profile: profile,
-        raw_place_data: candidate.raw,
-      });
+      const { data, error } = await db
+        .from("leads")
+        .insert({
+          place_id: candidate.placeId,
+          name: candidate.name,
+          formatted_address: candidate.formattedAddress,
+          rating: candidate.rating,
+          user_rating_count: candidate.userRatingCount,
+          website_uri: candidate.websiteUri,
+          phone: candidate.phone,
+          business_status: candidate.businessStatus,
+          state: "discovered",
+          tags,
+          first_seen_run_id: runId,
+          last_seen_run_id: runId,
+          discovery_profile: profile,
+          raw_place_data: candidate.raw,
+        })
+        .select()
+        .single();
 
       if (error) {
         log.error({ placeId: candidate.placeId, error }, "Failed to insert lead");
-      } else {
-        created++;
+      } else if (data) {
+        inserted.push(data as Lead);
       }
     }
   }
 
-  return { created, updated };
+  return { inserted, updated };
 }

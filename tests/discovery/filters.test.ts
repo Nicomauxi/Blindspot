@@ -166,3 +166,68 @@ describe("tagCandidate", () => {
     expect(tags).toContain("no-phone");
   });
 });
+
+// ---- Extended social domain tests ----------------------------------------
+
+describe("isSocialOrMissingWeb — extended domain list", () => {
+  const minRating = 4.0;
+
+  function candidateWithWeb(websiteUri: string): PlaceCandidate {
+    return {
+      placeId: "test_social",
+      name: "Test Business",
+      formattedAddress: "Calle Test 1",
+      rating: 4.5,
+      userRatingCount: 30,
+      websiteUri,
+      phone: "+59899000000",
+      businessStatus: "OPERATIONAL",
+      raw: {},
+    };
+  }
+
+  it("accepts profile A candidate with linktr.ee as their website", () => {
+    const result = applyProfileFilter(
+      [candidateWithWeb("https://linktr.ee/mi-negocio")],
+      "a",
+      minRating
+    );
+    expect(result).toHaveLength(1);
+  });
+
+  it("accepts profile A candidate with beacons.ai as their website", () => {
+    const result = applyProfileFilter(
+      [candidateWithWeb("https://beacons.ai/mi-negocio")],
+      "a",
+      minRating
+    );
+    expect(result).toHaveLength(1);
+  });
+
+  it("accepts profile A candidate with wa.me link instead of a website", () => {
+    const result = applyProfileFilter(
+      [candidateWithWeb("https://wa.me/59899123456")],
+      "a",
+      minRating
+    );
+    expect(result).toHaveLength(1);
+  });
+
+  it("accepts profile A candidate with bio.link", () => {
+    const result = applyProfileFilter(
+      [candidateWithWeb("https://bio.link/mi-negocio")],
+      "a",
+      minRating
+    );
+    expect(result).toHaveLength(1);
+  });
+
+  it("rejects profile A candidate with a real business website despite low reviews", () => {
+    const result = applyProfileFilter(
+      [candidateWithWeb("https://www.mimegocio.com.uy")],
+      "a",
+      minRating
+    );
+    expect(result).toHaveLength(0);
+  });
+});

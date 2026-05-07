@@ -32,6 +32,7 @@ export async function discoverCommand(rawArgs: {
   }
 
   const opts = parsed.data;
+  const startedAt = Date.now();
   log.info(opts, "Starting discover command");
 
   const run = await createRun(opts);
@@ -51,28 +52,31 @@ export async function discoverCommand(rawArgs: {
     log.info({ filtered: filtered.length }, "Candidates after profile filter");
 
     // 3. Persist to Supabase
-    const { created, updated } = await upsertLeads(
+    const { inserted, updated } = await upsertLeads(
       filtered,
       run.id,
       opts.profile,
       (c) => tagCandidate(c, opts.profile)
     );
 
-    // 4. Update run record with final counts
+    // 4. Close run with full stats
+    const duration_ms = Date.now() - startedAt;
     await completeRun(run.id, {
-      discovered: candidates.length,
-      filtered: filtered.length,
-      createdNew: created,
-      updatedExisting: updated,
+      places_requests: candidates.length,
+      leads_discovered: filtered.length,
+      leads_new: inserted.length,
+      leads_updated: updated.length,
+      duration_ms,
     });
 
     // 5. Print summary
-    printSummary(run.id, candidates.length, filtered.length, created, updated);
+    printSummary(run.id, candidates.length, filtered.length, inserted.length, updated.length);
   } catch (err) {
+    const duration_ms = Date.now() - startedAt;
     const msg = err instanceof Error ? err.message : String(err);
     log.error({ runId: run.id, err }, "Discover command failed");
-    await failRun(run.id, msg);
-    process.exit(1);
+    await failRun(run.id, msg, duration_ms);
+    throw err;
   }
 }
 

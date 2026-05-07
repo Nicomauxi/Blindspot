@@ -26,7 +26,16 @@ export const PROFILE_THRESHOLDS: Record<DiscoveryProfile, ProfileThresholds> = {
   },
 };
 
-const SOCIAL_DOMAINS = ["facebook.com", "instagram.com", "twitter.com", "tiktok.com"];
+const SOCIAL_DOMAINS = [
+  "facebook.com",
+  "instagram.com",
+  "twitter.com",
+  "tiktok.com",
+  "linktr.ee",
+  "beacons.ai",
+  "wa.me",
+  "bio.link",
+];
 
 function isSocialOrMissingWeb(websiteUri: string | null): boolean {
   if (!websiteUri) return true;

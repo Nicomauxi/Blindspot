@@ -8,7 +8,7 @@
   },
   "main": "./dist/index.js",
   "scripts": {
-    "dev": "tsx src/cli/index.ts",
+    "dev": "node --env-file=.env --import tsx/esm src/cli/index.ts",
     "build": "tsup",
     "start": "node dist/index.js",
     "test": "vitest run",
@@ -29,7 +29,6 @@
     "@supabase/supabase-js": "^2.105.3",
     "cheerio": "^1.2.0",
     "commander": "^14.0.3",
-    "dotenv": "^17.4.2",
     "handlebars": "^4.7.9",
     "p-limit": "^7.3.0",
     "p-retry": "^8.0.0",
