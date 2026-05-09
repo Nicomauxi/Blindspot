@@ -95,3 +95,15 @@ export const candidateProfileABorderline: PlaceCandidate = {
   businessStatus: "OPERATIONAL",
   raw: {},
 };
+
+export const candidateWithInstagramWeb: PlaceCandidate = {
+  placeId: "place_009",
+  name: "Studio Cuts",
+  formattedAddress: "Cordón 800, Montevideo",
+  rating: 4.5,
+  userRatingCount: 22,
+  websiteUri: "https://www.instagram.com/studiocuts_mvd",
+  phone: "+59899555444",
+  businessStatus: "OPERATIONAL",
+  raw: {},
+};

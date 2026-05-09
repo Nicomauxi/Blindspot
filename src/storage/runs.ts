@@ -1,13 +1,15 @@
 import { getSupabase } from "../shared/supabase.js";
 import { getLogger } from "../shared/logger.js";
-import type { Run, DiscoveryProfile, RunStatus } from "../shared/types.js";
+import type { Run, DiscoveryProfile, RunStatus, RunStats, ScoringRunStats } from "../shared/types.js";
+
+export type { RunStats };
 
 export async function createRun(params: {
   niche: string;
   location: string;
   profile: DiscoveryProfile;
   maxResults: number;
-  minRating: number;
+  config: Record<string, unknown>;
 }): Promise<Run> {
   const { data, error } = await getSupabase()
     .from("runs")
@@ -15,8 +17,7 @@ export async function createRun(params: {
       niche: params.niche,
       location: params.location,
       profile: params.profile,
-      max_results: params.maxResults,
-      min_rating: params.minRating,
+      config: params.config,
       status: "running",
     })
     .select()
@@ -26,36 +27,15 @@ export async function createRun(params: {
   return data as Run;
 }
 
-export interface RunStats {
-  /** Total candidates returned by Places API text search */
-  places_requests: number;
-  /** Candidates that passed the profile filter */
-  leads_discovered: number;
-  /** New leads inserted */
-  leads_new: number;
-  /** Existing leads updated */
-  leads_updated: number;
-  /** Wall-clock duration of the full discover command */
-  duration_ms: number;
-}
-
 export async function completeRun(runId: string, stats: RunStats): Promise<void> {
   const log = getLogger();
-
-  log.info(
-    { runId, duration_ms: stats.duration_ms },
-    "Completing run (duration_ms logged — no DB column)"
-  );
 
   const { error } = await getSupabase()
     .from("runs")
     .update({
       status: "completed" satisfies RunStatus,
-      discovered: stats.places_requests,
-      filtered: stats.leads_discovered,
-      created_new: stats.leads_new,
-      updated_existing: stats.leads_updated,
-      completed_at: new Date().toISOString(),
+      stats,
+      finished_at: new Date().toISOString(),
     })
     .eq("id", runId);
 
@@ -78,12 +58,103 @@ export async function failRun(
     .from("runs")
     .update({
       status: "failed" satisfies RunStatus,
-      error: errMsg,
-      completed_at: new Date().toISOString(),
+      stats: { duration_ms, error: errMsg },
+      finished_at: new Date().toISOString(),
     })
     .eq("id", runId);
 
   if (error) {
     log.error({ runId, error }, "Failed to mark run as failed");
+  }
+}
+
+export async function getRunById(runId: string): Promise<Run | null> {
+  const { data, error } = await getSupabase()
+    .from("runs")
+    .select("*")
+    .eq("id", runId)
+    .maybeSingle();
+  if (error) throw new Error(`Failed to load run ${runId}: ${error.message}`);
+  return (data as Run | null) ?? null;
+}
+
+export async function createEnrichmentRun(params: {
+  sourceRun: Run;
+  forceRefresh: boolean;
+  withHeuristic?: boolean;
+  concurrency: number;
+}): Promise<Run> {
+  const { sourceRun, forceRefresh, withHeuristic, concurrency } = params;
+  const { data, error } = await getSupabase()
+    .from("runs")
+    .insert({
+      niche: sourceRun.niche,
+      location: sourceRun.location,
+      profile: sourceRun.profile,
+      config: {
+        command: "enrich",
+        source_run_id: sourceRun.id,
+        force_refresh: forceRefresh,
+        with_heuristic: withHeuristic === true,
+        concurrency,
+      },
+      status: "running",
+    })
+    .select()
+    .single();
+
+  if (error) throw new Error(`Failed to create enrichment run: ${error.message}`);
+  return data as Run;
+}
+
+// Sentinel values used when scoring scope=all (no single source run).
+// These are not real niche/location values — they mark a scoring-all run.
+const SCORING_ALL_SENTINEL = "__scoring_all__";
+
+export async function createScoringRun(params: {
+  scope: "run" | "all";
+  sourceRun?: Run;
+  dryRun: boolean;
+}): Promise<Run> {
+  const { scope, sourceRun, dryRun } = params;
+
+  const niche = sourceRun?.niche ?? SCORING_ALL_SENTINEL;
+  const location = sourceRun?.location ?? SCORING_ALL_SENTINEL;
+  const profile = sourceRun?.profile ?? "a";
+
+  const { data, error } = await getSupabase()
+    .from("runs")
+    .insert({
+      niche,
+      location,
+      profile,
+      config: {
+        command: "score",
+        scope,
+        ...(sourceRun ? { source_run_id: sourceRun.id } : {}),
+        dry_run: dryRun,
+      },
+      status: "running",
+    })
+    .select()
+    .single();
+
+  if (error) throw new Error(`Failed to create scoring run: ${error.message}`);
+  return data as Run;
+}
+
+export async function completeScoringRun(runId: string, stats: ScoringRunStats): Promise<void> {
+  const log = getLogger();
+  const { error } = await getSupabase()
+    .from("runs")
+    .update({
+      status: "completed" satisfies RunStatus,
+      stats,
+      finished_at: new Date().toISOString(),
+    })
+    .eq("id", runId);
+  if (error) {
+    log.error({ runId, error }, "Failed to complete scoring run");
+    throw new Error(`Failed to complete scoring run: ${error.message}`);
   }
 }

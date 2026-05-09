@@ -1,112 +1,126 @@
-import type { PlaceCandidate, DiscoveryProfile } from "../../shared/types.js";
+import type {
+  PlaceCandidate,
+  ProfileConfig,
+  FilterResult,
+  RejectionReason,
+} from "../../shared/types.js";
+import { getLogger } from "../../shared/logger.js";
 
-// ---- Profile thresholds (edit here to tune) ------------------------------
-
-interface ProfileThresholds {
-  minRating: number;
-  minReviews: number;
-  maxReviews: number | null;
-  requireNoWeb: boolean;
+function asciiFold(input: string): string {
+  return input.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 }
 
-export const PROFILE_THRESHOLDS: Record<DiscoveryProfile, ProfileThresholds> = {
-  a: {
-    // "Joya escondida": good rating, few reviews, no/social web
-    minRating: 4.3,
-    minReviews: 10,
-    maxReviews: 50,
-    requireNoWeb: false, // we handle web check separately (null OR social domain)
-  },
-  b: {
-    // "Saturado sin web": many reviews, completely missing web
-    minRating: 0,
-    minReviews: 101,
-    maxReviews: null,
-    requireNoWeb: true,
-  },
-};
+export function normalizeNiche(raw: string): string {
+  const normalized = asciiFold(raw).toLowerCase();
 
-const SOCIAL_DOMAINS = [
-  "facebook.com",
-  "instagram.com",
-  "twitter.com",
-  "tiktok.com",
-  "linktr.ee",
-  "beacons.ai",
-  "wa.me",
-  "bio.link",
-];
+  if (
+    normalized.includes("peluquer") ||
+    normalized.includes("barber") ||
+    normalized.includes("hair")
+  ) {
+    return "hairdresser";
+  }
 
-function isSocialOrMissingWeb(websiteUri: string | null): boolean {
+  if (
+    normalized.includes("concesion") ||
+    normalized.includes("automovil") ||
+    normalized.includes("auto") ||
+    normalized.includes("car dealer")
+  ) {
+    return "car_dealer";
+  }
+
+  return "other";
+}
+
+export function isSocialOrMissingWeb(
+  websiteUri: string | null,
+  socialDomains: string[]
+): boolean {
   if (!websiteUri) return true;
   const lower = websiteUri.toLowerCase();
-  return SOCIAL_DOMAINS.some((domain) => lower.includes(domain));
+  return socialDomains.some((domain) => lower.includes(domain));
 }
 
-function isMissingWeb(websiteUri: string | null): boolean {
+export function isMissingWeb(websiteUri: string | null): boolean {
   return websiteUri === null || websiteUri === "";
 }
 
-// ---- Filter functions per profile ----------------------------------------
-
-function matchesProfileA(
-  candidate: PlaceCandidate,
-  minRatingOverride: number
-): boolean {
-  const t = PROFILE_THRESHOLDS.a;
-  const rating = candidate.rating ?? 0;
-  const reviews = candidate.userRatingCount ?? 0;
-
-  if (rating < Math.max(t.minRating, minRatingOverride)) return false;
-  if (reviews < t.minReviews) return false;
-  if (t.maxReviews !== null && reviews > t.maxReviews) return false;
-  if (!isSocialOrMissingWeb(candidate.websiteUri)) return false;
-
-  return true;
-}
-
-function matchesProfileB(
-  candidate: PlaceCandidate,
-  minRatingOverride: number
-): boolean {
-  const t = PROFILE_THRESHOLDS.b;
-  const rating = candidate.rating ?? 0;
-  const reviews = candidate.userRatingCount ?? 0;
-
-  if (minRatingOverride > 0 && rating < minRatingOverride) return false;
-  if (reviews < t.minReviews) return false;
-  if (!isMissingWeb(candidate.websiteUri)) return false;
-
-  return true;
-}
-
-// ---- Public API ----------------------------------------------------------
-
 export function applyProfileFilter(
   candidates: PlaceCandidate[],
-  profile: DiscoveryProfile,
-  minRating: number
-): PlaceCandidate[] {
-  return candidates.filter((c) => {
-    if (profile === "a") return matchesProfileA(c, minRating);
-    return matchesProfileB(c, minRating);
-  });
+  profileConfig: ProfileConfig,
+  socialDomains: string[]
+): FilterResult {
+  const log = getLogger();
+  const passed: PlaceCandidate[] = [];
+  const rejected: Array<{ candidate: PlaceCandidate; reasons: RejectionReason[] }> = [];
+
+  for (const candidate of candidates) {
+    const reasons: RejectionReason[] = [];
+    const rating = candidate.rating ?? 0;
+    const reviews = candidate.userRatingCount ?? 0;
+
+    if (rating < profileConfig.min_rating) {
+      reasons.push("rating-too-low");
+    }
+    if (reviews < profileConfig.min_reviews) {
+      reasons.push("reviews-below-min");
+    }
+    if (profileConfig.max_reviews !== null && reviews > profileConfig.max_reviews) {
+      reasons.push("reviews-above-max");
+    }
+
+    if (profileConfig.web_requirement === "social_or_missing") {
+      if (!isSocialOrMissingWeb(candidate.websiteUri, socialDomains)) {
+        reasons.push("has-real-website");
+      }
+    } else if (profileConfig.web_requirement === "missing_only") {
+      if (!isMissingWeb(candidate.websiteUri)) {
+        reasons.push("has-real-website");
+      }
+    }
+
+    log.debug({
+      event: "filter.decision",
+      place_id: candidate.placeId,
+      name: candidate.name,
+      passed: reasons.length === 0,
+      reasons,
+      thresholds: {
+        min_rating: profileConfig.min_rating,
+        min_reviews: profileConfig.min_reviews,
+        max_reviews: profileConfig.max_reviews ?? null,
+        web_requirement: profileConfig.web_requirement,
+      },
+    }, "Filter decision");
+
+    if (reasons.length === 0) {
+      passed.push(candidate);
+    } else {
+      rejected.push({ candidate, reasons });
+    }
+  }
+
+  return { passed, rejected };
 }
 
 export function tagCandidate(
   candidate: PlaceCandidate,
-  profile: DiscoveryProfile
+  profile: string,
+  socialDomains: string[]
 ): string[] {
   const tags: string[] = [`profile:${profile}`];
-
-  if (!candidate.websiteUri) tags.push("no-web");
-  else if (isSocialOrMissingWeb(candidate.websiteUri)) tags.push("social-web-only");
-
-  if (!candidate.phone) tags.push("no-phone");
-
   const reviews = candidate.userRatingCount ?? 0;
-  if (reviews > 100) tags.push("high-review-count");
-  else if (reviews >= 10) tags.push("low-review-count");
+
+  if (!candidate.websiteUri) {
+    tags.push("no-website");
+    if (reviews > 100) tags.push("high-reviews-no-web");
+  } else {
+    const lower = candidate.websiteUri.toLowerCase();
+    if (lower.includes("facebook.com")) tags.push("fb-only-presence");
+    else if (lower.includes("instagram.com")) tags.push("ig-only-presence");
+    else if (socialDomains.some((d) => lower.includes(d))) tags.push("social-link-only");
+  }
 
   return tags;
 }

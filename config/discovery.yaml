@@ -1,0 +1,27 @@
+version: 1
+
+profiles:
+  a:
+    description: "Joya escondida — good rating, few reviews, no/social web"
+    min_rating: 4.3
+    min_reviews: 10
+    max_reviews: 50
+    web_requirement: social_or_missing
+  b:
+    description: "Saturado sin web — many reviews, completely missing web"
+    min_rating: 0
+    min_reviews: 101
+    max_reviews: null
+    web_requirement: missing_only
+
+social_domains:
+  - facebook.com
+  - instagram.com
+  - twitter.com
+  - tiktok.com
+  - linktr.ee
+  - beacons.ai
+  - wa.me
+  - bio.link
+
+persist_rejected: true

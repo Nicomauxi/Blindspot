@@ -1,4 +1,4 @@
-# gap-radar
+# blindspot
 
 CLI para identificar negocios locales con buena reputación offline pero pobre presencia digital.
 
@@ -76,20 +76,20 @@ supabase db push
 
 ```bash
 # Perfil A — "Joya escondida" (rating alto, pocas reseñas, sin web real)
-gap-radar discover \
+blindspot discover \
   --niche "peluquería" \
   --location "Montevideo Uruguay" \
   --profile a
 
 # Perfil B — "Saturado sin web" (muchas reseñas, sin website)
-gap-radar discover \
+blindspot discover \
   --niche "restaurante" \
   --location "Buenos Aires Argentina" \
   --profile b \
   --max-results 100
 
 # Con overrides de rating
-gap-radar discover \
+blindspot discover \
   --niche "taller mecánico" \
   --location "Salto Uruguay" \
   --profile a \
