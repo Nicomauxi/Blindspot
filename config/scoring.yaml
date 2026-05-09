@@ -1,19 +1,101 @@
-# Scoring configuration — Phase 3 placeholder
-# Weights and rules for lead scoring will be defined here.
-# Each dimension will produce a 0-100 score that combines into a final score.
-
 version: 1
 
-dimensions:
-  # digital_gap: how absent is the business online
-  # online_reputation: rating + review volume
-  # contact_availability: phone, whatsapp, etc.
-  # business_activity: hours, last review date, etc.
+# business_quality: 0-100. Qué tan "valioso como negocio offline" es este lead.
+business_quality:
+  rules:
+    - name: rating_excellent
+      condition: { field: rating, op: gte, value: 4.5 }
+      weight: 25
+    - name: rating_good
+      condition: { field: rating, op: between, value: [4.0, 4.5] }
+      weight: 15
+    - name: reviews_high
+      condition: { field: review_count, op: gte, value: 100 }
+      weight: 25
+    - name: reviews_medium
+      condition: { field: review_count, op: between, value: [30, 100] }
+      weight: 15
+    - name: reviews_low
+      condition: { field: review_count, op: between, value: [10, 30] }
+      weight: 8
+    - name: business_operational
+      condition: { field: business_status, op: eq, value: OPERATIONAL }
+      weight: 10
+    - name: has_photos
+      condition: { field: google_data.photos_count, op: gte, value: 5 }
+      weight: 10
+    - name: has_hours
+      condition: { field: google_data.has_hours, op: eq, value: true }
+      weight: 5
+    - name: has_recent_reviews
+      condition: { field: google_data.has_recent_reviews, op: eq, value: true }
+      weight: 10
 
-# Example (to be expanded in Phase 3):
-# digital_gap:
-#   weight: 0.4
-#   rules:
-#     - no_website: 40
-#     - social_web_only: 25
-#     - no_phone: 15
+# digital_gap: 0-100. Qué tan ausente está el negocio digitalmente.
+digital_gap:
+  rules:
+    - name: website_heuristic
+      condition: { tag: website-heuristic }
+      weight: 35
+    - name: no_website
+      condition: { tag: no-website }
+      weight: 35
+    - name: fb_heuristic
+      condition: { tag: fb-heuristic }
+      weight: 15
+    - name: fb_only
+      condition: { tag: fb-only-presence }
+      weight: 25
+    - name: ig_heuristic
+      condition: { tag: ig-heuristic }
+      weight: 15
+    - name: ig_only
+      condition: { tag: ig-only-presence }
+      weight: 25
+    - name: social_link_only
+      condition: { tag: social-link-only }
+      weight: 20
+    - name: ssl_missing
+      condition: { tag: ssl-missing }
+      weight: 10
+    - name: not_responsive
+      condition: { tag: not-responsive }
+      weight: 10
+    - name: pixel_missing
+      condition: { tag: pixel-missing }
+      weight: 5
+    - name: analytics_missing
+      condition: { tag: analytics-missing }
+      weight: 5
+    - name: whatsapp_missing
+      condition: { tag: whatsapp-missing }
+      weight: 10
+    - name: whatsapp_derived
+      condition: { tag: whatsapp-derived }
+      weight: 10
+    - name: stack_obsolete
+      condition: { tag: stack-obsolete }
+      weight: 10
+    - name: domain_old_stale
+      condition: { tag: domain-old-stale }
+      weight: 5
+    - name: site_unreachable
+      condition: { tag: site-unreachable }
+      weight: 15
+
+# Reglas mutuamente excluyentes: si más de una regla del grupo matchea, solo cuenta la de mayor peso.
+mutual_exclusions:
+  business_quality:
+    - [rating_excellent, rating_good]
+    - [reviews_high, reviews_medium, reviews_low]
+  digital_gap:
+    - [website_heuristic, no_website, fb_only, ig_only, social_link_only]
+    - [fb_heuristic, fb_only]
+    - [ig_heuristic, ig_only]
+    - [whatsapp_derived, whatsapp_missing]
+
+# Cap por dimensión (clamp final).
+cap: 100
+
+# Fórmula de prospect_score
+prospect_formula: "business_quality * digital_gap / 100"

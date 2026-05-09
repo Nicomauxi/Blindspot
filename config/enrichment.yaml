@@ -1,0 +1,23 @@
+heuristic_discovery:
+  enabled: true
+  thresholds:
+    website: 0.7
+    social: 0.6
+  tld_priority:
+    - com.uy
+    - uy
+    - com
+  max_candidates_to_probe: 6
+  max_social_variants: 3
+  city_suffixes:
+    montevideo: mvd
+  mobile_prefixes_uy:
+    - "91"
+    - "92"
+    - "93"
+    - "94"
+    - "95"
+    - "96"
+    - "97"
+    - "98"
+    - "99"

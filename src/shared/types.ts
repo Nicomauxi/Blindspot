@@ -2,43 +2,223 @@ export type LeadState = "discovered" | "contacted" | "qualified" | "disqualified
 export type RunStatus = "running" | "completed" | "failed";
 export type DiscoveryProfile = "a" | "b";
 
-export interface Lead {
-  id: string;
+export type WebRequirement = "social_or_missing" | "missing_only" | "any";
+export type RejectionReason =
+  | "rating-too-low"
+  | "reviews-below-min"
+  | "reviews-above-max"
+  | "has-real-website";
+
+export interface ProfileConfig {
+  description?: string;
+  min_rating: number;
+  min_reviews: number;
+  max_reviews: number | null;
+  web_requirement: WebRequirement;
+}
+
+export interface DiscoveryConfig {
+  version: 1;
+  profiles: Record<string, ProfileConfig>;
+  social_domains: string[];
+  persist_rejected: boolean;
+}
+
+export interface FilterResult {
+  passed: PlaceCandidate[];
+  rejected: Array<{ candidate: PlaceCandidate; reasons: RejectionReason[] }>;
+}
+
+export interface RunStats {
+  places_requests: number;
+  estimated_cost_usd: number;
+  leads_discovered: number;
+  leads_new: number;
+  leads_updated: number;
+  leads_rejected?: number;
+  duration_ms: number;
+  error?: string;
+}
+
+export interface ProspectEntry {
   place_id: string;
   name: string;
-  formatted_address: string | null;
-  rating: number | null;
-  user_rating_count: number | null;
-  website_uri: string | null;
-  phone: string | null;
-  business_status: string | null;
-  score: number | null;
-  tags: string[];
-  notes: string | null;
-  state: LeadState;
-  first_seen_run_id: string | null;
-  last_seen_run_id: string | null;
-  discovery_profile: string | null;
-  raw_place_data: Record<string, unknown> | null;
-  created_at: string;
-  updated_at: string;
+  prospect_score: number;
 }
+
+export interface ScoringRunStats {
+  command: "score";
+  scope: "run" | "all";
+  source_run_id?: string;
+  dry_run: boolean;
+  leads_scored: number;
+  duration_ms: number;
+  top_5: ProspectEntry[];
+  bottom_5: ProspectEntry[];
+  error?: string;
+}
+
+export interface EnrichmentRunStats extends RunStats {
+  command: "enrich";
+  source_run_id: string;
+  leads_processed: number;
+  skipped_no_website: number;
+  skipped_social_only: number;
+  skipped_cache_hit: number;
+  fetched_ok: number;
+  fetched_error: number;
+  whois_errors: number;
+}
+
+export type HeuristicDiscoveryMode = "website-only" | "full";
+export type HeuristicSourceKind = "website" | "facebook" | "instagram" | "whatsapp";
+export type HeuristicSignal =
+  | "http-ok"
+  | "name-match"
+  | "name_in_schema"
+  | "city-match"
+  | "slug_match"
+  | "name_in_bio"
+  | "phone_match"
+  | "phone_in_schema"
+  | "city_match"
+  | "cross_ref_from_web"
+  | "uy-mobile-phone";
+
+export interface HeuristicCandidate {
+  kind: Exclude<HeuristicSourceKind, "whatsapp">;
+  url: string;
+  score: number;
+  signals: HeuristicSignal[];
+  status: "probed" | "unprobed";
+  http_status?: number | null;
+  final_url?: string | null;
+  error?: string;
+}
+
+export interface HeuristicWhatsappCandidate {
+  kind: "whatsapp";
+  number: string;
+  url: string;
+  score: number;
+  signals: HeuristicSignal[];
+}
+
+export interface HeuristicDiscovery {
+  ran_at: string;
+  mode: HeuristicDiscoveryMode;
+  stale: boolean;
+  candidates: {
+    website: HeuristicCandidate[];
+    facebook: HeuristicCandidate[];
+    instagram: HeuristicCandidate[];
+    whatsapp: HeuristicWhatsappCandidate[];
+  };
+  selected: {
+    website: HeuristicCandidate | null;
+    facebook: HeuristicCandidate | null;
+    instagram: HeuristicCandidate | null;
+    whatsapp: HeuristicWhatsappCandidate | null;
+  };
+}
+
+export type DigitalFootprintSkipped = {
+  skipped: true;
+  reason: "no-website" | "social-only";
+  fetched_at: string;
+  heuristic_discovery?: HeuristicDiscovery;
+};
+
+export interface DigitalFootprintEnriched {
+  skipped?: false;
+  fetched_at: string;
+  heuristic_discovery?: HeuristicDiscovery;
+  fetch_error?: string;
+  attempted_url?: string;
+  final_url?: string;
+  http_status?: number;
+  ssl?: { valid_https: boolean; cert_valid: boolean | null };
+  pixels?: {
+    meta_pixel: { present: boolean; id: string | null };
+    ga4: { present: boolean; id: string | null };
+    ga_universal: { present: boolean; id: string | null };
+    gtm: { present: boolean; id: string | null };
+  };
+  stack?:
+    | { name: string; version: string | null; confidence: "high" | "medium" | "low" }
+    | null;
+  viewport?: { present: boolean; content: string | null };
+  whatsapp?: {
+    present: boolean;
+    numbers: string[];
+    source: "link" | "button-heuristic" | null;
+  };
+  social_links?: {
+    facebook: string | null;
+    instagram: string | null;
+    tiktok: string | null;
+    count: number;
+  };
+  whois?: {
+    fetched_at: string;
+    created_at: string | null;
+    registrar: string | null;
+    expires_at: string | null;
+    age_years: number | null;
+    error?: string;
+  };
+}
+
+export type DigitalFootprint = DigitalFootprintSkipped | DigitalFootprintEnriched;
 
 export interface Run {
   id: string;
   niche: string;
   location: string;
   profile: DiscoveryProfile;
-  max_results: number;
-  min_rating: number;
-  discovered: number;
-  filtered: number;
-  created_new: number;
-  updated_existing: number;
+  config: Record<string, unknown>;
+  stats: RunStats | null;
   status: RunStatus;
-  error: string | null;
+  started_at: string;
+  finished_at: string | null;
+}
+
+export interface Lead {
+  id: string;
+  place_id: string;
+  niche: string | null;
+  name: string;
+  address: string | null;
+  rating: number | null;
+  review_count: number | null;
+  website: string | null;
+  whatsapp: string | null;
+  phone: string | null;
+  business_status: string | null;
+  tags: string[];
+  notes: string | null;
+  state: LeadState;
+  first_seen_run_id: string | null;
+  last_seen_run_id: string | null;
+  google_data: Record<string, unknown> | null;
+  digital_footprint: DigitalFootprint | null;
+  reviews_sample: unknown[] | null;
+  business_quality_score: number | null;
+  digital_gap_score: number | null;
+  prospect_score: number | null;
+  passed_filter: boolean;
+  rejection_reasons: string[];
+  score_breakdown: Record<string, unknown> | null;
+  contacted_at: string | null;
   created_at: string;
-  completed_at: string | null;
+  updated_at: string;
+}
+
+export interface LeadUpsert {
+  candidate: PlaceCandidate;
+  passed: boolean;
+  rejection_reasons: string[];
+  niche?: string;
 }
 
 export interface PlaceCandidate {
