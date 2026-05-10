@@ -281,6 +281,31 @@ heuristic_discovery:
     expect(result.selected.instagram).toBeNull();
   });
 
+  it("prepends additional website URLs, dedupes them, and keeps the probe limit", async () => {
+    const probedUrls: string[] = [];
+    const result = await discoverHeuristicSources(
+      makeLead({ name: "Violet Peluquería", address: "Montevideo, Uruguay" }),
+      "website-only",
+      {
+        fetchHtml: async (url) => {
+          probedUrls.push(url);
+          return {
+            status: 200,
+            finalUrl: url,
+            html: url === "https://violet.com.uy" ? "Violet Peluquería Uruguay" : "",
+            headers: {},
+            fetchedAt: "2026-01-01T00:00:00.000Z",
+          };
+        },
+      },
+      { additionalWebsiteUrls: ["https://violet.com.uy", "https://violet.com.uy"] }
+    );
+
+    expect(probedUrls[0]).toBe("https://violet.com.uy");
+    expect(probedUrls.filter((url) => url === "https://violet.com.uy")).toHaveLength(1);
+    expect(result.candidates.website).toHaveLength(6);
+  });
+
   it("derives Uruguay WhatsApp from mobile phone", () => {
     const candidate = deriveWhatsappCandidate(makeLead(), ["99"]);
     expect(candidate?.number).toBe("+59899123456");

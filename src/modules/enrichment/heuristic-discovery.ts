@@ -38,6 +38,10 @@ interface HeuristicDeps {
   fetchHtml: typeof fetchHtml;
 }
 
+interface HeuristicDiscoveryOptions {
+  additionalWebsiteUrls?: string[];
+}
+
 const DEFAULT_DEPS: HeuristicDeps = { fetchHtml };
 type WebsiteProbe = HeuristicCandidate & { html: string | null };
 type WebsiteProbeInternal = WebsiteProbe & {
@@ -478,7 +482,8 @@ function bestByScore<T extends { score: number }>(items: T[], threshold: number)
 export async function discoverHeuristicSources(
   lead: Lead,
   mode: HeuristicDiscoveryMode,
-  deps: HeuristicDeps = DEFAULT_DEPS
+  deps: HeuristicDeps = DEFAULT_DEPS,
+  options: HeuristicDiscoveryOptions = {}
 ): Promise<HeuristicDiscovery> {
   const config = getHeuristicConfig();
   const ranAt = new Date().toISOString();
@@ -493,10 +498,10 @@ export async function discoverHeuristicSources(
     };
   }
 
-  const websiteUrls = buildWebsiteCandidates(lead, config.tld_priority).slice(
-    0,
-    config.max_candidates_to_probe
-  );
+  const websiteUrls = dedupe([
+    ...(options.additionalWebsiteUrls ?? []),
+    ...buildWebsiteCandidates(lead, config.tld_priority),
+  ]).slice(0, config.max_candidates_to_probe);
   const websiteProbes = await Promise.all(
     websiteUrls.map((url) => probeWebsiteCandidate(lead, url, deps))
   );

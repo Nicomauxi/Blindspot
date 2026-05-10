@@ -122,17 +122,46 @@ export interface HeuristicDiscovery {
   };
 }
 
+export type DirectorySignal =
+  | "phone_match"
+  | "address_match"
+  | "name_match"
+  | "directory_website";
+
+export interface DirectoryCandidate {
+  directory_url: string;
+  name: string | null;
+  address: string | null;
+  phone: string | null;
+  website: string | null;
+  email: string | null;
+  confidence: number;
+  signals: DirectorySignal[];
+}
+
+export interface DirectoryDiscovery {
+  ran_at: string;
+  /** Directory source hostname, currently known sources include "yelu.uy". */
+  source: string;
+  query: string;
+  candidates: DirectoryCandidate[];
+  best_website: string | null;
+  error?: string;
+}
+
 export type DigitalFootprintSkipped = {
   skipped: true;
   reason: "no-website" | "social-only";
   fetched_at: string;
   heuristic_discovery?: HeuristicDiscovery;
+  directory_discovery?: DirectoryDiscovery;
 };
 
 export interface DigitalFootprintEnriched {
   skipped?: false;
   fetched_at: string;
   heuristic_discovery?: HeuristicDiscovery;
+  directory_discovery?: DirectoryDiscovery;
   fetch_error?: string;
   attempted_url?: string;
   final_url?: string;

@@ -30,12 +30,12 @@ directory_discovery:
   fetch_profile_page: true
   niche_category_map:
     hairdresser: Peluqueros
-    car_dealer: "Venta_de_Vehículos"
-    gym: Fitness
+    car_dealer: Concesionarios_de_Autos
+    gym: Gimnasios
     restaurant: Restaurantes
     accommodation: Hoteles
-    pharmacy: null
-    grocery: Supermercado
+    pharmacy: Farmacias
+    grocery: Supermercados
     dentist: Dentistas
-    healthcare: "Médicos_y_Clínicos"
+    healthcare: Medicos
     other: null

@@ -4,11 +4,16 @@ import { getDiscoveryConfig } from "../discovery/config.js";
 import type {
   DigitalFootprint,
   DigitalFootprintEnriched,
+  DirectoryDiscovery,
   HeuristicDiscovery,
   HeuristicDiscoveryMode,
   Lead,
 } from "../../shared/types.js";
 import { fetchHtml } from "./http.js";
+import {
+  discoverDirectorySources,
+  isDirectoryStale,
+} from "./directory-discovery.js";
 import {
   discoverHeuristicSources,
   isHeuristicStale,
@@ -49,12 +54,14 @@ interface EnrichmentDeps {
   fetchHtml: typeof fetchHtml;
   whoisLookup: typeof whoisLookup;
   heuristicDiscover: typeof discoverHeuristicSources;
+  directoryDiscover: typeof discoverDirectorySources;
 }
 
 const DEFAULT_DEPS: EnrichmentDeps = {
   fetchHtml,
   whoisLookup,
   heuristicDiscover: discoverHeuristicSources,
+  directoryDiscover: discoverDirectorySources,
 };
 
 function parseIso(s: string | undefined | null): number | null {
@@ -73,6 +80,10 @@ function asEnriched(
 
 function getHeuristic(footprint: DigitalFootprint | null): HeuristicDiscovery | null {
   return footprint?.heuristic_discovery ?? null;
+}
+
+function getDirectory(footprint: DigitalFootprint | null): DirectoryDiscovery | null {
+  return footprint?.directory_discovery ?? null;
 }
 
 function isHtmlCacheFresh(footprint: DigitalFootprint | null): boolean {
@@ -172,16 +183,41 @@ async function resolveHeuristic(
   lead: Lead,
   mode: HeuristicDiscoveryMode,
   opts: EnrichLeadOptions,
-  deps: EnrichmentDeps
+  deps: EnrichmentDeps,
+  additionalWebsiteUrls: string[] = []
 ): Promise<HeuristicDiscovery> {
   const previous = getHeuristic(lead.digital_footprint);
   const wasStale = isHeuristicStale(previous);
 
-  if (previous && previous.mode === mode && !wasStale && !opts.forceRefresh) {
+  if (
+    previous &&
+    previous.mode === mode &&
+    !wasStale &&
+    !opts.forceRefresh &&
+    additionalWebsiteUrls.length === 0
+  ) {
     return previous;
   }
 
-  return deps.heuristicDiscover(lead, mode);
+  return deps.heuristicDiscover(
+    lead,
+    mode,
+    { fetchHtml: deps.fetchHtml },
+    { additionalWebsiteUrls }
+  );
+}
+
+async function resolveDirectory(
+  lead: Lead,
+  opts: EnrichLeadOptions,
+  deps: EnrichmentDeps
+): Promise<DirectoryDiscovery> {
+  const previous = getDirectory(lead.digital_footprint);
+  if (previous && !isDirectoryStale(previous) && !opts.forceRefresh) {
+    return previous;
+  }
+
+  return deps.directoryDiscover(lead, { fetchHtml: deps.fetchHtml });
 }
 
 export async function enrichLead(
@@ -198,12 +234,17 @@ export async function enrichLead(
     !!originalWebsite &&
     isSocialOrMissingWeb(originalWebsite, getDiscoveryConfig().social_domains);
   let effectiveWebsite = originalWebsite;
+  let directoryDiscovery: DirectoryDiscovery | null = null;
   let heuristicDiscovery: HeuristicDiscovery | null = null;
 
-  // 1. Resolve social/missing website sources before the normal enrichment flow.
+  // 1. Resolve directory + heuristic sources before the normal enrichment flow.
   if ((!originalWebsite || isSocialWebsite) && opts.withHeuristic === true) {
+    directoryDiscovery = await resolveDirectory(lead, opts, deps);
+    const directoryWebsiteUrls = directoryDiscovery.best_website
+      ? [directoryDiscovery.best_website]
+      : [];
     const mode: HeuristicDiscoveryMode = isSocialWebsite ? "website-only" : "full";
-    heuristicDiscovery = await resolveHeuristic(lead, mode, opts, deps);
+    heuristicDiscovery = await resolveHeuristic(lead, mode, opts, deps, directoryWebsiteUrls);
     if (heuristicDiscovery.selected.website) {
       effectiveWebsite = heuristicDiscovery.selected.website.url;
     }
@@ -217,6 +258,7 @@ export async function enrichLead(
         reason: "no-website",
         fetched_at: fetchedAtIso,
         ...(heuristicDiscovery ? { heuristic_discovery: heuristicDiscovery } : {}),
+        ...(directoryDiscovery ? { directory_discovery: directoryDiscovery } : {}),
       },
       tags_to_add: heuristicTags(heuristicDiscovery),
       whatsapp_from_site: heuristicDiscovery?.selected.whatsapp?.number ?? null,
@@ -233,6 +275,7 @@ export async function enrichLead(
         reason: "social-only",
         fetched_at: fetchedAtIso,
         ...(heuristicDiscovery ? { heuristic_discovery: heuristicDiscovery } : {}),
+        ...(directoryDiscovery ? { directory_discovery: directoryDiscovery } : {}),
       },
       tags_to_add: heuristicTags(heuristicDiscovery),
       whatsapp_from_site: null,
@@ -252,6 +295,7 @@ export async function enrichLead(
     footprint = {
       ...previous,
       ...(heuristicDiscovery ? { heuristic_discovery: heuristicDiscovery } : {}),
+      ...(directoryDiscovery ? { directory_discovery: directoryDiscovery } : {}),
     };
   } else {
     const fetched = await deps.fetchHtml(effectiveWebsite);
@@ -263,6 +307,7 @@ export async function enrichLead(
         ...(fetched.finalUrl !== null ? { final_url: fetched.finalUrl } : {}),
         ...(fetched.status !== null ? { http_status: fetched.status } : {}),
         ...(heuristicDiscovery ? { heuristic_discovery: heuristicDiscovery } : {}),
+        ...(directoryDiscovery ? { directory_discovery: directoryDiscovery } : {}),
       };
     } else {
       const html = fetched.html;
@@ -289,6 +334,7 @@ export async function enrichLead(
         whatsapp,
         social_links,
         ...(heuristicDiscovery ? { heuristic_discovery: heuristicDiscovery } : {}),
+        ...(directoryDiscovery ? { directory_discovery: directoryDiscovery } : {}),
       };
     }
   }
