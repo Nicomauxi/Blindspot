@@ -99,6 +99,31 @@ describe("getScoringConfig", () => {
     expect(config.version).toBe(1);
     expect(config.business_quality.rules.length).toBeGreaterThan(0);
     expect(config.digital_gap.rules.length).toBeGreaterThan(0);
+    expect(config.digital_gap.rules).toContainEqual({
+      name: "web_outdated",
+      condition: { tag: "web-outdated" },
+      weight: 8,
+    });
+    expect(config.digital_gap.rules).toContainEqual({
+      name: "fb_confirmed",
+      condition: { tag: "fb-confirmed" },
+      weight: 20,
+    });
+    expect(config.digital_gap.rules).toContainEqual({
+      name: "ig_confirmed",
+      condition: { tag: "ig-confirmed" },
+      weight: 20,
+    });
+    expect(config.digital_gap.rules).toContainEqual({
+      name: "whatsapp_confirmed",
+      condition: { tag: "whatsapp-confirmed" },
+      weight: 3,
+    });
+    expect(config.mutual_exclusions.digital_gap).toContainEqual([
+      "whatsapp_confirmed",
+      "whatsapp_derived",
+      "whatsapp_missing",
+    ]);
     expect(config.prospect_formula).toBe("business_quality * digital_gap / 100");
   });
 

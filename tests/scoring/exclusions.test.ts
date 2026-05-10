@@ -62,4 +62,44 @@ describe("applyMutualExclusions", () => {
     expect(result).toHaveLength(1);
     expect(result[0]?.name).toBe("no_website");
   });
+
+  it("keeps fb_only over fb_confirmed and fb_confirmed over fb_heuristic", () => {
+    const groups = [["fb_only", "fb_confirmed", "fb_heuristic"]];
+
+    expect(applyMutualExclusions([
+      rule("fb_confirmed", 20),
+      rule("fb_heuristic", 15),
+    ], groups).map((r) => r.name)).toEqual(["fb_confirmed"]);
+
+    expect(applyMutualExclusions([
+      rule("fb_only", 25),
+      rule("fb_confirmed", 20),
+      rule("fb_heuristic", 15),
+    ], groups).map((r) => r.name)).toEqual(["fb_only"]);
+  });
+
+  it("keeps ig_only over ig_confirmed and ig_confirmed over ig_heuristic", () => {
+    const groups = [["ig_only", "ig_confirmed", "ig_heuristic"]];
+
+    expect(applyMutualExclusions([
+      rule("ig_confirmed", 20),
+      rule("ig_heuristic", 15),
+    ], groups).map((r) => r.name)).toEqual(["ig_confirmed"]);
+
+    expect(applyMutualExclusions([
+      rule("ig_only", 25),
+      rule("ig_confirmed", 20),
+      rule("ig_heuristic", 15),
+    ], groups).map((r) => r.name)).toEqual(["ig_only"]);
+  });
+
+  it("keeps whatsapp_derived over whatsapp_missing and whatsapp_confirmed", () => {
+    const groups = [["whatsapp_confirmed", "whatsapp_derived", "whatsapp_missing"]];
+
+    expect(applyMutualExclusions([
+      rule("whatsapp_confirmed", 3),
+      rule("whatsapp_derived", 10),
+      rule("whatsapp_missing", 10),
+    ], groups).map((r) => r.name)).toEqual(["whatsapp_derived"]);
+  });
 });

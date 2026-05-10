@@ -1,6 +1,6 @@
 import { getSupabase } from "../shared/supabase.js";
 import { getLogger } from "../shared/logger.js";
-import type { DigitalFootprint, Lead, LeadUpsert } from "../shared/types.js";
+import type { DigitalFootprint, Lead, LeadUpsert, SocialSearch } from "../shared/types.js";
 import type { ScoreResult } from "../modules/scoring/types.js";
 
 export interface UpsertResult {
@@ -10,6 +10,37 @@ export interface UpsertResult {
 
 const isRejectedTag = (tag: string): boolean => tag.startsWith("rejected:");
 
+function socialSearchConfirmsFacebook(search: SocialSearch): boolean {
+  if (search.source === "duckduckgo") {
+    return search.facebook.best_url !== null;
+  }
+  return search.facebook !== null && search.facebook.confidence >= 0.7;
+}
+
+function socialSearchConfirmsInstagram(search: SocialSearch): boolean {
+  if (search.source === "duckduckgo") {
+    return search.instagram.best_url !== null;
+  }
+  return search.instagram !== null && search.instagram.confidence >= 0.7;
+}
+
+function socialSearchHasAdditionalPhones(search: SocialSearch): boolean {
+  if (search.source === "duckduckgo") {
+    return (
+      search.facebook.additional_phones.length > 0 ||
+      search.instagram.additional_phones.length > 0
+    );
+  }
+  return false;
+}
+
+function socialSearchConfirmsWhatsapp(search: SocialSearch): boolean {
+  return search.source === "playwright" &&
+    search.facebook !== null &&
+    search.facebook.confidence >= 0.7 &&
+    search.facebook.whatsapp_button;
+}
+
 export function cleanupMergedTagsForEnrichment(
   tags: string[],
   footprint?: DigitalFootprint
@@ -18,7 +49,10 @@ export function cleanupMergedTagsForEnrichment(
   if (set.has("website-heuristic")) set.delete("no-website");
   if (set.has("fb-heuristic")) set.delete("fb-only-presence");
   if (set.has("ig-heuristic")) set.delete("ig-only-presence");
+  if (set.has("fb-confirmed")) set.delete("fb-heuristic");
+  if (set.has("ig-confirmed")) set.delete("ig-heuristic");
   if (set.has("whatsapp-derived")) set.delete("whatsapp-missing");
+  if (set.has("whatsapp-confirmed")) set.delete("whatsapp-missing");
   const heuristic = footprint?.heuristic_discovery;
   if (heuristic) {
     if (heuristic.selected.website === null) set.delete("website-heuristic");
@@ -26,6 +60,13 @@ export function cleanupMergedTagsForEnrichment(
     if (heuristic.selected.instagram === null) set.delete("ig-heuristic");
     if (heuristic.selected.whatsapp === null) set.delete("whatsapp-derived");
     if (!heuristic.stale) set.delete("heuristic-stale");
+  }
+  const socialSearch = footprint?.social_search;
+  if (socialSearch) {
+    if (!socialSearchConfirmsFacebook(socialSearch)) set.delete("fb-confirmed");
+    if (!socialSearchConfirmsInstagram(socialSearch)) set.delete("ig-confirmed");
+    if (!socialSearchHasAdditionalPhones(socialSearch)) set.delete("additional-phones");
+    if (!socialSearchConfirmsWhatsapp(socialSearch)) set.delete("whatsapp-confirmed");
   }
   return Array.from(set);
 }
@@ -219,6 +260,41 @@ export async function updateLeadEnrichment(
     })
     .eq("id", leadId);
   if (error) throw new Error(`Failed to update lead ${leadId}: ${error.message}`);
+}
+
+export async function updateLeadSocialSearch(
+  leadId: string,
+  socialSearch: SocialSearch,
+  newTags: string[],
+  whatsappFromSocial: string | null
+): Promise<void> {
+  const db = getSupabase();
+  const { data: current, error: fetchErr } = await db
+    .from("leads")
+    .select("digital_footprint, tags, whatsapp")
+    .eq("id", leadId)
+    .single();
+  if (fetchErr) throw new Error(`Failed to load lead ${leadId}: ${fetchErr.message}`);
+
+  const currentFootprint = (current?.digital_footprint as DigitalFootprint | null) ?? null;
+  const fetchedAt = socialSearch.ran_at;
+  const footprint: DigitalFootprint = currentFootprint
+    ? { ...currentFootprint, social_search: socialSearch }
+    : { fetched_at: fetchedAt, social_search: socialSearch };
+  const currentTags: string[] = Array.isArray(current?.tags) ? (current?.tags as string[]) : [];
+  const mergedTags = cleanupMergedTagsForEnrichment([...currentTags, ...newTags], footprint);
+  const currentWhatsapp = (current?.whatsapp as string | null) ?? null;
+  const mergedWhatsapp = currentWhatsapp ?? whatsappFromSocial ?? null;
+
+  const { error } = await db
+    .from("leads")
+    .update({
+      digital_footprint: footprint,
+      tags: mergedTags,
+      whatsapp: mergedWhatsapp,
+    })
+    .eq("id", leadId);
+  if (error) throw new Error(`Failed to update social search for lead ${leadId}: ${error.message}`);
 }
 
 export async function loadAllLeads(): Promise<Lead[]> {

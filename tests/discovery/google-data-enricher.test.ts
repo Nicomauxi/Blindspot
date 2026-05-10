@@ -79,3 +79,21 @@ describe("enrichWithDetails — immutability", () => {
     expect((raw as Record<string, unknown>)["photos_count"]).toBeUndefined();
   });
 });
+
+describe("enrichWithDetails — primary_type", () => {
+  it("normalizes primaryType into primary_type while preserving detail fields", () => {
+    const raw = { ...RAW_BASE, primaryType: "restaurant" };
+    const result = enrichWithDetails(raw, { photos: [{ name: "photo1" }] });
+
+    expect(result["primary_type"]).toBe("restaurant");
+    expect(result["photos_count"]).toBe(1);
+    expect(result["price_level"]).toBeUndefined();
+  });
+
+  it("preserves an existing primary_type value", () => {
+    const raw = { ...RAW_BASE, primary_type: "beauty_salon" };
+    const result = enrichWithDetails(raw, {});
+
+    expect(result["primary_type"]).toBe("beauty_salon");
+  });
+});

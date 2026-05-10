@@ -19,6 +19,7 @@ vi.mock("../../src/shared/logger.js", () => ({
 
 import {
   textSearch,
+  fetchPlaceCandidates,
   fetchPlaceDetails,
   TEXT_SEARCH_FIELDS,
   DETAILS_FIELDS,
@@ -44,6 +45,7 @@ const SAMPLE_PLACE = {
   websiteUri: "https://example.com",
   internationalPhoneNumber: "+5491234567890",
   businessStatus: "OPERATIONAL",
+  primaryType: "restaurant",
 };
 
 describe("textSearch — HTTP request count", () => {
@@ -72,6 +74,11 @@ describe("textSearch — HTTP request count", () => {
 });
 
 describe("TEXT_SEARCH_FIELDS — no Atmosphere fields", () => {
+  it("includes primaryType but never priceLevel", () => {
+    expect(TEXT_SEARCH_FIELDS).toContain("places.primaryType");
+    expect(TEXT_SEARCH_FIELDS).not.toContain("places.priceLevel");
+  });
+
   it("does not include photos in Text Search field mask", () => {
     expect(TEXT_SEARCH_FIELDS).not.toContain("photo");
   });
@@ -82,6 +89,24 @@ describe("TEXT_SEARCH_FIELDS — no Atmosphere fields", () => {
 
   it("does not include openingHours in Text Search field mask", () => {
     expect(TEXT_SEARCH_FIELDS).not.toContain("openingHours");
+  });
+});
+
+describe("fetchPlaceCandidates — primaryType mapping", () => {
+  beforeEach(() => {
+    mockFetch.mockClear();
+    debugCalls.length = 0;
+  });
+
+  it("maps primaryType and persists primary_type in raw google data", async () => {
+    mockFetch.mockResolvedValueOnce(makeOkResponse({ places: [SAMPLE_PLACE] }));
+
+    const result = await fetchPlaceCandidates("restaurante", "Montevideo", 10);
+
+    expect(result.candidates).toHaveLength(1);
+    expect(result.candidates[0]!.primaryType).toBe("restaurant");
+    expect(result.candidates[0]!.raw["primary_type"]).toBe("restaurant");
+    expect(result.candidates[0]!.raw["price_level"]).toBeUndefined();
   });
 });
 

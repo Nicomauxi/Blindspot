@@ -16,6 +16,7 @@ export const TEXT_SEARCH_FIELDS = [
   "places.websiteUri",
   "places.internationalPhoneNumber",
   "places.businessStatus",
+  "places.primaryType",
 ].join(",");
 
 export const DETAILS_FIELDS = "photos,regularOpeningHours,reviews";
@@ -36,6 +37,7 @@ const PlaceItemSchema = z.object({
   websiteUri: z.string().optional(),
   internationalPhoneNumber: z.string().optional(),
   businessStatus: z.string().optional(),
+  primaryType: z.string().optional(),
 });
 
 const TextSearchResponseSchema = z.object({
@@ -243,17 +245,24 @@ export async function fetchPlaceCandidates(
 
   const candidates = places
     .filter((place) => Boolean(place.id))
-    .map((place) => ({
-      placeId: place.id,
-      name: place.displayName?.text ?? "",
-      formattedAddress: place.formattedAddress ?? null,
-      rating: place.rating ?? null,
-      userRatingCount: place.userRatingCount ?? null,
-      websiteUri: place.websiteUri ?? null,
-      phone: place.internationalPhoneNumber ?? null,
-      businessStatus: place.businessStatus ?? null,
-      raw: place as Record<string, unknown>,
-    }));
+    .map((place) => {
+      const primaryType = place.primaryType ?? null;
+      return {
+        placeId: place.id,
+        name: place.displayName?.text ?? "",
+        formattedAddress: place.formattedAddress ?? null,
+        rating: place.rating ?? null,
+        userRatingCount: place.userRatingCount ?? null,
+        websiteUri: place.websiteUri ?? null,
+        phone: place.internationalPhoneNumber ?? null,
+        businessStatus: place.businessStatus ?? null,
+        primaryType,
+        raw: {
+          ...(place as Record<string, unknown>),
+          ...(primaryType !== null ? { primary_type: primaryType } : {}),
+        },
+      };
+    });
 
   return { candidates, textSearchRequestCount: requestCount, requestLog };
 }
