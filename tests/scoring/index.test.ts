@@ -43,11 +43,15 @@ describe("scoreLead", () => {
     expect(dgRules.map((r) => r.name)).not.toContain("fb_only");
   });
 
-  it("website-heuristic excludes no-website in scoring", () => {
-    const result = scoreLead(with_website_heuristic_and_no_website);
+  it("website-heuristic scores lower digital_gap than confirmed no-website", () => {
+    const result = scoreLead({
+      ...with_website_heuristic_and_no_website,
+      tags: ["website-heuristic"],
+    });
     const dgRules = result.score_breakdown.digital_gap.rules.map((r) => r.name);
     expect(dgRules).toContain("website_heuristic");
     expect(dgRules).not.toContain("no_website");
+    expect(result.digital_gap_score).toBe(20);
   });
 
   it("fb-heuristic and ig-heuristic are picked by scoring", () => {

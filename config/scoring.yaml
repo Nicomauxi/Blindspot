@@ -36,7 +36,7 @@ digital_gap:
   rules:
     - name: website_heuristic
       condition: { tag: website-heuristic }
-      weight: 35
+      weight: 20
     - name: no_website
       condition: { tag: no-website }
       weight: 35
