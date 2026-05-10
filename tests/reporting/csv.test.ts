@@ -16,6 +16,7 @@ const CSV_COLUMNS = [
   "prospect_score",
   "business_quality_score",
   "digital_gap_score",
+  "systems_gap_score",
   "tags",
   "state",
   "google_maps_url",
@@ -61,6 +62,7 @@ describe("generateCsv", () => {
     expect(row?.prospect_score).toBe("");
     expect(row?.business_quality_score).toBe("");
     expect(row?.digital_gap_score).toBe("");
+    expect(row?.systems_gap_score).toBe("");
     expect(row?.website).toBe("");
     expect(row?.contacted_at).toBe("");
   });

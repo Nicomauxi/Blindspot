@@ -1,5 +1,6 @@
 import { readFileSync } from "fs";
 import { load as loadHtml } from "cheerio";
+import pLimit from "p-limit";
 import { load } from "js-yaml";
 import { z } from "zod";
 import { getLogger } from "../../shared/logger.js";
@@ -20,6 +21,7 @@ const HeuristicConfigSchema = z.object({
     enabled: z.boolean(),
     thresholds: z.object({
       website: z.number().min(0).max(1),
+      website_single_word: z.number().min(0).max(1).default(0.35),
       social: z.number().min(0).max(1),
     }),
     tld_priority: z.array(z.string().min(1)),
@@ -40,6 +42,7 @@ interface HeuristicDeps {
 
 interface HeuristicDiscoveryOptions {
   additionalWebsiteUrls?: string[];
+  extraStopWords?: ReadonlySet<string>;
 }
 
 const DEFAULT_DEPS: HeuristicDeps = { fetchHtml };
@@ -94,6 +97,12 @@ function asciiFold(input: string): string {
   return input.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 }
 
+export function tokenizeFromSlug(name: string): string[] {
+  const slug = slugifyBusinessName(name);
+  if (!slug) return [];
+  return slug.split("-").filter(Boolean);
+}
+
 export function slugifyBusinessName(name: string): string {
   return asciiFold(name)
     .toLowerCase()
@@ -114,7 +123,20 @@ const DESCRIPTOR_WORDS = new Map<string, string>([
   ["barberias", "barber"],
 ]);
 
-const STOP_WORDS = new Set(["de", "del", "la", "las", "el", "los", "y", "e", "the"]);
+export const STOP_WORDS = new Set(["de", "del", "la", "las", "el", "los", "y", "e", "the"]);
+
+const NICHE_STOP_WORDS = new Set([
+  "motors", "motor", "autos", "auto", "automovil", "automoviles",
+  "vehiculo", "vehiculos", "propios", "concesionaria", "automotora",
+  "automotores", "garage", "taller",
+  "coiffeur", "estilista", "peluquero", "peluquera", "peinados",
+  "peinado", "barbero", "cortes", "corte",
+  "fitness", "sport", "sports", "training", "crossfit", "spinning",
+  "cardio", "musculacion",
+  "center", "centre", "centro", "studio", "estudio", "group", "grupo",
+  "servicios", "service", "services", "soluciones", "solutions",
+  "uruguay", "uruguaya", "uruguayo", "uy", "mvd", "montevideo",
+]);
 
 function dedupe<T>(items: T[]): T[] {
   return Array.from(new Set(items));
@@ -263,18 +285,41 @@ function classifySocialUrl(url: string): "facebook" | "instagram" | null {
   }
 }
 
+function buildSingleWordCandidates(
+  name: string,
+  tldPriority: string[],
+  citySuffix: string | null,
+  extraStopWords: ReadonlySet<string> = new Set()
+): string[] {
+  const words = tokenizeFromSlug(name);
+  const qualifying = words.filter(
+    (w) =>
+      w.length >= 4 &&
+      !STOP_WORDS.has(w) &&
+      !NICHE_STOP_WORDS.has(w) &&
+      !DESCRIPTOR_WORDS.has(w) &&
+      !extraStopWords.has(w)
+  );
+  return qualifying.flatMap((word) => [
+    ...tldPriority.map((tld) => `https://${word}.${tld}`),
+    ...(citySuffix && tldPriority[0]
+      ? [`https://${word}-${citySuffix}.${tldPriority[0]}`]
+      : []),
+  ]);
+}
+
 export function buildWebsiteCandidates(
   lead: Pick<Lead, "name"> & Partial<Pick<Lead, "address">>,
   tldPriority = getHeuristicConfig().tld_priority,
-  citySuffixes = getHeuristicConfig().city_suffixes
+  citySuffixes = getHeuristicConfig().city_suffixes,
+  extraStopWords: ReadonlySet<string> = new Set()
 ): string[] {
-  const variants = withCityVariants(
-    buildSlugVariants(lead.name),
-    deriveCitySuffix(lead.address ?? null, citySuffixes)
+  const citySuffix = deriveCitySuffix(lead.address ?? null, citySuffixes);
+  const singleWord = buildSingleWordCandidates(lead.name, tldPriority, citySuffix, extraStopWords);
+  const fullName = withCityVariants(buildSlugVariants(lead.name), citySuffix).flatMap(
+    (variant) => tldPriority.map((tld) => `https://${variant}.${tld}`)
   );
-  return variants.flatMap((variant) =>
-    tldPriority.map((tld) => `https://${variant}.${tld}`)
-  );
+  return dedupe([...singleWord, ...fullName]);
 }
 
 function buildSocialCandidateUrls(
@@ -479,6 +524,33 @@ function bestByScore<T extends { score: number }>(items: T[], threshold: number)
   return best && best.score >= threshold ? best : null;
 }
 
+function isSingleWordWebsiteUrl(url: string): boolean {
+  try {
+    const hostname = new URL(url).hostname.toLowerCase().replace(/^www\./, "");
+    const base = hostname.split(".")[0] ?? "";
+    return base.length > 0 && !base.includes("-");
+  } catch {
+    return false;
+  }
+}
+
+function websiteThreshold(
+  candidate: Pick<HeuristicCandidate, "url">,
+  thresholds: HeuristicDiscoveryConfig["thresholds"]
+): number {
+  return isSingleWordWebsiteUrl(candidate.url)
+    ? thresholds.website_single_word
+    : thresholds.website;
+}
+
+function bestWebsiteByThreshold<T extends HeuristicCandidate>(
+  items: T[],
+  thresholds: HeuristicDiscoveryConfig["thresholds"]
+): T | null {
+  const sorted = [...items].sort((a, b) => b.score - a.score);
+  return sorted.find((item) => item.score >= websiteThreshold(item, thresholds)) ?? null;
+}
+
 export async function discoverHeuristicSources(
   lead: Lead,
   mode: HeuristicDiscoveryMode,
@@ -500,24 +572,23 @@ export async function discoverHeuristicSources(
 
   const websiteUrls = dedupe([
     ...(options.additionalWebsiteUrls ?? []),
-    ...buildWebsiteCandidates(lead, config.tld_priority),
+    ...buildWebsiteCandidates(
+      lead,
+      config.tld_priority,
+      config.city_suffixes,
+      options.extraStopWords ?? new Set()
+    ),
   ]).slice(0, config.max_candidates_to_probe);
+  const probeLimit = pLimit(3);
   const websiteProbes = await Promise.all(
-    websiteUrls.map((url) => probeWebsiteCandidate(lead, url, deps))
+    websiteUrls.map((url) => probeLimit(() => probeWebsiteCandidate(lead, url, deps)))
   );
   const website = websiteProbes.map(
     ({ html: _html, schemaSocialRefs: _refs, ...candidate }) => candidate
   );
-  const selectedWebsiteProbe =
-    [...websiteProbes].sort((a, b) => b.score - a.score)[0] ?? null;
-  const selectedWebsiteHtml =
-    selectedWebsiteProbe && selectedWebsiteProbe.score >= config.thresholds.website
-      ? selectedWebsiteProbe.html
-      : null;
-  const selectedSchemaRefs =
-    selectedWebsiteProbe && selectedWebsiteProbe.score >= config.thresholds.website
-      ? selectedWebsiteProbe.schemaSocialRefs
-      : {};
+  const selectedWebsiteProbe = bestWebsiteByThreshold(websiteProbes, config.thresholds);
+  const selectedWebsiteHtml = selectedWebsiteProbe ? selectedWebsiteProbe.html : null;
+  const selectedSchemaRefs = selectedWebsiteProbe ? selectedWebsiteProbe.schemaSocialRefs : {};
 
   const schemaFacebookRefs = selectedSchemaRefs.facebook ?? [];
   const schemaInstagramRefs = selectedSchemaRefs.instagram ?? [];
@@ -563,7 +634,7 @@ export async function discoverHeuristicSources(
     stale: false,
     candidates: { website, facebook, instagram, whatsapp },
     selected: {
-      website: bestByScore(website, config.thresholds.website),
+      website: bestWebsiteByThreshold(website, config.thresholds),
       facebook: bestByScore(facebook, config.thresholds.social),
       instagram: bestByScore(instagram, config.thresholds.social),
       whatsapp: bestByScore(whatsapp, config.thresholds.social),

@@ -5,6 +5,7 @@ import { heuristicRefreshCommand } from "./commands/heuristic-refresh.js";
 import { scoreCommand } from "./commands/score.js";
 import { reportCommand } from "./commands/report.js";
 import { leadsListCommand } from "./commands/leads-list.js";
+import { vocabularyCommand } from "./commands/vocabulary.js";
 
 const program = new Command();
 
@@ -148,6 +149,35 @@ leadsCmd
     format: string;
   }) => {
     await leadsListCommand(opts);
+  });
+
+const vocabCmd = program
+  .command("vocabulary")
+  .description("Manage the dynamic niche stop-word vocabulary learned from leads");
+
+vocabCmd
+  .command("rebuild")
+  .description("Rebuild the niche vocabulary from current leads")
+  .option("--all", "Rebuild for every niche that has leads", false)
+  .option("--niche <name>", "Rebuild for a specific niche only")
+  .option("--min-count <number>", "Minimum lead count for a word to qualify", "3")
+  .option("--min-fraction <number>", "Minimum fraction of niche leads for a word to qualify", "0.05")
+  .action(async (opts: { all?: boolean; niche?: string; minCount: string; minFraction: string }) => {
+    await vocabularyCommand({
+      subcommand: "rebuild",
+      all: opts.all ?? false,
+      ...(opts.niche !== undefined ? { niche: opts.niche } : {}),
+      minCount: Number(opts.minCount),
+      minFraction: Number(opts.minFraction),
+    });
+  });
+
+vocabCmd
+  .command("show")
+  .description("Display the vocabulary for a niche")
+  .requiredOption("--niche <name>", "Niche to display")
+  .action(async (opts: { niche: string }) => {
+    await vocabularyCommand({ subcommand: "show", niche: opts.niche });
   });
 
 program.parse(process.argv);

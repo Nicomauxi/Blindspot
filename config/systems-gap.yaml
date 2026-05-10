@@ -1,0 +1,39 @@
+version: 1
+enabled: true
+rules:
+  hairdresser:
+    - name: booking_system_missing
+      weight: 15
+      platforms: [booksy.com, fresha.com, genbook.com, simplybook.me, calendly.com]
+    - name: whatsapp_business_missing
+      weight: 10
+      requires: [booking_system_missing]
+  restaurant:
+    - name: online_menu_missing
+      weight: 20
+      keywords: [pedidosya, ifood, menupiu, "ver carta", "ver menu", "escanear qr"]
+    - name: delivery_platform_missing
+      weight: 15
+      platforms: [pedidosya.com, ifood.com.uy]
+    - name: reservations_missing
+      weight: 10
+      platforms: [reservando.uy, thefork.com, opentable.com]
+  gym:
+    - name: class_booking_missing
+      weight: 20
+      platforms: [mindbody.io, wodify.com, classpass.com, booksy.com]
+    - name: app_missing
+      weight: 10
+      platforms: [play.google.com/store/apps, apps.apple.com]
+  car_dealer:
+    - name: online_catalog_missing
+      weight: 20
+      keywords: [catálogo, catalogo, stock, "0km", usados, kilometraje]
+    - name: contact_form_missing
+      weight: 15
+      html_patterns: ["<form", "contact-form", cotizar]
+  all:
+    - name: no_booking_any
+      weight: 10
+      applies_to: [hairdresser, gym, healthcare, dentist]
+      requires_none_of: [booking_system_missing, class_booking_missing]

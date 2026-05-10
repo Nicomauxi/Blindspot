@@ -23,6 +23,7 @@ import { parseStack } from "./parsers/stack.js";
 import { parseViewport } from "./parsers/viewport.js";
 import { parseWhatsapp } from "./parsers/whatsapp.js";
 import { parseSocialLinks } from "./parsers/social-links.js";
+import { parseOperationalSystems } from "./parsers/operational-systems.js";
 import { parseSsl } from "./parsers/ssl.js";
 import { whoisLookup, normalizeDomain } from "./whois.js";
 
@@ -33,6 +34,7 @@ const PHONE_MOBILE_HEURISTIC = /^\+?\d{10,}$/;
 export interface EnrichLeadOptions {
   forceRefresh: boolean;
   withHeuristic?: boolean;
+  extraStopWords?: ReadonlySet<string>;
 }
 
 export type EnrichOutcome =
@@ -203,7 +205,10 @@ async function resolveHeuristic(
     lead,
     mode,
     { fetchHtml: deps.fetchHtml },
-    { additionalWebsiteUrls }
+    {
+      additionalWebsiteUrls,
+      ...(opts.extraStopWords !== undefined ? { extraStopWords: opts.extraStopWords } : {}),
+    }
   );
 }
 
@@ -313,12 +318,13 @@ export async function enrichLead(
       const html = fetched.html;
       const headers = fetched.headers;
       const finalUrl = fetched.finalUrl;
-      const [pixels, stack, viewport, whatsapp, social_links] = await Promise.all([
+      const [pixels, stack, viewport, whatsapp, social_links, operational_systems] = await Promise.all([
         Promise.resolve(parsePixels(html)),
         Promise.resolve(parseStack(html, headers)),
         Promise.resolve(parseViewport(html)),
         Promise.resolve(parseWhatsapp(html)),
         Promise.resolve(parseSocialLinks(html)),
+        Promise.resolve(parseOperationalSystems(html)),
       ]);
       const ssl = parseSsl(finalUrl);
 
@@ -333,6 +339,7 @@ export async function enrichLead(
         viewport,
         whatsapp,
         social_links,
+        operational_systems,
         ...(heuristicDiscovery ? { heuristic_discovery: heuristicDiscovery } : {}),
         ...(directoryDiscovery ? { directory_discovery: directoryDiscovery } : {}),
       };

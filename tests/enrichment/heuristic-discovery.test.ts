@@ -6,6 +6,7 @@ import {
   isHeuristicStale,
   parseHeuristicConfig,
   slugifyBusinessName,
+  tokenizeFromSlug,
 } from "../../src/modules/enrichment/heuristic-discovery.js";
 import type { Lead } from "../../src/shared/types.js";
 
@@ -32,8 +33,10 @@ function makeLead(overrides: Partial<Lead> = {}): Lead {
     reviews_sample: null,
     business_quality_score: null,
     digital_gap_score: null,
+    systems_gap_score: null,
     prospect_score: null,
     score_breakdown: null,
+    systems_gap_breakdown: null,
     contacted_at: null,
     created_at: "2026-01-01T00:00:00.000Z",
     updated_at: "2026-01-01T00:00:00.000Z",
@@ -61,6 +64,8 @@ heuristic_discovery:
   it("builds slug and website candidates by TLD priority", () => {
     expect(slugifyBusinessName("Peluquería Ñandú")).toBe("peluqueria-nandu");
     expect(buildWebsiteCandidates(makeLead(), ["com.uy", "uy"], {})).toEqual([
+      "https://nandu.com.uy",
+      "https://nandu.uy",
       "https://peluqueria-nandu.com.uy",
       "https://peluqueria-nandu.uy",
       "https://pelu-nandu.com.uy",
@@ -104,7 +109,7 @@ heuristic_discovery:
       }),
     });
 
-    expect(result.selected.website?.url).toBe("https://peluqueria-nandu.com.uy");
+    expect(result.selected.website?.url).toBe("https://nandu.com.uy");
     expect(result.selected.website?.signals).toEqual([
       "http-ok",
       "name-match",
@@ -150,7 +155,7 @@ heuristic_discovery:
       }
     );
 
-    expect(probedUrls.filter((url) => !url.includes("facebook.com") && !url.includes("instagram.com"))).toHaveLength(6);
+    expect(probedUrls.filter((url) => !url.includes("facebook.com") && !url.includes("instagram.com"))).toHaveLength(15);
     expect(result.candidates.facebook).toHaveLength(3);
     expect(result.candidates.instagram).toHaveLength(3);
     expect(result.selected.facebook?.url).toBe("https://www.facebook.com/violet-pelu");
@@ -303,7 +308,7 @@ heuristic_discovery:
 
     expect(probedUrls[0]).toBe("https://violet.com.uy");
     expect(probedUrls.filter((url) => url === "https://violet.com.uy")).toHaveLength(1);
-    expect(result.candidates.website).toHaveLength(6);
+    expect(result.candidates.website).toHaveLength(15);
   });
 
   it("derives Uruguay WhatsApp from mobile phone", () => {
@@ -317,5 +322,72 @@ heuristic_discovery:
     const now = Date.parse("2026-02-15T00:00:00.000Z");
     expect(isHeuristicStale(old, now)).toBe(true);
     expect(isHeuristicStale(null, now)).toBe(true);
+  });
+
+  it("does not generate individual candidates for niche sector stopwords", () => {
+    const motorsCandidates = buildWebsiteCandidates(
+      { name: "Zona Motors", address: null },
+      ["com.uy"],
+      {}
+    );
+    expect(motorsCandidates).not.toContain("https://motors.com.uy");
+
+    const fitnessCandidates = buildWebsiteCandidates(
+      { name: "Power Fitness", address: null },
+      ["com.uy"],
+      {}
+    );
+    expect(fitnessCandidates).not.toContain("https://fitness.com.uy");
+
+    const coiffeurCandidates = buildWebsiteCandidates(
+      { name: "Style Coiffeur", address: null },
+      ["com.uy"],
+      {}
+    );
+    expect(coiffeurCandidates).not.toContain("https://coiffeur.com.uy");
+  });
+
+  it("does not generate individual candidates for words shorter than 4 characters", () => {
+    const candidates = buildWebsiteCandidates(
+      { name: "Rio Mar Salud", address: null },
+      ["com.uy"],
+      {}
+    );
+    expect(candidates).not.toContain("https://rio.com.uy");
+    expect(candidates).not.toContain("https://mar.com.uy");
+    expect(candidates).toContain("https://salud.com.uy");
+  });
+
+  it("tokenizeFromSlug splits a business name into slug tokens", () => {
+    expect(tokenizeFromSlug("Peluquería Ñandú")).toEqual(["peluqueria", "nandu"]);
+    expect(tokenizeFromSlug("")).toEqual([]);
+    expect(tokenizeFromSlug("Amaya Motors & Propios")).toEqual(["amaya", "motors", "y", "propios"]);
+    expect(tokenizeFromSlug("Zona Motors")).toEqual(["zona", "motors"]);
+  });
+
+  it("buildWebsiteCandidates respects extraStopWords for single-word candidates", () => {
+    const candidates = buildWebsiteCandidates(
+      { name: "Amaya Salon", address: null },
+      ["com.uy"],
+      {},
+      new Set(["amaya"])
+    );
+    expect(candidates).not.toContain("https://amaya.com.uy");
+    expect(candidates).toContain("https://salon.com.uy");
+  });
+
+  it("buildWebsiteCandidates with empty extraStopWords behaves identically to no argument", () => {
+    const withEmpty = buildWebsiteCandidates(
+      { name: "Zona Tech", address: null },
+      ["com.uy"],
+      {},
+      new Set()
+    );
+    const withoutArg = buildWebsiteCandidates(
+      { name: "Zona Tech", address: null },
+      ["com.uy"],
+      {}
+    );
+    expect(withEmpty).toEqual(withoutArg);
   });
 });

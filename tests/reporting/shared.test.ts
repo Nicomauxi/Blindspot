@@ -124,7 +124,14 @@ describe("parseScoreBreakdown", () => {
     expect(result).not.toBeNull();
     expect(result?.business_quality.total).toBe(50);
     expect(result?.digital_gap.rules).toHaveLength(4);
+    expect(result?.systems_gap.total).toBe(25);
     expect(result?.prospect.total).toBe(27);
+  });
+  it("parses legacy breakdowns without systems_gap as zero", () => {
+    const legacy = { ...fullScored.score_breakdown };
+    delete legacy.systems_gap;
+    const result = parseScoreBreakdown(legacy);
+    expect(result?.systems_gap).toEqual({ total: 0, rules: [] });
   });
   it("rejects breakdown missing required fields", () => {
     expect(parseScoreBreakdown({ computed_at: "x", config_version: 1 })).toBeNull();

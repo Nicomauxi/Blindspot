@@ -2,7 +2,7 @@
 
 export const LEAD_TPL = `# {{{name}}}
 
-**Prospect Score**: {{scores.prospect}}/100  ·  **BQ**: {{scores.bq}}  ·  **DG**: {{scores.dg}}
+**Prospect Score**: {{scores.prospect}}/100  ·  **BQ**: {{scores.bq}}  ·  **DG**: {{scores.dg}}  ·  **SG**: {{scores.sg}}
 
 {{#if scoreless}}
 > WARNING: Este lead no fue scoreado aún. Ejecutar: \`blindspot score --run <run_id>\`
@@ -25,6 +25,11 @@ export const LEAD_TPL = `# {{{name}}}
 
 ### Digital Gap ({{scores.dg}}/100)
 {{#each breakdown.dgRules}}
+- **{{name}}** (+{{weight}}) — valor: \`{{matched_value}}\`
+{{/each}}
+
+### Systems Gap ({{scores.sg}}/100)
+{{#each breakdown.sgRules}}
 - **{{name}}** (+{{weight}}) — valor: \`{{matched_value}}\`
 {{/each}}
 
@@ -79,6 +84,7 @@ export const DASHBOARD_TPL = `<!DOCTYPE html>
           <th data-sort="prospect">Prospect</th>
           <th data-sort="bq">BQ</th>
           <th data-sort="dg">DG</th>
+          <th data-sort="sg">SG</th>
           <th>Tags</th>
           <th>Teléfono</th>
           <th>Dirección</th>
@@ -94,6 +100,7 @@ export const DASHBOARD_TPL = `<!DOCTYPE html>
           <td><span class="badge badge-{{color}}" data-prospect="{{prospectVal}}">{{prospectDisplay}}</span></td>
           <td><span data-bq="{{bqVal}}">{{bqDisplay}}</span></td>
           <td><span data-dg="{{dgVal}}">{{dgDisplay}}</span></td>
+          <td><span data-sg="{{sgVal}}">{{sgDisplay}}</span></td>
           <td class="tags">{{#each displayTags}}<span class="tag">{{this}}</span>{{/each}}</td>
           <td>{{#if lead.phone}}<a href="tel:{{lead.phone}}">{{lead.phone}}</a>{{else}}<span class="dash">—</span>{{/if}}</td>
           <td>{{#if lead.address}}{{lead.address}}{{else}}<span class="dash">—</span>{{/if}}</td>
@@ -103,7 +110,7 @@ export const DASHBOARD_TPL = `<!DOCTYPE html>
           <td><button class="btn-toggle" data-target="detail-{{rank}}">ver</button></td>
         </tr>
         <tr id="detail-{{rank}}" class="detail-row hidden">
-          <td colspan="10">
+          <td colspan="11">
             <div class="detail-panel">
               {{#if scoreless}}<p class="scoreless-warn">Lead sin puntaje &mdash; ejecutar: blindspot score --run {{lead.first_seen_run_id}}</p>{{/if}}
               {{#if breakdown}}
@@ -116,6 +123,12 @@ export const DASHBOARD_TPL = `<!DOCTYPE html>
               <h4>Digital Gap ({{dgDisplay}}/100)</h4>
               <ul class="rules">
                 {{#each breakdown.digital_gap.rules}}
+                <li><span class="rn">{{name}}</span> (+{{weight}}) &mdash; <span class="rv">{{matched_value}}</span></li>
+                {{/each}}
+              </ul>
+              <h4>Systems Gap ({{sgDisplay}}/100)</h4>
+              <ul class="rules">
+                {{#each breakdown.systems_gap.rules}}
                 <li><span class="rn">{{name}}</span> (+{{weight}}) &mdash; <span class="rv">{{matched_value}}</span></li>
                 {{/each}}
               </ul>

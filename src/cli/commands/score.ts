@@ -102,7 +102,7 @@ export async function scoreCommand(rawArgs: RawScoreArgs): Promise<void> {
       const result = scoreLead(lead);
 
       log.info(
-        `[${i + 1}/${leads.length}] scored ${lead.name} → bq=${result.business_quality_score} dg=${result.digital_gap_score} prospect=${result.prospect_score}`
+        `[${i + 1}/${leads.length}] scored ${lead.name} → bq=${result.business_quality_score} dg=${result.digital_gap_score} sg=${result.systems_gap_score} prospect=${result.prospect_score}`
       );
 
       if (!opts.dryRun) {

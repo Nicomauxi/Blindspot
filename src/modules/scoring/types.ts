@@ -45,12 +45,15 @@ export interface ScoreBreakdown {
   config_version: number;
   business_quality: { total: number; rules: EvaluatedRule[] };
   digital_gap: { total: number; rules: EvaluatedRule[] };
+  systems_gap: { total: number; rules: EvaluatedRule[] };
   prospect: { formula: string; total: number };
 }
 
 export interface ScoreResult {
   business_quality_score: number;
   digital_gap_score: number;
+  systems_gap_score: number;
   prospect_score: number;
   score_breakdown: ScoreBreakdown;
+  systems_gap_breakdown: { total: number; rules: EvaluatedRule[] };
 }

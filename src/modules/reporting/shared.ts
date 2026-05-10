@@ -93,6 +93,7 @@ const ParsedBreakdownSchema = z.object({
   config_version: z.number(),
   business_quality: DimSchema,
   digital_gap: DimSchema,
+  systems_gap: DimSchema.optional(),
   prospect: z.object({ formula: z.string(), total: z.number() }),
 });
 
@@ -108,6 +109,7 @@ export function parseScoreBreakdown(
     config_version: d.config_version,
     business_quality: d.business_quality,
     digital_gap: d.digital_gap,
+    systems_gap: d.systems_gap ?? { total: 0, rules: [] },
     prospect: d.prospect,
   };
 }
@@ -194,16 +196,19 @@ export function buildLeadViews(leads: Lead[]): ReportLeadView[] {
       prospectDisplay: displayScore(lead.prospect_score),
       bqDisplay: displayScore(lead.business_quality_score),
       dgDisplay: displayScore(lead.digital_gap_score),
+      sgDisplay: displayScore(lead.systems_gap_score),
       prospectVal: numericAttr(lead.prospect_score),
       bqVal: numericAttr(lead.business_quality_score),
       dgVal: numericAttr(lead.digital_gap_score),
+      sgVal: numericAttr(lead.systems_gap_score),
       searchText,
       footprintSummary: summarizeFootprint(lead.digital_footprint),
       breakdown: parseScoreBreakdown(lead.score_breakdown),
       scoreless:
         lead.prospect_score === null &&
         lead.business_quality_score === null &&
-        lead.digital_gap_score === null,
+        lead.digital_gap_score === null &&
+        lead.systems_gap_score === null,
     };
   });
 }

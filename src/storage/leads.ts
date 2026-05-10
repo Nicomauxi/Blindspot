@@ -236,8 +236,10 @@ export async function updateLeadScore(leadId: string, result: ScoreResult): Prom
     .update({
       business_quality_score: result.business_quality_score,
       digital_gap_score: result.digital_gap_score,
+      systems_gap_score: result.systems_gap_score,
       prospect_score: result.prospect_score,
       score_breakdown: result.score_breakdown,
+      systems_gap_breakdown: result.systems_gap_breakdown,
     })
     .eq("id", leadId);
   if (error) throw new Error(`Failed to update scores for lead ${leadId}: ${error.message}`);
