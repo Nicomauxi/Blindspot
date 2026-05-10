@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { enrichLead } from "../../src/modules/enrichment/index.js";
 import type {
+  DirectoryDiscovery,
   HeuristicDiscovery,
   HeuristicDiscoveryMode,
   Lead,
@@ -77,6 +78,16 @@ function whoisOk(ageYears: number | null) {
   }));
 }
 
+function directoryResult(bestWebsite: string | null): DirectoryDiscovery {
+  return {
+    ran_at: new Date().toISOString(),
+    source: "paginasamarillas.com.uy",
+    query: "test-lead montevideo",
+    candidates: [],
+    best_website: bestWebsite,
+  };
+}
+
 function heuristicResult(mode: HeuristicDiscoveryMode, websiteUrl: string | null): HeuristicDiscovery {
   return {
     ran_at: new Date().toISOString(),
@@ -131,6 +142,7 @@ describe("enrichLead", () => {
   });
 
   it("website social calls heuristic in website-only mode", async () => {
+    const directoryDiscover = vi.fn(async () => directoryResult(null));
     const heuristicDiscover = vi.fn(async (_lead: Lead, mode: HeuristicDiscoveryMode) =>
       heuristicResult(mode, "https://example.com")
     );
@@ -140,22 +152,68 @@ describe("enrichLead", () => {
       fetchHtml: fetchSpy,
       whoisLookup: whoisOk(null),
       heuristicDiscover,
+      directoryDiscover,
     });
-    expect(heuristicDiscover).toHaveBeenCalledWith(lead, "website-only");
+    expect(directoryDiscover).toHaveBeenCalledWith(lead, expect.any(Object));
+    expect(heuristicDiscover).toHaveBeenCalledWith(
+      lead,
+      "website-only",
+      expect.any(Object),
+      { additionalWebsiteUrls: [] }
+    );
     expect(fetchSpy).toHaveBeenCalledWith("https://example.com");
     expect(r.tags_to_add).toContain("website-heuristic");
     expect((r.digital_footprint as { heuristic_discovery?: HeuristicDiscovery }).heuristic_discovery?.mode).toBe("website-only");
   });
 
+  it("passes directory best website into heuristic before scraping", async () => {
+    const directoryDiscover = vi.fn(async () => directoryResult("https://violet.com.uy"));
+    const heuristicDiscover = vi.fn(async (_lead: Lead, mode: HeuristicDiscoveryMode) =>
+      heuristicResult(mode, "https://violet.com.uy")
+    );
+    const fetchSpy = fetchHtmlOk(loadFixture("plain-static.html"), "https://violet.com.uy/");
+    const lead = makeLead({
+      website: null,
+      name: "Violet Peluquería",
+      address: "Hocquart 2049, Montevideo, Uruguay",
+    });
+
+    const r = await enrichLead(lead, { forceRefresh: false, withHeuristic: true }, {
+      fetchHtml: fetchSpy,
+      whoisLookup: whoisOk(null),
+      heuristicDiscover,
+      directoryDiscover,
+    });
+
+    expect(heuristicDiscover).toHaveBeenCalledWith(
+      lead,
+      "full",
+      expect.any(Object),
+      { additionalWebsiteUrls: ["https://violet.com.uy"] }
+    );
+    expect(fetchSpy).toHaveBeenCalledWith("https://violet.com.uy");
+    expect(r.digital_footprint).toMatchObject({
+      directory_discovery: { best_website: "https://violet.com.uy" },
+      heuristic_discovery: { selected: { website: { url: "https://violet.com.uy" } } },
+    });
+  });
+
   it("website null calls heuristic in full mode", async () => {
+    const directoryDiscover = vi.fn(async () => directoryResult(null));
     const heuristicDiscover = vi.fn(async (_lead: Lead, mode: HeuristicDiscoveryMode) =>
       heuristicResult(mode, null)
     );
     const lead = makeLead({ website: null });
     const r = await enrichLead(lead, { forceRefresh: false, withHeuristic: true }, {
       heuristicDiscover,
+      directoryDiscover,
     });
-    expect(heuristicDiscover).toHaveBeenCalledWith(lead, "full");
+    expect(heuristicDiscover).toHaveBeenCalledWith(
+      lead,
+      "full",
+      expect.any(Object),
+      { additionalWebsiteUrls: [] }
+    );
     expect(r.outcome).toBe("skipped-no-website");
     expect(r.digital_footprint).toMatchObject({
       skipped: true,
@@ -193,9 +251,11 @@ describe("enrichLead", () => {
       },
     });
     const heuristicDiscover = vi.fn(async () => heuristicResult("full", null));
+    const directoryDiscover = vi.fn(async () => directoryResult(null));
 
     const r = await enrichLead(lead, { forceRefresh: false, withHeuristic: true }, {
       heuristicDiscover,
+      directoryDiscover,
     });
 
     expect(heuristicDiscover).not.toHaveBeenCalled();
@@ -244,9 +304,11 @@ describe("enrichLead", () => {
       },
     }));
     const lead = makeLead({ website: null });
+    const directoryDiscover = vi.fn(async () => directoryResult(null));
 
     const r = await enrichLead(lead, { forceRefresh: false, withHeuristic: true }, {
       heuristicDiscover,
+      directoryDiscover,
     });
 
     expect(r.outcome).toBe("skipped-no-website");

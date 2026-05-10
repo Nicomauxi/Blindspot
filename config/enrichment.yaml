@@ -21,3 +21,21 @@ heuristic_discovery:
     - "97"
     - "98"
     - "99"
+
+
+directory_discovery:
+  enabled: true
+  source: yelu.uy
+  min_confidence_to_use: 60
+  fetch_profile_page: true
+  niche_category_map:
+    hairdresser: Peluqueros
+    car_dealer: "Venta_de_Vehículos"
+    gym: Fitness
+    restaurant: Restaurantes
+    accommodation: Hoteles
+    pharmacy: null
+    grocery: Supermercado
+    dentist: Dentistas
+    healthcare: "Médicos_y_Clínicos"
+    other: null
