@@ -8,6 +8,7 @@ import type {
   HeuristicDiscovery,
   HeuristicDiscoveryMode,
   Lead,
+  SocialSearch,
 } from "../../shared/types.js";
 import { fetchHtml } from "./http.js";
 import {
@@ -18,18 +19,25 @@ import {
   discoverHeuristicSources,
   isHeuristicStale,
 } from "./heuristic-discovery.js";
+import {
+  discoverSocialSearch,
+  isSocialSearchStale,
+  isUruguayMobilePhone,
+} from "./social-search.js";
 import { parsePixels } from "./parsers/pixels.js";
 import { parseStack } from "./parsers/stack.js";
 import { parseViewport } from "./parsers/viewport.js";
 import { parseWhatsapp } from "./parsers/whatsapp.js";
 import { parseSocialLinks } from "./parsers/social-links.js";
 import { parseOperationalSystems } from "./parsers/operational-systems.js";
+import { OUTDATED_YEAR_THRESHOLD, parseCopyrightYear } from "./parsers/copyright-year.js";
 import { parseSsl } from "./parsers/ssl.js";
 import { whoisLookup, normalizeDomain } from "./whois.js";
 
 const HTML_CACHE_MS = 7 * 24 * 60 * 60 * 1_000;
 const WHOIS_CACHE_MS = 30 * 24 * 60 * 60 * 1_000;
 const PHONE_MOBILE_HEURISTIC = /^\+?\d{10,}$/;
+const SOCIAL_SEARCH_THRESHOLD = 0.4;
 
 export interface EnrichLeadOptions {
   forceRefresh: boolean;
@@ -57,6 +65,7 @@ interface EnrichmentDeps {
   whoisLookup: typeof whoisLookup;
   heuristicDiscover: typeof discoverHeuristicSources;
   directoryDiscover: typeof discoverDirectorySources;
+  socialSearchDiscover: typeof discoverSocialSearch;
 }
 
 const DEFAULT_DEPS: EnrichmentDeps = {
@@ -64,6 +73,7 @@ const DEFAULT_DEPS: EnrichmentDeps = {
   whoisLookup,
   heuristicDiscover: discoverHeuristicSources,
   directoryDiscover: discoverDirectorySources,
+  socialSearchDiscover: discoverSocialSearch,
 };
 
 function parseIso(s: string | undefined | null): number | null {
@@ -86,6 +96,10 @@ function getHeuristic(footprint: DigitalFootprint | null): HeuristicDiscovery | 
 
 function getDirectory(footprint: DigitalFootprint | null): DirectoryDiscovery | null {
   return footprint?.directory_discovery ?? null;
+}
+
+function getSocialSearch(footprint: DigitalFootprint | null): SocialSearch | null {
+  return footprint?.social_search ?? null;
 }
 
 function isHtmlCacheFresh(footprint: DigitalFootprint | null): boolean {
@@ -138,6 +152,14 @@ function deriveTags(
     tags.push("ssl-missing");
   }
 
+  if (
+    footprint.copyright_year !== undefined &&
+    footprint.copyright_year !== null &&
+    footprint.copyright_year <= OUTDATED_YEAR_THRESHOLD
+  ) {
+    tags.push("web-outdated");
+  }
+
   if (footprint.stack && footprint.stack.confidence !== "low") {
     if (footprint.stack.name === "WordPress" && footprint.stack.version) {
       const major = parseInt(footprint.stack.version.split(".")[0] ?? "", 10);
@@ -179,6 +201,56 @@ function heuristicTags(discovery: HeuristicDiscovery | null): string[] {
   if (discovery.selected.whatsapp) tags.push("whatsapp-derived");
   if (discovery.stale) tags.push("heuristic-stale");
   return tags;
+}
+
+function socialSearchTags(search: SocialSearch | null): string[] {
+  const tags: string[] = [];
+  if (!search) return tags;
+  if (search.source === "duckduckgo") {
+    if (search.facebook.best_url && search.facebook.confidence >= SOCIAL_SEARCH_THRESHOLD) {
+      tags.push("fb-confirmed");
+    }
+    if (search.instagram.best_url && search.instagram.confidence >= SOCIAL_SEARCH_THRESHOLD) {
+      tags.push("ig-confirmed");
+    }
+    if (
+      search.facebook.additional_phones.length > 0 ||
+      search.instagram.additional_phones.length > 0
+    ) {
+      tags.push("additional-phones");
+    }
+    return tags;
+  }
+  if (search.facebook && search.facebook.confidence >= 0.7) {
+    tags.push("fb-confirmed");
+    if (search.facebook.whatsapp_button) tags.push("whatsapp-confirmed");
+  }
+  if (search.instagram && search.instagram.confidence >= 0.7) {
+    tags.push("ig-confirmed");
+  }
+  return tags;
+}
+
+function socialSearchAdditionalPhones(search: SocialSearch | null): string[] {
+  if (!search) return [];
+  if (search.source === "duckduckgo") {
+    return Array.from(new Set([
+      ...search.facebook.additional_phones,
+      ...search.instagram.additional_phones,
+    ]));
+  }
+  return search.facebook?.phone ? [search.facebook.phone] : [];
+}
+
+function shouldRunSocialSearch(
+  lead: Lead,
+  opts: EnrichLeadOptions,
+  heuristicDiscovery: HeuristicDiscovery | null
+): boolean {
+  if (opts.withHeuristic === true) return true;
+  const tags = new Set([...lead.tags, ...heuristicTags(heuristicDiscovery)]);
+  if (tags.has("fb-heuristic") || tags.has("ig-heuristic")) return true;
+  return tags.has("no-website") && !tags.has("whatsapp-derived") && !lead.whatsapp;
 }
 
 async function resolveHeuristic(
@@ -225,6 +297,27 @@ async function resolveDirectory(
   return deps.directoryDiscover(lead, { fetchHtml: deps.fetchHtml });
 }
 
+async function resolveSocialSearch(
+  lead: Lead,
+  opts: EnrichLeadOptions,
+  deps: EnrichmentDeps,
+  heuristicDiscovery: HeuristicDiscovery | null
+): Promise<SocialSearch | null> {
+  if (!shouldRunSocialSearch(lead, opts, heuristicDiscovery)) return getSocialSearch(lead.digital_footprint);
+
+  const previous = getSocialSearch(lead.digital_footprint);
+  if (
+    previous &&
+    !isSocialSearchStale(previous) &&
+    !opts.forceRefresh &&
+    opts.withHeuristic !== true
+  ) {
+    return previous;
+  }
+
+  return deps.socialSearchDiscover(lead);
+}
+
 export async function enrichLead(
   lead: Lead,
   opts: EnrichLeadOptions,
@@ -241,6 +334,17 @@ export async function enrichLead(
   let effectiveWebsite = originalWebsite;
   let directoryDiscovery: DirectoryDiscovery | null = null;
   let heuristicDiscovery: HeuristicDiscovery | null = null;
+  let socialSearch: SocialSearch | null = null;
+
+  const cachedHeuristic = getHeuristic(lead.digital_footprint);
+  if (
+    cachedHeuristic?.selected.website &&
+    cachedHeuristic.stale !== true &&
+    !isHeuristicStale(cachedHeuristic)
+  ) {
+    heuristicDiscovery = cachedHeuristic;
+    effectiveWebsite = cachedHeuristic.selected.website.url;
+  }
 
   // 1. Resolve directory + heuristic sources before the normal enrichment flow.
   if ((!originalWebsite || isSocialWebsite) && opts.withHeuristic === true) {
@@ -255,8 +359,18 @@ export async function enrichLead(
     }
   }
 
+  socialSearch = await resolveSocialSearch(lead, opts, deps, heuristicDiscovery);
+
   // 2. No website after optional heuristic.
   if (!effectiveWebsite) {
+    const tags = [
+      ...heuristicTags(heuristicDiscovery),
+      ...socialSearchTags(socialSearch),
+    ];
+    const socialMobile = socialSearchAdditionalPhones(socialSearch).find(isUruguayMobilePhone) ?? null;
+    if (socialMobile && (lead.tags.includes("whatsapp-missing") || opts.withHeuristic === true)) {
+      tags.push("whatsapp-derived");
+    }
     return {
       digital_footprint: {
         skipped: true,
@@ -264,9 +378,10 @@ export async function enrichLead(
         fetched_at: fetchedAtIso,
         ...(heuristicDiscovery ? { heuristic_discovery: heuristicDiscovery } : {}),
         ...(directoryDiscovery ? { directory_discovery: directoryDiscovery } : {}),
+        ...(socialSearch ? { social_search: socialSearch } : {}),
       },
-      tags_to_add: heuristicTags(heuristicDiscovery),
-      whatsapp_from_site: heuristicDiscovery?.selected.whatsapp?.number ?? null,
+      tags_to_add: tags,
+      whatsapp_from_site: heuristicDiscovery?.selected.whatsapp?.number ?? socialMobile,
       outcome: "skipped-no-website",
       duration_ms: Date.now() - start,
     };
@@ -281,8 +396,12 @@ export async function enrichLead(
         fetched_at: fetchedAtIso,
         ...(heuristicDiscovery ? { heuristic_discovery: heuristicDiscovery } : {}),
         ...(directoryDiscovery ? { directory_discovery: directoryDiscovery } : {}),
+        ...(socialSearch ? { social_search: socialSearch } : {}),
       },
-      tags_to_add: heuristicTags(heuristicDiscovery),
+      tags_to_add: [
+        ...heuristicTags(heuristicDiscovery),
+        ...socialSearchTags(socialSearch),
+      ],
       whatsapp_from_site: null,
       outcome: "skipped-social",
       duration_ms: Date.now() - start,
@@ -301,6 +420,7 @@ export async function enrichLead(
       ...previous,
       ...(heuristicDiscovery ? { heuristic_discovery: heuristicDiscovery } : {}),
       ...(directoryDiscovery ? { directory_discovery: directoryDiscovery } : {}),
+      ...(socialSearch ? { social_search: socialSearch } : {}),
     };
   } else {
     const fetched = await deps.fetchHtml(effectiveWebsite);
@@ -313,18 +433,20 @@ export async function enrichLead(
         ...(fetched.status !== null ? { http_status: fetched.status } : {}),
         ...(heuristicDiscovery ? { heuristic_discovery: heuristicDiscovery } : {}),
         ...(directoryDiscovery ? { directory_discovery: directoryDiscovery } : {}),
+        ...(socialSearch ? { social_search: socialSearch } : {}),
       };
     } else {
       const html = fetched.html;
       const headers = fetched.headers;
       const finalUrl = fetched.finalUrl;
-      const [pixels, stack, viewport, whatsapp, social_links, operational_systems] = await Promise.all([
+      const [pixels, stack, viewport, whatsapp, social_links, operational_systems, copyright_year] = await Promise.all([
         Promise.resolve(parsePixels(html)),
         Promise.resolve(parseStack(html, headers)),
         Promise.resolve(parseViewport(html)),
         Promise.resolve(parseWhatsapp(html)),
         Promise.resolve(parseSocialLinks(html)),
         Promise.resolve(parseOperationalSystems(html)),
+        Promise.resolve(parseCopyrightYear(html)),
       ]);
       const ssl = parseSsl(finalUrl);
 
@@ -340,8 +462,10 @@ export async function enrichLead(
         whatsapp,
         social_links,
         operational_systems,
+        ...(copyright_year.year !== null ? { copyright_year: copyright_year.year } : {}),
         ...(heuristicDiscovery ? { heuristic_discovery: heuristicDiscovery } : {}),
         ...(directoryDiscovery ? { directory_discovery: directoryDiscovery } : {}),
+        ...(socialSearch ? { social_search: socialSearch } : {}),
       };
     }
   }
@@ -371,11 +495,16 @@ export async function enrichLead(
   const tags_to_add = [
     ...deriveTags(footprint, lead),
     ...heuristicTags(heuristicDiscovery),
+    ...socialSearchTags(socialSearch),
   ];
+  const socialMobile = socialSearchAdditionalPhones(socialSearch).find(isUruguayMobilePhone) ?? null;
+  if (socialMobile && tags_to_add.includes("whatsapp-missing")) {
+    tags_to_add.push("whatsapp-derived");
+  }
   const whatsapp_from_site =
     footprint.whatsapp && footprint.whatsapp.numbers.length > 0
       ? footprint.whatsapp.numbers[0] ?? null
-      : null;
+      : socialMobile;
 
   const outcome: EnrichOutcome = cachedHtml
     ? "cache-hit"

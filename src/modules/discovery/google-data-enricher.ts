@@ -44,9 +44,16 @@ export function enrichWithDetails(
   const has_hours = (details.regularOpeningHours?.weekdayDescriptions?.length ?? 0) > 0;
   const has_recent_reviews = computeHasRecentReviews(details.reviews);
   const reviews_summary = computeReviewsSummary(details.reviews);
+  const primaryType =
+    typeof rawFromTextSearch["primary_type"] === "string"
+      ? rawFromTextSearch["primary_type"]
+      : typeof rawFromTextSearch["primaryType"] === "string"
+        ? rawFromTextSearch["primaryType"]
+        : undefined;
 
   return {
     ...rawFromTextSearch,
+    ...(primaryType !== undefined ? { primary_type: primaryType } : {}),
     photos_count,
     has_hours,
     has_recent_reviews,

@@ -43,12 +43,18 @@ digital_gap:
     - name: fb_heuristic
       condition: { tag: fb-heuristic }
       weight: 15
+    - name: fb_confirmed
+      condition: { tag: fb-confirmed }
+      weight: 20
     - name: fb_only
       condition: { tag: fb-only-presence }
       weight: 25
     - name: ig_heuristic
       condition: { tag: ig-heuristic }
       weight: 15
+    - name: ig_confirmed
+      condition: { tag: ig-confirmed }
+      weight: 20
     - name: ig_only
       condition: { tag: ig-only-presence }
       weight: 25
@@ -73,12 +79,18 @@ digital_gap:
     - name: whatsapp_derived
       condition: { tag: whatsapp-derived }
       weight: 10
+    - name: whatsapp_confirmed
+      condition: { tag: whatsapp-confirmed }
+      weight: 3
     - name: stack_obsolete
       condition: { tag: stack-obsolete }
       weight: 10
     - name: domain_old_stale
       condition: { tag: domain-old-stale }
       weight: 5
+    - name: web_outdated
+      condition: { tag: web-outdated }
+      weight: 8
     - name: site_unreachable
       condition: { tag: site-unreachable }
       weight: 15
@@ -90,9 +102,9 @@ mutual_exclusions:
     - [reviews_high, reviews_medium, reviews_low]
   digital_gap:
     - [website_heuristic, no_website, fb_only, ig_only, social_link_only]
-    - [fb_heuristic, fb_only]
-    - [ig_heuristic, ig_only]
-    - [whatsapp_derived, whatsapp_missing]
+    - [fb_only, fb_confirmed, fb_heuristic]
+    - [ig_only, ig_confirmed, ig_heuristic]
+    - [whatsapp_confirmed, whatsapp_derived, whatsapp_missing]
 
 # Cap por dimensión (clamp final).
 cap: 100

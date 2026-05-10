@@ -8,6 +8,7 @@ import type {
   HeuristicDiscovery,
   HeuristicDiscoveryMode,
   Lead,
+  SocialSearch,
 } from "../../src/shared/types.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -115,6 +116,76 @@ function heuristicResult(mode: HeuristicDiscoveryMode, websiteUrl: string | null
   };
 }
 
+function heuristicSocialResult(mode: HeuristicDiscoveryMode, platform: "facebook" | "instagram"): HeuristicDiscovery {
+  const result = heuristicResult(mode, null);
+  result.selected[platform] = {
+    kind: platform,
+    url: `https://www.${platform}.com/test-lead`,
+    score: 0.85,
+    signals: ["slug_match", "name_in_bio"],
+    status: "probed",
+    http_status: 200,
+    final_url: `https://www.${platform}.com/test-lead`,
+  };
+  return result;
+}
+
+function socialSearchResult(overrides: Partial<SocialSearch> = {}): SocialSearch {
+  return {
+    ran_at: new Date().toISOString(),
+    source: "duckduckgo",
+    facebook: {
+      query: 'site:facebook.com "Test Lead" montevideo',
+      results: [
+        {
+          url: "https://facebook.com/test-lead",
+          title: "Test Lead | Montevideo",
+          snippet: "Test Lead Montevideo 098365592",
+          score: 1.1,
+          signals: [
+            "name_in_title",
+            "name_in_snippet",
+            "city_in_snippet",
+            "phone_in_snippet",
+            "url_matches_platform",
+          ],
+          phones_found: ["+59898365592"],
+        },
+      ],
+      best_url: "https://facebook.com/test-lead",
+      additional_phones: ["+59898365592"],
+      confidence: 1.1,
+    },
+    instagram: {
+      query: 'site:instagram.com "Test Lead" montevideo',
+      results: [],
+      best_url: null,
+      additional_phones: [],
+      confidence: 0,
+    },
+    ...overrides,
+  };
+}
+
+function emptySocialSearchResult(): SocialSearch {
+  return socialSearchResult({
+    facebook: {
+      query: 'site:facebook.com "Test Lead" montevideo',
+      results: [],
+      best_url: null,
+      additional_phones: [],
+      confidence: 0,
+    },
+    instagram: {
+      query: 'site:instagram.com "Test Lead" montevideo',
+      results: [],
+      best_url: null,
+      additional_phones: [],
+      confidence: 0,
+    },
+  });
+}
+
 describe("enrichLead", () => {
   it("returns skipped no-website when website is null", async () => {
     const lead = makeLead({ website: null });
@@ -139,6 +210,7 @@ describe("enrichLead", () => {
       fetchHtml: fetchHtmlOk(loadFixture("plain-static.html")),
       whoisLookup: whoisOk(null),
       heuristicDiscover,
+      socialSearchDiscover: vi.fn(async () => emptySocialSearchResult()),
     });
     expect(heuristicDiscover).not.toHaveBeenCalled();
   });
@@ -155,6 +227,7 @@ describe("enrichLead", () => {
       whoisLookup: whoisOk(null),
       heuristicDiscover,
       directoryDiscover,
+      socialSearchDiscover: vi.fn(async () => emptySocialSearchResult()),
     });
     expect(directoryDiscover).toHaveBeenCalledWith(lead, expect.any(Object));
     expect(heuristicDiscover).toHaveBeenCalledWith(
@@ -185,6 +258,7 @@ describe("enrichLead", () => {
       whoisLookup: whoisOk(null),
       heuristicDiscover,
       directoryDiscover,
+      socialSearchDiscover: vi.fn(async () => emptySocialSearchResult()),
     });
 
     expect(heuristicDiscover).toHaveBeenCalledWith(
@@ -209,6 +283,7 @@ describe("enrichLead", () => {
     const r = await enrichLead(lead, { forceRefresh: false, withHeuristic: true }, {
       heuristicDiscover,
       directoryDiscover,
+      socialSearchDiscover: vi.fn(async () => emptySocialSearchResult()),
     });
     expect(heuristicDiscover).toHaveBeenCalledWith(
       lead,
@@ -222,6 +297,57 @@ describe("enrichLead", () => {
       reason: "no-website",
       heuristic_discovery: { mode: "full" },
     });
+  });
+
+  it("uses fresh cached heuristic website without running heuristic discovery", async () => {
+    const cached = heuristicResult("full", "https://cached.example.com");
+    const lead = makeLead({
+      website: null,
+      digital_footprint: {
+        skipped: true,
+        reason: "no-website",
+        fetched_at: new Date().toISOString(),
+        heuristic_discovery: cached,
+      },
+    });
+    const fetchSpy = fetchHtmlOk(loadFixture("plain-static.html"), "https://cached.example.com/");
+    const heuristicDiscover = vi.fn(async () => heuristicResult("full", null));
+    const directoryDiscover = vi.fn(async () => directoryResult(null));
+
+    const r = await enrichLead(lead, { forceRefresh: false }, {
+      fetchHtml: fetchSpy,
+      whoisLookup: whoisOk(null),
+      heuristicDiscover,
+      directoryDiscover,
+    });
+
+    expect(r.outcome).toBe("fetched-ok");
+    expect(fetchSpy).toHaveBeenCalledWith("https://cached.example.com");
+    expect(heuristicDiscover).not.toHaveBeenCalled();
+    expect(directoryDiscover).not.toHaveBeenCalled();
+    expect(r.tags_to_add).toContain("website-heuristic");
+  });
+
+  it("does not use stale cached heuristic website without heuristic discovery", async () => {
+    const cached = { ...heuristicResult("full", "https://stale.example.com"), stale: true };
+    const lead = makeLead({
+      website: null,
+      digital_footprint: {
+        skipped: true,
+        reason: "no-website",
+        fetched_at: new Date().toISOString(),
+        heuristic_discovery: cached,
+      },
+    });
+    const fetchSpy = fetchHtmlOk(loadFixture("plain-static.html"), "https://stale.example.com/");
+
+    const r = await enrichLead(lead, { forceRefresh: false }, {
+      fetchHtml: fetchSpy,
+      whoisLookup: whoisOk(null),
+    });
+
+    expect(r.outcome).toBe("skipped-no-website");
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it("does not emit heuristic-stale for a recent heuristic discovery", async () => {
@@ -258,6 +384,7 @@ describe("enrichLead", () => {
     const r = await enrichLead(lead, { forceRefresh: false, withHeuristic: true }, {
       heuristicDiscover,
       directoryDiscover,
+      socialSearchDiscover: vi.fn(async () => emptySocialSearchResult()),
     });
 
     expect(heuristicDiscover).not.toHaveBeenCalled();
@@ -311,11 +438,92 @@ describe("enrichLead", () => {
     const r = await enrichLead(lead, { forceRefresh: false, withHeuristic: true }, {
       heuristicDiscover,
       directoryDiscover,
+      socialSearchDiscover: vi.fn(async () => emptySocialSearchResult()),
     });
 
     expect(r.outcome).toBe("skipped-no-website");
     expect(r.tags_to_add).not.toContain("fb-heuristic");
     expect(r.tags_to_add).not.toContain("ig-heuristic");
+  });
+
+  it("runs social search after heuristic social discovery and persists confirmed tags", async () => {
+    const directoryDiscover = vi.fn(async () => directoryResult(null));
+    const heuristicDiscover = vi.fn(async (_lead: Lead, mode: HeuristicDiscoveryMode) =>
+      heuristicSocialResult(mode, "facebook")
+    );
+    const socialSearchDiscover = vi.fn(async () => socialSearchResult());
+    const lead = makeLead({ website: null, address: "Hocquart 2049, Montevideo, Uruguay" });
+
+    const r = await enrichLead(lead, { forceRefresh: false, withHeuristic: true }, {
+      directoryDiscover,
+      heuristicDiscover,
+      socialSearchDiscover,
+    });
+
+    expect(socialSearchDiscover).toHaveBeenCalledWith(lead);
+    expect(r.digital_footprint).toMatchObject({
+      skipped: true,
+      reason: "no-website",
+      social_search: { facebook: { best_url: "https://facebook.com/test-lead" } },
+    });
+    expect(r.tags_to_add).toEqual(expect.arrayContaining([
+      "fb-heuristic",
+      "fb-confirmed",
+      "additional-phones",
+      "whatsapp-derived",
+    ]));
+    expect(r.whatsapp_from_site).toBe("+59898365592");
+  });
+
+  it("runs social search for no-website leads with whatsapp-missing and no heuristic flag", async () => {
+    const socialSearchDiscover = vi.fn(async () => socialSearchResult());
+    const lead = makeLead({ website: null, tags: ["no-website", "whatsapp-missing"] });
+
+    const r = await enrichLead(lead, { forceRefresh: false }, { socialSearchDiscover });
+
+    expect(socialSearchDiscover).toHaveBeenCalledWith(lead);
+    expect(r.outcome).toBe("skipped-no-website");
+    expect(r.tags_to_add).toContain("fb-confirmed");
+    expect(r.tags_to_add).toContain("whatsapp-derived");
+  });
+
+  it("reuses fresh cached social search unless withHeuristic forces rerun", async () => {
+    const cached = socialSearchResult();
+    const lead = makeLead({
+      website: null,
+      tags: ["no-website", "whatsapp-missing"],
+      digital_footprint: {
+        skipped: true,
+        reason: "no-website",
+        fetched_at: new Date().toISOString(),
+        social_search: cached,
+      },
+    });
+    const socialSearchDiscover = vi.fn(async () => socialSearchResult({
+      facebook: {
+        ...cached.facebook,
+        best_url: "https://facebook.com/fresh",
+        confidence: 0.8,
+      },
+    }));
+
+    const cachedRun = await enrichLead(lead, { forceRefresh: false }, { socialSearchDiscover });
+    expect(socialSearchDiscover).not.toHaveBeenCalled();
+    expect(cachedRun.digital_footprint).toMatchObject({
+      social_search: { facebook: { best_url: "https://facebook.com/test-lead" } },
+    });
+
+    const forcedRun = await enrichLead(lead, { forceRefresh: false, withHeuristic: true }, {
+      directoryDiscover: vi.fn(async () => directoryResult(null)),
+      heuristicDiscover: vi.fn(async (_lead: Lead, mode: HeuristicDiscoveryMode) =>
+        heuristicResult(mode, null)
+      ),
+      socialSearchDiscover,
+    });
+    expect(socialSearchDiscover).toHaveBeenCalledTimes(1);
+    expect(forcedRun.digital_footprint).toMatchObject({
+      social_search: { facebook: { best_url: "https://facebook.com/fresh" } },
+    });
   });
 
   it("emits site-unreachable tag when fetch fails after retries", async () => {
@@ -368,6 +576,19 @@ describe("enrichLead", () => {
         contact_form: true,
       },
     });
+  });
+
+  it("persists copyright year and emits web-outdated tag", async () => {
+    const lead = makeLead({ website: "https://example.com" });
+    const html = "<html><body><footer>Copyright 2020 Test Lead</footer></body></html>";
+
+    const r = await enrichLead(lead, { forceRefresh: false }, {
+      fetchHtml: fetchHtmlOk(html),
+      whoisLookup: whoisOk(null),
+    });
+
+    expect(r.digital_footprint).toMatchObject({ copyright_year: 2020 });
+    expect(r.tags_to_add).toContain("web-outdated");
   });
 
   it("emits whatsapp-missing when no whatsapp signals AND lead.phone lacks mobile shape", async () => {

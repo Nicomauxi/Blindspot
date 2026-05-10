@@ -6,6 +6,7 @@ import { scoreCommand } from "./commands/score.js";
 import { reportCommand } from "./commands/report.js";
 import { leadsListCommand } from "./commands/leads-list.js";
 import { vocabularyCommand } from "./commands/vocabulary.js";
+import { socialEnrichCommand } from "./commands/social-enrich.js";
 
 const program = new Command();
 
@@ -89,6 +90,27 @@ program
       all: opts.all ?? false,
       force: opts.force ?? false,
       concurrency: opts.concurrency,
+    });
+  });
+
+program
+  .command("social-enrich")
+  .description("Enrich heuristic social profiles through headless browser extraction")
+  .option("--run <uuid>", "Discovery run id whose leads should be social-enriched")
+  .option("--all", "Social-enrich all passed leads with heuristic social tags", false)
+  .option("--limit <number>", "Max leads to process", "10")
+  .option("--force", "Re-process even when Playwright social search is fresh", false)
+  .action(async (opts: {
+    run?: string;
+    all?: boolean;
+    limit: string;
+    force?: boolean;
+  }) => {
+    await socialEnrichCommand({
+      ...(opts.run ? { run: opts.run } : {}),
+      all: opts.all ?? false,
+      limit: opts.limit,
+      force: opts.force ?? false,
     });
   });
 

@@ -149,6 +149,79 @@ export interface DirectoryDiscovery {
   error?: string;
 }
 
+export type SocialSearchPlatform = "facebook" | "instagram";
+export type SocialSearchSignal =
+  | "name_in_title"
+  | "name_in_snippet"
+  | "city_in_snippet"
+  | "phone_in_snippet"
+  | "url_matches_platform";
+export type PlaywrightSocialSignal =
+  | "page_loaded"
+  | "name_match"
+  | "phone_found"
+  | "website_found"
+  | "description_found"
+  | "whatsapp_button"
+  | "bio_extracted"
+  | "external_url_found"
+  | "contact_button";
+
+export interface SocialSearchResult {
+  url: string;
+  title: string;
+  snippet: string;
+  score: number;
+  signals: SocialSearchSignal[];
+  phones_found: string[];
+}
+
+export interface SocialSearchPlatformResult {
+  query: string;
+  results: SocialSearchResult[];
+  best_url: string | null;
+  additional_phones: string[];
+  confidence: number;
+  error?: string;
+}
+
+export interface DuckDuckGoSocialSearch {
+  ran_at: string;
+  source: "duckduckgo";
+  facebook: SocialSearchPlatformResult;
+  instagram: SocialSearchPlatformResult;
+}
+
+export interface PlaywrightFacebookSearchResult {
+  url: string;
+  name: string | null;
+  phone: string | null;
+  website: string | null;
+  description: string | null;
+  whatsapp_button: boolean;
+  confidence: number;
+  signals: PlaywrightSocialSignal[];
+}
+
+export interface PlaywrightInstagramSearchResult {
+  url: string;
+  name: string | null;
+  bio: string | null;
+  external_url: string | null;
+  has_contact_button: boolean;
+  confidence: number;
+  signals: PlaywrightSocialSignal[];
+}
+
+export interface PlaywrightSocialSearch {
+  ran_at: string;
+  source: "playwright";
+  facebook: PlaywrightFacebookSearchResult | null;
+  instagram: PlaywrightInstagramSearchResult | null;
+}
+
+export type SocialSearch = DuckDuckGoSocialSearch | PlaywrightSocialSearch;
+
 export interface OperationalSystemsSignal {
   booking_platforms: string[];
   reservation_platforms: string[];
@@ -168,6 +241,7 @@ export type DigitalFootprintSkipped = {
   fetched_at: string;
   heuristic_discovery?: HeuristicDiscovery;
   directory_discovery?: DirectoryDiscovery;
+  social_search?: SocialSearch;
 };
 
 export interface DigitalFootprintEnriched {
@@ -175,6 +249,7 @@ export interface DigitalFootprintEnriched {
   fetched_at: string;
   heuristic_discovery?: HeuristicDiscovery;
   directory_discovery?: DirectoryDiscovery;
+  social_search?: SocialSearch;
   fetch_error?: string;
   attempted_url?: string;
   final_url?: string;
@@ -201,6 +276,7 @@ export interface DigitalFootprintEnriched {
     tiktok: string | null;
     count: number;
   };
+  copyright_year?: number | null;
   operational_systems?: OperationalSystemsSignal;
   whois?: {
     fetched_at: string;
@@ -275,6 +351,7 @@ export interface PlaceCandidate {
   websiteUri: string | null;
   phone: string | null;
   businessStatus: string | null;
+  primaryType: string | null;
   raw: Record<string, unknown>;
 }
 

@@ -1,0 +1,135 @@
+import { getLogger } from "../../shared/logger.js";
+import type { Lead, PlaywrightInstagramSearchResult, PlaywrightSocialSignal } from "../../shared/types.js";
+import type { SocialEnrichPage } from "./facebook.js";
+
+const NAVIGATION_TIMEOUT_MS = 15_000;
+declare const document: any;
+
+interface InstagramPageData {
+  name: string | null;
+  bio: string | null;
+  external_url: string | null;
+  has_contact_button: boolean;
+}
+
+function cleanText(value: string | null | undefined): string | null {
+  const cleaned = (value ?? "").replace(/\s+/g, " ").trim();
+  return cleaned.length > 0 ? cleaned : null;
+}
+
+function asciiFold(input: string): string {
+  return input.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+}
+
+function normalizedTokens(input: string | null | undefined): string[] {
+  return asciiFold(input ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .split(/\s+/)
+    .filter((token) => token.length > 2);
+}
+
+function nameMatches(extractedName: string | null, leadName: string): boolean {
+  const extracted = new Set(normalizedTokens(extractedName));
+  const expected = normalizedTokens(leadName);
+  if (expected.length === 0 || extracted.size === 0) return false;
+  const overlap = expected.filter((token) => extracted.has(token)).length;
+  return overlap / expected.length >= 0.5;
+}
+
+function confidenceFrom(data: InstagramPageData, lead: Pick<Lead, "name">): {
+  confidence: number;
+  signals: PlaywrightSocialSignal[];
+} {
+  const signals: PlaywrightSocialSignal[] = ["page_loaded"];
+  let confidence = 0.35;
+
+  if (nameMatches(data.name, lead.name)) {
+    signals.push("name_match");
+    confidence += 0.35;
+  }
+  if (data.bio) {
+    signals.push("bio_extracted");
+    confidence += 0.1;
+  }
+  if (data.external_url) {
+    signals.push("external_url_found");
+    confidence += 0.1;
+  }
+  if (data.has_contact_button) {
+    signals.push("contact_button");
+    confidence += 0.05;
+  }
+
+  return { confidence: Number(Math.min(confidence, 0.95).toFixed(2)), signals };
+}
+
+function isAllowedBioExternalUrl(href: string): boolean {
+  try {
+    const host = new URL(href).hostname.toLowerCase().replace(/^www\./, "");
+    return ![
+      "about.meta.com",
+      "facebook.com",
+      "instagram.com",
+      "meta.com",
+    ].some((blocked) => host === blocked || host.endsWith(`.${blocked}`));
+  } catch {
+    return false;
+  }
+}
+
+function evaluateInstagramPage(): InstagramPageData {
+  const metaTitle = document.querySelector("meta[property='og:title']")?.content ?? null;
+  const description =
+    document.querySelector("meta[property='og:description']")?.content ??
+    document.querySelector("meta[name='description']")?.content ??
+    null;
+  const profileRoots = Array.from(
+    document.querySelectorAll("header, main section, section[role='main']")
+  ) as Array<{ querySelectorAll: (selector: string) => Array<{ href: string }> }>;
+  const profileAnchors = profileRoots.flatMap((root) =>
+    Array.from(root.querySelectorAll("a[href]")) as Array<{ href: string }>
+  );
+  const external_url =
+    profileAnchors.map((anchor) => anchor.href).find(isAllowedBioExternalUrl) ?? null;
+  const text = document.body?.innerText ?? "";
+  const has_contact_button = /\b(contact|email|call|llamar|correo|contacto)\b/i.test(text);
+
+  return {
+    name: metaTitle?.split("(@")[0]?.trim() ?? metaTitle,
+    bio: description,
+    external_url,
+    has_contact_button,
+  };
+}
+
+export async function extractInstagramProfile(
+  page: SocialEnrichPage,
+  url: string,
+  lead: Pick<Lead, "id" | "name">
+): Promise<PlaywrightInstagramSearchResult | null> {
+  const log = getLogger();
+  try {
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: NAVIGATION_TIMEOUT_MS });
+    await page.waitForLoadState("networkidle", { timeout: NAVIGATION_TIMEOUT_MS });
+    const extracted = await page.evaluate(evaluateInstagramPage);
+    const data: InstagramPageData = {
+      name: cleanText(extracted.name),
+      bio: cleanText(extracted.bio),
+      external_url: cleanText(extracted.external_url),
+      has_contact_button: extracted.has_contact_button === true,
+    };
+    const scored = confidenceFrom(data, lead);
+    return {
+      url,
+      ...data,
+      confidence: scored.confidence,
+      signals: scored.signals,
+    };
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log.warn({ leadId: lead.id, platform: "instagram", url, err: msg }, "social enrich navigation failed");
+    return null;
+  }
+}
