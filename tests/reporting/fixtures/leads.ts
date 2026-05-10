@@ -22,8 +22,10 @@ function base(overrides: Partial<Lead> = {}): Lead {
     reviews_sample: null,
     business_quality_score: null,
     digital_gap_score: null,
+    systems_gap_score: null,
     prospect_score: null,
     score_breakdown: null,
+    systems_gap_breakdown: null,
     contacted_at: null,
     created_at: "2024-01-01T00:00:00Z",
     updated_at: "2024-01-01T00:00:00Z",
@@ -44,6 +46,7 @@ export const fullScored = base({
   tags: ["profile:a", "no-website", "pixel-missing", "analytics-missing", "whatsapp-missing"],
   business_quality_score: 50,
   digital_gap_score: 55,
+  systems_gap_score: 25,
   prospect_score: 27,
   score_breakdown: {
     computed_at: "2024-01-01T00:00:00Z",
@@ -65,7 +68,21 @@ export const fullScored = base({
         { name: "whatsapp_missing", weight: 10, matched_value: true },
       ],
     },
+    systems_gap: {
+      total: 25,
+      rules: [
+        { name: "booking_system_missing", weight: 15, matched_value: "missing" },
+        { name: "whatsapp_business_missing", weight: 10, matched_value: "missing" },
+      ],
+    },
     prospect: { formula: "business_quality * digital_gap / 100", total: 27 },
+  },
+  systems_gap_breakdown: {
+    total: 25,
+    rules: [
+      { name: "booking_system_missing", weight: 15, matched_value: "missing" },
+      { name: "whatsapp_business_missing", weight: 10, matched_value: "missing" },
+    ],
   },
   digital_footprint: { skipped: true, reason: "no-website", fetched_at: "2024-01-01T00:00:00Z" },
   first_seen_run_id: "run-abc-123",
@@ -84,6 +101,7 @@ export const fbOnly = base({
   tags: ["profile:b", "fb-only-presence"],
   business_quality_score: 0,
   digital_gap_score: 25,
+  systems_gap_score: 0,
   prospect_score: 0,
   score_breakdown: {
     computed_at: "2024-01-01T00:00:00Z",
@@ -93,8 +111,10 @@ export const fbOnly = base({
       total: 25,
       rules: [{ name: "fb_only", weight: 25, matched_value: true }],
     },
+    systems_gap: { total: 0, rules: [] },
     prospect: { formula: "business_quality * digital_gap / 100", total: 0 },
   },
+  systems_gap_breakdown: { total: 0, rules: [] },
   digital_footprint: { skipped: true, reason: "social-only", fetched_at: "2024-01-01T00:00:00Z" },
   first_seen_run_id: "run-abc-123",
 });
@@ -126,6 +146,7 @@ export const specialChars = base({
   tags: ["profile:a", "no-website", "whatsapp-missing"],
   business_quality_score: 43,
   digital_gap_score: 45,
+  systems_gap_score: 0,
   prospect_score: 19,
   score_breakdown: {
     computed_at: "2024-01-01T00:00:00Z",
@@ -145,7 +166,9 @@ export const specialChars = base({
         { name: "whatsapp_missing", weight: 10, matched_value: true },
       ],
     },
+    systems_gap: { total: 0, rules: [] },
     prospect: { formula: "business_quality * digital_gap / 100", total: 19 },
   },
+  systems_gap_breakdown: { total: 0, rules: [] },
   first_seen_run_id: "run-abc-123",
 });

@@ -38,8 +38,10 @@ function makeLead(over: Partial<Lead> = {}): Lead {
     reviews_sample: null,
     business_quality_score: null,
     digital_gap_score: null,
+    systems_gap_score: null,
     prospect_score: null,
     score_breakdown: null,
+    systems_gap_breakdown: null,
     contacted_at: null,
     created_at: "2026-01-01T00:00:00.000Z",
     updated_at: "2026-01-01T00:00:00.000Z",
@@ -343,6 +345,29 @@ describe("enrichLead", () => {
     expect(r.tags_to_add).toContain("not-responsive");
     expect(r.tags_to_add).not.toContain("whatsapp-missing");
     expect(r.tags_to_add).not.toContain("domain-old-stale");
+  });
+
+  it("persists operational system signals from scraped HTML", async () => {
+    const lead = makeLead({ website: "https://example.com" });
+    const html = `
+      <html><body>
+        <a href="https://booksy.com/es-uy/test">Reservar</a>
+        <a href="/menu-carta.pdf">Ver carta</a>
+        <form class="contact-form"><input name="cotizar"></form>
+      </body></html>
+    `;
+    const r = await enrichLead(lead, { forceRefresh: false }, {
+      fetchHtml: fetchHtmlOk(html),
+      whoisLookup: whoisOk(null),
+    });
+    expect(r.outcome).toBe("fetched-ok");
+    expect(r.digital_footprint).toMatchObject({
+      operational_systems: {
+        booking_platforms: ["booksy.com"],
+        menu_links: ["/menu-carta.pdf"],
+        contact_form: true,
+      },
+    });
   });
 
   it("emits whatsapp-missing when no whatsapp signals AND lead.phone lacks mobile shape", async () => {

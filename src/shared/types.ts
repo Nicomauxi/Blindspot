@@ -149,6 +149,19 @@ export interface DirectoryDiscovery {
   error?: string;
 }
 
+export interface OperationalSystemsSignal {
+  booking_platforms: string[];
+  reservation_platforms: string[];
+  delivery_platforms: string[];
+  menu_links: string[];
+  menu_keywords: string[];
+  class_booking_platforms: string[];
+  app_store_links: string[];
+  catalog_keywords: string[];
+  contact_form: boolean;
+  chat_widget: boolean;
+}
+
 export type DigitalFootprintSkipped = {
   skipped: true;
   reason: "no-website" | "social-only";
@@ -188,6 +201,7 @@ export interface DigitalFootprintEnriched {
     tiktok: string | null;
     count: number;
   };
+  operational_systems?: OperationalSystemsSignal;
   whois?: {
     fetched_at: string;
     created_at: string | null;
@@ -234,10 +248,12 @@ export interface Lead {
   reviews_sample: unknown[] | null;
   business_quality_score: number | null;
   digital_gap_score: number | null;
+  systems_gap_score: number | null;
   prospect_score: number | null;
   passed_filter: boolean;
   rejection_reasons: string[];
   score_breakdown: Record<string, unknown> | null;
+  systems_gap_breakdown: Record<string, unknown> | null;
   contacted_at: string | null;
   created_at: string;
   updated_at: string;

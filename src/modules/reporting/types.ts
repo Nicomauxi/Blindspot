@@ -20,6 +20,7 @@ export interface ParsedBreakdown {
   config_version: number;
   business_quality: { total: number; rules: BreakdownRule[] };
   digital_gap: { total: number; rules: BreakdownRule[] };
+  systems_gap: { total: number; rules: BreakdownRule[] };
   prospect: { formula: string; total: number };
 }
 
@@ -40,9 +41,11 @@ export interface ReportLeadView {
   prospectDisplay: string;
   bqDisplay: string;
   dgDisplay: string;
+  sgDisplay: string;
   prospectVal: string;
   bqVal: string;
   dgVal: string;
+  sgVal: string;
   searchText: string;
   footprintSummary: string;
   breakdown: ParsedBreakdown | null;

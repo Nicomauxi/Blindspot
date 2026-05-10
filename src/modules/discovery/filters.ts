@@ -30,6 +30,38 @@ export function normalizeNiche(raw: string): string {
     return "car_dealer";
   }
 
+  if (
+    normalized.includes("restaurant") ||
+    normalized.includes("restaurante") ||
+    normalized.includes("parrilla")
+  ) {
+    return "restaurant";
+  }
+
+  if (
+    normalized.includes("gimnasio") ||
+    normalized.includes("gym") ||
+    normalized.includes("fitness")
+  ) {
+    return "gym";
+  }
+
+  if (
+    normalized.includes("clinica") ||
+    normalized.includes("medic") ||
+    normalized.includes("healthcare")
+  ) {
+    return "healthcare";
+  }
+
+  if (
+    normalized.includes("dentista") ||
+    normalized.includes("odontolog") ||
+    normalized.includes("dentist")
+  ) {
+    return "dentist";
+  }
+
   return "other";
 }
 

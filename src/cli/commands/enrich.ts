@@ -11,6 +11,7 @@ import {
   loadLeadsByRunId,
   updateLeadEnrichment,
 } from "../../storage/leads.js";
+import { loadFilterWordsForNiche } from "../../storage/vocabulary.js";
 import { enrichLead } from "../../modules/enrichment/index.js";
 import type { EnrichmentRunStats, RunStats } from "../../shared/types.js";
 
@@ -43,6 +44,9 @@ export async function enrichCommand(rawArgs: RawEnrichArgs): Promise<void> {
     process.exit(1);
   }
   const opts = parsed.data;
+  const effectiveConcurrency = opts.withHeuristic
+    ? Math.min(opts.concurrency, 2)
+    : opts.concurrency;
 
   const sourceRun = await getRunById(opts.run);
   if (!sourceRun) {
@@ -57,9 +61,11 @@ export async function enrichCommand(rawArgs: RawEnrichArgs): Promise<void> {
       forceRefresh: opts.forceRefresh,
       withHeuristic: opts.withHeuristic,
       concurrency: opts.concurrency,
+      effectiveConcurrency,
     },
     "Starting enrich command"
   );
+  log.info({ concurrency: effectiveConcurrency }, "Using effective enrich concurrency");
 
   const enrichRun = await createEnrichmentRun({
     sourceRun,
@@ -97,7 +103,22 @@ export async function enrichCommand(rawArgs: RawEnrichArgs): Promise<void> {
       return;
     }
 
-    const limit = pLimit(opts.concurrency);
+    const uniqueNiches = [...new Set(
+      leads.map((l) => l.niche).filter((n): n is string => !!n)
+    )];
+    const nicheStopWords = new Map<string, Set<string>>();
+    for (const niche of uniqueNiches) {
+      try {
+        nicheStopWords.set(niche, await loadFilterWordsForNiche(niche));
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        log.warn({ niche, err: msg }, "vocabulary load failed — proceeding without extra stop-words");
+        nicheStopWords.set(niche, new Set());
+      }
+    }
+    log.info({ niches: uniqueNiches.length }, "vocabulary loaded for enrichment run");
+
+    const limit = pLimit(effectiveConcurrency);
     const total = leads.length;
     let done = 0;
 
@@ -113,9 +134,13 @@ export async function enrichCommand(rawArgs: RawEnrichArgs): Promise<void> {
       leads.map((lead) =>
         limit(async () => {
           try {
+            const extraStopWords = lead.niche
+              ? (nicheStopWords.get(lead.niche) ?? new Set<string>())
+              : new Set<string>();
             const result = await enrichLead(lead, {
               forceRefresh: opts.forceRefresh,
               withHeuristic: opts.withHeuristic,
+              ...(extraStopWords.size > 0 ? { extraStopWords } : {}),
             });
             await updateLeadEnrichment(
               lead.id,

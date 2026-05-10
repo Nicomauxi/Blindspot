@@ -10,6 +10,7 @@ import {
   loadLeadsByRunId,
   updateLeadEnrichment,
 } from "../../storage/leads.js";
+import { loadVocabularyForNiche } from "../../storage/vocabulary.js";
 import { getRunById } from "../../storage/runs.js";
 import type { DigitalFootprint, Lead } from "../../shared/types.js";
 
@@ -92,6 +93,15 @@ export async function heuristicRefreshCommand(rawArgs: RawArgs): Promise<void> {
     "Starting heuristic refresh"
   );
 
+  // Load niche vocabulary once per unique niche (graceful degradation: errors → empty set).
+  const uniqueNiches = new Set(
+    selected.map((l) => l.niche).filter((n): n is string => n !== null && n !== "all")
+  );
+  const nicheVocab = new Map<string, ReadonlySet<string>>();
+  for (const niche of uniqueNiches) {
+    nicheVocab.set(niche, await loadVocabularyForNiche(niche));
+  }
+
   const limit = pLimit(opts.concurrency);
   let processed = 0;
   let errors = 0;
@@ -100,9 +110,12 @@ export async function heuristicRefreshCommand(rawArgs: RawArgs): Promise<void> {
     selected.map((lead) =>
       limit(async () => {
         try {
+          const extraStopWords: ReadonlySet<string> =
+            lead.niche != null ? (nicheVocab.get(lead.niche) ?? new Set()) : new Set();
           const result = await enrichLead(lead, {
             forceRefresh: opts.force,
             withHeuristic: true,
+            ...(extraStopWords.size > 0 ? { extraStopWords } : {}),
           });
           await updateLeadEnrichment(
             lead.id,

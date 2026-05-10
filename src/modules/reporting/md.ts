@@ -8,6 +8,7 @@ const compiledLead = Handlebars.compile(LEAD_TPL);
 interface MdBreakdown {
   bqRules: Array<{ name: string; weight: number; matched_value: string }>;
   dgRules: Array<{ name: string; weight: number; matched_value: string }>;
+  sgRules: Array<{ name: string; weight: number; matched_value: string }>;
 }
 
 function buildMdContext(lead: Lead, rank: string, runId: string) {
@@ -22,6 +23,11 @@ function buildMdContext(lead: Lead, rank: string, runId: string) {
           matched_value: String(r.matched_value ?? ""),
         })),
         dgRules: breakdown.digital_gap.rules.map((r) => ({
+          name: r.name,
+          weight: r.weight,
+          matched_value: String(r.matched_value ?? ""),
+        })),
+        sgRules: breakdown.systems_gap.rules.map((r) => ({
           name: r.name,
           weight: r.weight,
           matched_value: String(r.matched_value ?? ""),
@@ -41,6 +47,7 @@ function buildMdContext(lead: Lead, rank: string, runId: string) {
       prospect: lead.prospect_score !== null ? String(lead.prospect_score) : "—",
       bq: lead.business_quality_score !== null ? String(lead.business_quality_score) : "—",
       dg: lead.digital_gap_score !== null ? String(lead.digital_gap_score) : "—",
+      sg: lead.systems_gap_score !== null ? String(lead.systems_gap_score) : "—",
     },
     tagsJoined: formatTagsForDisplay(lead.tags).join(", ") || "—",
     breakdown: mdBreakdown,
@@ -48,7 +55,8 @@ function buildMdContext(lead: Lead, rank: string, runId: string) {
     scoreless:
       lead.prospect_score === null &&
       lead.business_quality_score === null &&
-      lead.digital_gap_score === null,
+      lead.digital_gap_score === null &&
+      lead.systems_gap_score === null,
     runId,
   };
 }

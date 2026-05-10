@@ -8,7 +8,9 @@ import { enrichWithDetails } from "../../modules/discovery/google-data-enricher.
 import { applyProfileFilter, normalizeNiche, tagCandidate } from "../../modules/discovery/filters.js";
 import { getDiscoveryConfig, getProfileConfig } from "../../modules/discovery/config.js";
 import { createRun, completeRun, failRun } from "../../storage/runs.js";
-import { upsertLeads } from "../../storage/leads.js";
+import { upsertLeads, loadAllLeads } from "../../storage/leads.js";
+import { rebuildVocabularyForNiche } from "../../storage/vocabulary.js";
+import { computeNicheStopWords } from "../../modules/enrichment/vocabulary.js";
 import type { PlaceCandidate, ProfileConfig, RejectionReason } from "../../shared/types.js";
 
 // Approximate pricing per request used in trace cost estimate
@@ -282,7 +284,23 @@ export async function discoverCommand(rawArgs: {
       duration_ms,
     });
 
-    // 8. Write trace artifact if --trace
+    // 8. Best-effort vocabulary rebuild using ALL leads for the niche (GAP 3).
+    //    Uses loadAllLeads so frequencies are computed from the full corpus,
+    //    not just the leads discovered in this run.
+    if (normalizedNiche && normalizedNiche !== "all") {
+      try {
+        const allLeads = await loadAllLeads();
+        const nicheLeads = allLeads.filter((l) => l.niche === normalizedNiche);
+        const wordCounts = computeNicheStopWords(nicheLeads, 3, 0.05);
+        await rebuildVocabularyForNiche(normalizedNiche, wordCounts);
+        log.info({ niche: normalizedNiche, words: wordCounts.size, corpus: nicheLeads.length }, "vocabulary rebuilt post-discover");
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        log.warn({ niche: normalizedNiche, err: msg }, "vocabulary rebuild failed post-discover — skipping");
+      }
+    }
+
+    // 9. Write trace artifact if --trace
     if (opts.trace) {
       await writeTraceArtifact(run.id, {
         startedAtIso,
@@ -299,7 +317,7 @@ export async function discoverCommand(rawArgs: {
       });
     }
 
-    // 9. Print summary
+    // 10. Print summary
     printSummary(
       run.id,
       candidates.length,

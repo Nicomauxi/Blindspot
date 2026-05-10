@@ -47,6 +47,13 @@ describe("normalizeNiche", () => {
     expect(normalizeNiche("concesionaria de automóviles")).toBe("car_dealer");
   });
 
+  it("maps operational systems niches accent-insensitively", () => {
+    expect(normalizeNiche("restaurante parrilla")).toBe("restaurant");
+    expect(normalizeNiche("gimnasio funcional")).toBe("gym");
+    expect(normalizeNiche("clínica médica")).toBe("healthcare");
+    expect(normalizeNiche("dentista")).toBe("dentist");
+  });
+
   it("falls back to other for unknown niches", () => {
     expect(normalizeNiche("algo desconocido")).toBe("other");
   });
