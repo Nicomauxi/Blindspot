@@ -191,6 +191,32 @@ describe("extractInstagramProfile", () => {
     expect(result?.external_url).toBe("https://salonbella.uy");
   });
 
+  it("inlines the browser evaluator and passes blocked hosts as an argument", async () => {
+    const page = makeDomPage({
+      profileLinks: ["https://about.meta.com/", "https://salonbella.uy"],
+      footerLinks: [],
+    });
+
+    const result = await extractInstagramProfile(
+      page,
+      "https://instagram.com/salonbella",
+      makeLead()
+    );
+
+    expect(result?.external_url).toBe("https://salonbella.uy");
+    expect(page.evaluate).toHaveBeenCalledTimes(1);
+
+    const [fn, arg] = page.evaluate.mock.calls[0] as [
+      (arg: { blockedHosts: string[] }) => unknown,
+      { blockedHosts: string[] },
+    ];
+
+    expect(String(fn)).not.toContain("evaluateInstagramPage");
+    expect(arg).toEqual({
+      blockedHosts: ["about.meta.com", "facebook.com", "instagram.com", "meta.com"],
+    });
+  });
+
   it("accepts a real profile bio link as external_url", async () => {
     const page = makeDomPage({
       profileLinks: ["https://amaya.com.uy"],

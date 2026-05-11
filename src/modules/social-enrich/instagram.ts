@@ -139,7 +139,45 @@ export async function extractInstagramProfile(
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: NAVIGATION_TIMEOUT_MS });
     await page.waitForLoadState("networkidle", { timeout: NAVIGATION_TIMEOUT_MS });
     const extracted = await page.evaluate(
-      (args) => evaluateInstagramPage(args),
+      ({ blockedHosts }: { blockedHosts: string[] }) => {
+        const metaTitle = document.querySelector("meta[property='og:title']")?.content ?? null;
+        const description =
+          document.querySelector("meta[property='og:description']")?.content ??
+          document.querySelector("meta[name='description']")?.content ??
+          null;
+        const profileRoots = Array.from(
+          document.querySelectorAll("header, main section, section[role='main']")
+        ) as Array<{ querySelectorAll: (selector: string) => Array<{ href: string }> }>;
+        const profileAnchors = profileRoots.flatMap((root) =>
+          Array.from(root.querySelectorAll("a[href]")) as Array<{ href: string }>
+        );
+        const external_url =
+          profileAnchors.map((anchor) => anchor.href).find((href) => {
+            try {
+              const host = new URL(href).hostname.toLowerCase().replace(/^www\./, "");
+              return !blockedHosts.some((b) => host === b || host.endsWith(`.${b}`));
+            } catch {
+              return false;
+            }
+          }) ?? null;
+        const text = document.body?.innerText ?? "";
+        const has_contact_button = /\b(contact|email|call|llamar|correo|contacto)\b/i.test(text);
+
+        return {
+          name: metaTitle?.split("(@")[0]?.trim() ?? metaTitle,
+          bio: description,
+          email:
+            `${description ?? ""} ${text}`.match(
+              /[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/
+            )?.[0] ?? null,
+          phone:
+            `${description ?? ""} ${text}`.match(
+              /\+598\s?[29]\d{6,7}\b|\b09[1-9]\d{6}\b|\b2\d{7}\b|\b9\d{7}\b/
+            )?.[0] ?? null,
+          external_url,
+          has_contact_button,
+        };
+      },
       { blockedHosts: [...blockedHosts] }
     );
     const data: InstagramPageData = {
