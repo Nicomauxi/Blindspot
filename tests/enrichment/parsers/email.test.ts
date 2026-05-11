@@ -42,6 +42,17 @@ describe("parseEmails", () => {
     expect(result.emails).toEqual(["reservas@negocio.uy"]);
   });
 
+  it("filters hosting-provider emails without blocking business domains", () => {
+    const result = parseEmails(`
+      <html><body>
+        <p>soporte@thinkit.com.uy concept@smartserv.com.uy tracy@enaming.com</p>
+        <p>comercial@negocio.com.uy</p>
+      </body></html>
+    `);
+
+    expect(result.emails).toEqual(["comercial@negocio.com.uy"]);
+  });
+
   it("returns at most three normalized lowercase emails", () => {
     const result = parseEmails(`
       <html><body>

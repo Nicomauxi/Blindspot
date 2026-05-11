@@ -211,4 +211,36 @@ describe("--trace flag", () => {
       expect.any(Function)
     );
   });
+
+  it("falls back to Google primaryType when requested niche normalizes to other", async () => {
+    mockFetchPlaceCandidates.mockResolvedValueOnce({
+      candidates: [
+        {
+          placeId: "place-car-1",
+          name: "Binaguy Automóviles",
+          formattedAddress: "Montevideo, Uruguay",
+          rating: 4.5,
+          userRatingCount: 20,
+          websiteUri: null,
+          phone: "+59899123456",
+          businessStatus: "OPERATIONAL",
+          primaryType: "car_dealer",
+          raw: { primary_type: "car_dealer" },
+        },
+      ],
+      textSearchRequestCount: 1,
+      requestLog: [],
+    });
+
+    await discoverCommand({ ...BASE_ARGS, niche: "vehículos usados", trace: false });
+
+    expect(mockUpsertLeads).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({ niche: "car_dealer" }),
+      ]),
+      "trace-run-id-abc123",
+      "a",
+      expect.any(Function)
+    );
+  });
 });

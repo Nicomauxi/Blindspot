@@ -173,4 +173,43 @@ describe("enrichment tag cleanup", () => {
     expect(tags).not.toContain("ig-heuristic");
     expect(tags).not.toContain("whatsapp-missing");
   });
+
+  it("removes email-found when contact_emails is empty", () => {
+    const tags = cleanupMergedTagsForEnrichment(
+      ["profile:a", "email-found", "email-missing"],
+      {
+        fetched_at: "2026-01-01T00:00:00.000Z",
+        contact_emails: [],
+      }
+    );
+
+    expect(tags).not.toContain("email-found");
+    expect(tags).toContain("email-missing");
+  });
+
+  it("preserves email-found and removes email-missing when contact_emails has real emails", () => {
+    const tags = cleanupMergedTagsForEnrichment(
+      ["profile:a", "email-found", "email-missing"],
+      {
+        fetched_at: "2026-01-01T00:00:00.000Z",
+        contact_emails: ["real@email.com"],
+      }
+    );
+
+    expect(tags).toContain("email-found");
+    expect(tags).not.toContain("email-missing");
+  });
+
+  it("removes email-found when contact_emails is null", () => {
+    const tags = cleanupMergedTagsForEnrichment(
+      ["profile:a", "email-found", "email-missing"],
+      {
+        fetched_at: "2026-01-01T00:00:00.000Z",
+        contact_emails: null,
+      } as never
+    );
+
+    expect(tags).not.toContain("email-found");
+    expect(tags).toContain("email-missing");
+  });
 });

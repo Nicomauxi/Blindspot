@@ -311,6 +311,72 @@ heuristic_discovery:
     expect(result.candidates.website).toHaveLength(15);
   });
 
+  it("uses single-word threshold for local Uruguay TLD website candidates", async () => {
+    const fetchHtml = async (url: string) => ({
+      status: 200,
+      finalUrl: url,
+      html: "<html><title>Local business</title></html>",
+      headers: {},
+      fetchedAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    const mood = await discoverHeuristicSources(
+      makeLead({ name: "Urban mood gym", address: "Montevideo, Uruguay", phone: null }),
+      "website-only",
+      { fetchHtml },
+      { additionalWebsiteUrls: ["https://mood.com.uy"] }
+    );
+    const amaya = await discoverHeuristicSources(
+      makeLead({ name: "Amaya Motors Propios", address: "Montevideo, Uruguay", phone: null }),
+      "website-only",
+      { fetchHtml },
+      { additionalWebsiteUrls: ["https://amaya.com.uy"] }
+    );
+
+    expect(mood.selected.website?.url).toBe("https://mood.com.uy");
+    expect(amaya.selected.website?.url).toBe("https://amaya.com.uy");
+  });
+
+  it("uses the higher website threshold for generic single-word domains", async () => {
+    const result = await discoverHeuristicSources(
+      makeLead({ name: "Fitness Space Institute", address: "Montevideo, Uruguay", phone: null }),
+      "website-only",
+      {
+        fetchHtml: async (url) => ({
+          status: url === "https://space.com" ? 200 : 404,
+          finalUrl: url,
+          html: url === "https://space.com" ? "<html><title>Generic domain</title></html>" : null,
+          headers: {},
+          fetchedAt: "2026-01-01T00:00:00.000Z",
+        }),
+      },
+      { additionalWebsiteUrls: ["https://space.com"] }
+    );
+
+    expect(result.candidates.website.find((candidate) => candidate.url === "https://space.com")?.score).toBe(0.35);
+    expect(result.selected.website).toBeNull();
+  });
+
+  it("keeps multi-word website candidates on the higher website threshold", async () => {
+    const result = await discoverHeuristicSources(
+      makeLead({ name: "Urban Mood Gym", address: "Montevideo, Uruguay", phone: null }),
+      "website-only",
+      {
+        fetchHtml: async (url) => ({
+          status: url === "https://urban-mood.com.uy" ? 200 : 404,
+          finalUrl: url,
+          html: url === "https://urban-mood.com.uy" ? "<html><title>Local business</title></html>" : null,
+          headers: {},
+          fetchedAt: "2026-01-01T00:00:00.000Z",
+        }),
+      },
+      { additionalWebsiteUrls: ["https://urban-mood.com.uy"] }
+    );
+
+    expect(result.candidates.website.find((candidate) => candidate.url === "https://urban-mood.com.uy")?.score).toBe(0.35);
+    expect(result.selected.website).toBeNull();
+  });
+
   it("derives Uruguay WhatsApp from mobile phone", () => {
     const candidate = deriveWhatsappCandidate(makeLead(), ["99"]);
     expect(candidate?.number).toBe("+59899123456");

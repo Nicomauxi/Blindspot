@@ -534,12 +534,21 @@ function isSingleWordWebsiteUrl(url: string): boolean {
   }
 }
 
+function isUruguayTld(url: string): boolean {
+  try {
+    const hostname = new URL(url).hostname.toLowerCase().replace(/^www\./, "");
+    return hostname === "uy" || hostname.endsWith(".uy");
+  } catch {
+    return false;
+  }
+}
+
 function websiteThreshold(
   candidate: Pick<HeuristicCandidate, "url">,
   thresholds: HeuristicDiscoveryConfig["thresholds"]
 ): number {
   if (!isSingleWordWebsiteUrl(candidate.url)) return thresholds.website;
-  return Math.max(thresholds.website_single_word, thresholds.website);
+  return isUruguayTld(candidate.url) ? thresholds.website_single_word : thresholds.website;
 }
 
 function bestWebsiteByThreshold<T extends HeuristicCandidate>(

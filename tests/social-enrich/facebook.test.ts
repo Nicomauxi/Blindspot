@@ -99,4 +99,89 @@ describe("extractFacebookProfile", () => {
     ).resolves.toBeNull();
     expect(page.evaluate).not.toHaveBeenCalled();
   });
+
+  it("does not penalize an otherwise Uruguayan profile", async () => {
+    const page = makePage({
+      name: "Amaya Motors Propios",
+      email: null,
+      phone: null,
+      website: "https://amaya.com.uy",
+      description: "Venta de autos en Montevideo, Uruguay.",
+      whatsapp_button: false,
+    });
+
+    const result = await extractFacebookProfile(
+      page,
+      "https://facebook.com/amayamotorsusadosy0km",
+      makeLead()
+    );
+
+    expect(result?.confidence).toBe(0.8);
+  });
+
+  it("penalizes foreign geographic text by 0.4", async () => {
+    const basePage = makePage({
+      name: "Amaya Motors Propios",
+      email: null,
+      phone: null,
+      website: "https://amaya.com.uy",
+      description: "Venta de autos en Montevideo, Uruguay.",
+      whatsapp_button: false,
+    });
+    const foreignPage = makePage({
+      name: "Amaya Motors Propios",
+      email: null,
+      phone: null,
+      website: "https://amaya.com.uy",
+      description: "Venta de autos en Tehuacán, México.",
+      whatsapp_button: false,
+    });
+
+    const base = await extractFacebookProfile(
+      basePage,
+      "https://facebook.com/amayamotorsusadosy0km",
+      makeLead()
+    );
+    const foreign = await extractFacebookProfile(
+      foreignPage,
+      "https://facebook.com/amayamotorsusadosy0km",
+      makeLead()
+    );
+
+    expect(base?.confidence).toBe(0.8);
+    expect(foreign?.confidence).toBe(0.4);
+  });
+
+  it("penalizes foreign website TLDs by 0.3", async () => {
+    const basePage = makePage({
+      name: "Amaya Motors Propios",
+      email: null,
+      phone: null,
+      website: "https://amaya.com.uy",
+      description: "Venta de autos en Montevideo, Uruguay.",
+      whatsapp_button: false,
+    });
+    const foreignPage = makePage({
+      name: "Amaya Motors Propios",
+      email: null,
+      phone: null,
+      website: "https://amaya.mx",
+      description: "Venta de autos en Montevideo, Uruguay.",
+      whatsapp_button: false,
+    });
+
+    const base = await extractFacebookProfile(
+      basePage,
+      "https://facebook.com/amayamotorsusadosy0km",
+      makeLead()
+    );
+    const foreign = await extractFacebookProfile(
+      foreignPage,
+      "https://facebook.com/amayamotorsusadosy0km",
+      makeLead()
+    );
+
+    expect(base?.confidence).toBe(0.8);
+    expect(foreign?.confidence).toBe(0.5);
+  });
 });

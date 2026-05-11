@@ -15,6 +15,14 @@ const BLOCKED_DOMAINS = new Set([
   "googletagmanager.com",
   "facebook.com",
   "instagram.com",
+  "thinkit.com.uy",
+  "smartserv.com.uy",
+  "hosting.com.uy",
+  "hosteruy.com.uy",
+  "uruhost.com.uy",
+  "datamedios.com.uy",
+  "websitio.com.uy",
+  "enaming.com",
 ]);
 
 const BLOCKED_PREFIXES = ["noreply", "no-reply", "mailer", "bounce"];
