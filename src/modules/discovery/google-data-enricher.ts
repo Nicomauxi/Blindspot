@@ -32,6 +32,12 @@ function computeReviewsSummary(reviews: ReviewItem[] | undefined): {
   return { count: reviews.length, latest_publish_time: latest };
 }
 
+function computeHasOwnerReplies(reviews: ReviewItem[] | undefined): boolean {
+  // TODO: verify in real smoke tests whether the current Places API payload
+  // includes ownerReply under reviews; if absent, this remains false.
+  return reviews?.some((r) => r.ownerReply !== undefined && r.ownerReply !== null) ?? false;
+}
+
 // If details is null/undefined (fetch failed), do NOT enrich.
 // Caller persists raw_from_text_search as-is. The 3 derived fields remain
 // absent in google_data. The scoring evaluator treats absent fields as
@@ -44,6 +50,7 @@ export function enrichWithDetails(
   const has_hours = (details.regularOpeningHours?.weekdayDescriptions?.length ?? 0) > 0;
   const has_recent_reviews = computeHasRecentReviews(details.reviews);
   const reviews_summary = computeReviewsSummary(details.reviews);
+  const has_owner_replies = computeHasOwnerReplies(details.reviews);
   const primaryType =
     typeof rawFromTextSearch["primary_type"] === "string"
       ? rawFromTextSearch["primary_type"]
@@ -57,6 +64,7 @@ export function enrichWithDetails(
     photos_count,
     has_hours,
     has_recent_reviews,
+    has_owner_replies,
     reviews_summary,
   };
 }

@@ -22,7 +22,7 @@ function scoreDimension(
 
   const filtered = applyMutualExclusions(matched, groups);
   const sum = filtered.reduce((acc, r) => acc + r.weight, 0);
-  return { total: Math.min(sum, cap), breakdown: filtered };
+  return { total: Math.max(0, Math.min(sum, cap)), breakdown: filtered };
 }
 
 export function scoreLead(lead: Lead): ScoreResult {

@@ -30,6 +30,9 @@ import { parseViewport } from "./parsers/viewport.js";
 import { parseWhatsapp } from "./parsers/whatsapp.js";
 import { parseSocialLinks } from "./parsers/social-links.js";
 import { parseOperationalSystems } from "./parsers/operational-systems.js";
+import { parseEmails } from "./parsers/email.js";
+import { parseWebPhones } from "./parsers/phone-web.js";
+import { parseHoursOnWeb } from "./parsers/hours-web.js";
 import { OUTDATED_YEAR_THRESHOLD, parseCopyrightYear } from "./parsers/copyright-year.js";
 import { parseSsl } from "./parsers/ssl.js";
 import { whoisLookup, normalizeDomain } from "./whois.js";
@@ -38,6 +41,7 @@ const HTML_CACHE_MS = 7 * 24 * 60 * 60 * 1_000;
 const WHOIS_CACHE_MS = 30 * 24 * 60 * 60 * 1_000;
 const PHONE_MOBILE_HEURISTIC = /^\+?\d{10,}$/;
 const SOCIAL_SEARCH_THRESHOLD = 0.4;
+const MAX_CONTACT_EMAILS = 3;
 
 export interface EnrichLeadOptions {
   forceRefresh: boolean;
@@ -143,6 +147,19 @@ function deriveTags(
     tags.push("not-responsive");
   }
 
+  if (footprint.contact_emails !== undefined) {
+    if (footprint.contact_emails.length > 0) tags.push("email-found");
+    else tags.push("email-missing");
+  }
+
+  if (footprint.phone_confirmed === true) {
+    tags.push("phone-web-confirmed");
+  }
+
+  if (footprint.phone_alternatives !== undefined && footprint.phone_alternatives.length > 0) {
+    tags.push("alternative-phone-found");
+  }
+
   if (footprint.whatsapp && !footprint.whatsapp.present) {
     const leadHasMobile = !!lead.phone && PHONE_MOBILE_HEURISTIC.test(lead.phone.replace(/\s/g, ""));
     if (!leadHasMobile) tags.push("whatsapp-missing");
@@ -158,6 +175,14 @@ function deriveTags(
     footprint.copyright_year <= OUTDATED_YEAR_THRESHOLD
   ) {
     tags.push("web-outdated");
+  }
+
+  if (footprint.operational_systems) {
+    tags.push(footprint.operational_systems.chat_widget ? "chat-widget" : "chat-widget-missing");
+  }
+
+  if (footprint.has_hours_on_web === false) {
+    tags.push("hours-missing-on-web");
   }
 
   if (footprint.stack && footprint.stack.confidence !== "low") {
@@ -240,6 +265,18 @@ function socialSearchAdditionalPhones(search: SocialSearch | null): string[] {
     ]));
   }
   return search.facebook?.phone ? [search.facebook.phone] : [];
+}
+
+function socialSearchEmails(search: SocialSearch | null): string[] {
+  if (!search || search.source !== "playwright") return [];
+  return Array.from(new Set([
+    search.facebook?.email ?? null,
+    search.instagram?.email ?? null,
+  ].filter((email): email is string => email !== null)));
+}
+
+function mergeContactEmails(...groups: Array<string[] | undefined>): string[] {
+  return Array.from(new Set(groups.flatMap((group) => group ?? []))).slice(0, MAX_CONTACT_EMAILS);
 }
 
 function shouldRunSocialSearch(
@@ -439,7 +476,18 @@ export async function enrichLead(
       const html = fetched.html;
       const headers = fetched.headers;
       const finalUrl = fetched.finalUrl;
-      const [pixels, stack, viewport, whatsapp, social_links, operational_systems, copyright_year] = await Promise.all([
+      const [
+        pixels,
+        stack,
+        viewport,
+        whatsapp,
+        social_links,
+        operational_systems,
+        copyright_year,
+        email,
+        phoneWeb,
+        hoursWeb,
+      ] = await Promise.all([
         Promise.resolve(parsePixels(html)),
         Promise.resolve(parseStack(html, headers)),
         Promise.resolve(parseViewport(html)),
@@ -447,8 +495,12 @@ export async function enrichLead(
         Promise.resolve(parseSocialLinks(html)),
         Promise.resolve(parseOperationalSystems(html)),
         Promise.resolve(parseCopyrightYear(html)),
+        Promise.resolve(parseEmails(html)),
+        Promise.resolve(parseWebPhones(html, lead.phone)),
+        Promise.resolve(parseHoursOnWeb(html)),
       ]);
       const ssl = parseSsl(finalUrl);
+      const contact_emails = mergeContactEmails(email.emails, socialSearchEmails(socialSearch));
 
       footprint = {
         fetched_at: fetched.fetchedAt,
@@ -462,6 +514,10 @@ export async function enrichLead(
         whatsapp,
         social_links,
         operational_systems,
+        contact_emails,
+        phone_confirmed: phoneWeb.confirmed,
+        phone_alternatives: phoneWeb.alternatives,
+        has_hours_on_web: hoursWeb.has_hours_on_web,
         ...(copyright_year.year !== null ? { copyright_year: copyright_year.year } : {}),
         ...(heuristicDiscovery ? { heuristic_discovery: heuristicDiscovery } : {}),
         ...(directoryDiscovery ? { directory_discovery: directoryDiscovery } : {}),

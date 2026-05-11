@@ -96,7 +96,9 @@ describe("extractInstagramProfile", () => {
   it("navigates with Playwright and extracts profile signals", async () => {
     const page = makePage({
       name: "Salon Bella",
-      bio: "Color, corte y belleza en Montevideo",
+      bio: "Color, corte y belleza en Montevideo. hola@salonbella.uy 099123456",
+      email: "hola@salonbella.uy",
+      phone: "099123456",
       external_url: "https://salonbella.uy",
       has_contact_button: true,
     });
@@ -115,13 +117,15 @@ describe("extractInstagramProfile", () => {
     expect(result).toMatchObject({
       url: "https://instagram.com/salonbella",
       name: "Salon Bella",
-      bio: "Color, corte y belleza en Montevideo",
+      bio: "Color, corte y belleza en Montevideo. hola@salonbella.uy 099123456",
+      email: "hola@salonbella.uy",
+      phone: "+59899123456",
       external_url: "https://salonbella.uy",
       has_contact_button: true,
     });
     expect(result.confidence).toBeGreaterThanOrEqual(0.7);
     expect(result.signals).toEqual(
-      expect.arrayContaining(["page_loaded", "name_match", "bio_extracted"])
+      expect.arrayContaining(["page_loaded", "name_match", "bio_extracted", "email_found", "phone_found"])
     );
   });
 

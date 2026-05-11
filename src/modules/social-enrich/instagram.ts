@@ -1,6 +1,7 @@
 import { getLogger } from "../../shared/logger.js";
 import type { Lead, PlaywrightInstagramSearchResult, PlaywrightSocialSignal } from "../../shared/types.js";
 import type { SocialEnrichPage } from "./facebook.js";
+import { normalizeUruguayPhone } from "../enrichment/social-search.js";
 
 const NAVIGATION_TIMEOUT_MS = 15_000;
 declare const document: any;
@@ -8,6 +9,8 @@ declare const document: any;
 interface InstagramPageData {
   name: string | null;
   bio: string | null;
+  email: string | null;
+  phone: string | null;
   external_url: string | null;
   has_contact_button: boolean;
 }
@@ -38,6 +41,17 @@ function nameMatches(extractedName: string | null, leadName: string): boolean {
   return overlap / expected.length >= 0.5;
 }
 
+function extractEmail(raw: string | null): string | null {
+  const match = raw?.match(/[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/);
+  return match ? match[0].toLowerCase() : null;
+}
+
+function extractMobilePhone(raw: string | null): string | null {
+  if (!raw) return null;
+  const match = raw.match(/\+598\s?[29]\d{6,7}\b|\b09[1-9]\d{6}\b|\b2\d{7}\b|\b9\d{7}\b/);
+  return match ? normalizeUruguayPhone(match[0]) : normalizeUruguayPhone(raw);
+}
+
 function confidenceFrom(data: InstagramPageData, lead: Pick<Lead, "name">): {
   confidence: number;
   signals: PlaywrightSocialSignal[];
@@ -59,6 +73,14 @@ function confidenceFrom(data: InstagramPageData, lead: Pick<Lead, "name">): {
   }
   if (data.has_contact_button) {
     signals.push("contact_button");
+    confidence += 0.05;
+  }
+  if (data.email) {
+    signals.push("email_found");
+    confidence += 0.05;
+  }
+  if (data.phone) {
+    signals.push("phone_found");
     confidence += 0.05;
   }
 
@@ -99,6 +121,8 @@ function evaluateInstagramPage(): InstagramPageData {
   return {
     name: metaTitle?.split("(@")[0]?.trim() ?? metaTitle,
     bio: description,
+    email: `${description ?? ""} ${text}`.match(/[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/)?.[0] ?? null,
+    phone: `${description ?? ""} ${text}`.match(/\+598\s?[29]\d{6,7}\b|\b09[1-9]\d{6}\b|\b2\d{7}\b|\b9\d{7}\b/)?.[0] ?? null,
     external_url,
     has_contact_button,
   };
@@ -117,6 +141,8 @@ export async function extractInstagramProfile(
     const data: InstagramPageData = {
       name: cleanText(extracted.name),
       bio: cleanText(extracted.bio),
+      email: extractEmail(extracted.email ?? extracted.bio),
+      phone: extractMobilePhone(extracted.phone ?? extracted.bio),
       external_url: cleanText(extracted.external_url),
       has_contact_button: extracted.has_contact_button === true,
     };

@@ -106,6 +106,7 @@ beforeEach(() => {
   vi.mocked(extractFacebookProfile).mockResolvedValue({
     url: "https://facebook.com/salonbella",
     name: "Salon Bella",
+    email: "hola@salonbella.uy",
     phone: "+59898365592",
     website: "https://salonbella.uy",
     description: "Belleza",
@@ -117,6 +118,8 @@ beforeEach(() => {
     url: "https://instagram.com/salonbella",
     name: "Salon Bella",
     bio: "Belleza",
+    email: null,
+    phone: null,
     external_url: "https://salonbella.uy",
     has_contact_button: false,
     confidence: 0.8,

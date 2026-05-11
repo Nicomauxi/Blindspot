@@ -51,6 +51,7 @@ const ReviewSchema = z.object({
   relativePublishTimeDescription: z.string().optional(),
   rating: z.number().optional(),
   text: z.object({ text: z.string().optional() }).optional(),
+  ownerReply: z.unknown().optional(),
 });
 
 const PlaceDetailsSchema = z.object({

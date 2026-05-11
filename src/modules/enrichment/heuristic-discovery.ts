@@ -538,9 +538,8 @@ function websiteThreshold(
   candidate: Pick<HeuristicCandidate, "url">,
   thresholds: HeuristicDiscoveryConfig["thresholds"]
 ): number {
-  return isSingleWordWebsiteUrl(candidate.url)
-    ? thresholds.website_single_word
-    : thresholds.website;
+  if (!isSingleWordWebsiteUrl(candidate.url)) return thresholds.website;
+  return Math.max(thresholds.website_single_word, thresholds.website);
 }
 
 function bestWebsiteByThreshold<T extends HeuristicCandidate>(

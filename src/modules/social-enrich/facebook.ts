@@ -19,6 +19,7 @@ export interface SocialEnrichPage {
 
 interface FacebookPageData {
   name: string | null;
+  email: string | null;
   phone: string | null;
   website: string | null;
   description: string | null;
@@ -57,6 +58,11 @@ function extractMobilePhone(raw: string | null): string | null {
   return match ? normalizeUruguayPhone(match[0]) : normalizeUruguayPhone(raw);
 }
 
+function extractEmail(raw: string | null): string | null {
+  const match = raw?.match(/[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/);
+  return match ? match[0].toLowerCase() : null;
+}
+
 function confidenceFrom(data: FacebookPageData, lead: Pick<Lead, "name">): {
   confidence: number;
   signals: PlaywrightSocialSignal[];
@@ -71,6 +77,10 @@ function confidenceFrom(data: FacebookPageData, lead: Pick<Lead, "name">): {
   if (data.phone) {
     signals.push("phone_found");
     confidence += 0.15;
+  }
+  if (data.email) {
+    signals.push("email_found");
+    confidence += 0.05;
   }
   if (data.website) {
     signals.push("website_found");
@@ -112,6 +122,7 @@ function evaluateFacebookPage(): FacebookPageData {
 
   return {
     name: metaTitle ?? h1,
+    email: text.match(/[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/)?.[0] ?? null,
     phone,
     website: externalLink,
     description,
@@ -131,6 +142,7 @@ export async function extractFacebookProfile(
     const extracted = await page.evaluate(evaluateFacebookPage);
     const data: FacebookPageData = {
       name: cleanText(extracted.name),
+      email: extractEmail(extracted.email),
       phone: extractMobilePhone(extracted.phone),
       website: cleanText(extracted.website),
       description: cleanText(extracted.description),

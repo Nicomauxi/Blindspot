@@ -70,6 +70,32 @@ describe("enrichWithDetails — has_recent_reviews", () => {
   });
 });
 
+describe("enrichWithDetails — has_owner_replies", () => {
+  it("returns true when at least one review has an ownerReply", () => {
+    const details = {
+      reviews: [
+        {
+          publishTime: new Date().toISOString(),
+          rating: 5,
+          ownerReply: { text: { text: "Gracias por visitarnos." } },
+        },
+      ],
+    } as unknown as PlaceDetailsResult;
+
+    const result = enrichWithDetails(RAW_BASE, details);
+    expect(result["has_owner_replies"]).toBe(true);
+  });
+
+  it("returns false when reviews do not include owner replies", () => {
+    const details: PlaceDetailsResult = {
+      reviews: [{ publishTime: new Date().toISOString(), rating: 5 }],
+    };
+
+    const result = enrichWithDetails(RAW_BASE, details);
+    expect(result["has_owner_replies"]).toBe(false);
+  });
+});
+
 describe("enrichWithDetails — immutability", () => {
   it("does not mutate the original raw object", () => {
     const raw = { id: "place1" };
