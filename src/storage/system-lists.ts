@@ -30,6 +30,11 @@ export interface RuntimePatterns {
   menuKeywords:    readonly string[];
   catalogKeywords: readonly string[];
   chatWidgets:     readonly string[];
+  reservationPlatforms:  readonly string[];
+  deliveryPlatforms:     readonly string[];
+  classBookingPlatforms: readonly string[];
+  appStorePlatforms:     readonly { pattern: string; matchType: string }[];
+  chatWidgetPatterns:    readonly string[];
 }
 
 export interface RuntimeMappings {
@@ -93,23 +98,37 @@ function fallbackLists(): RuntimeLists {
 }
 
 function fallbackPatterns(): RuntimePatterns {
+  const booking = ["booksy.com", "fresha.com", "genbook.com", "simplybook.me", "calendly.com"];
+  const reservation = ["reservando.uy", "thefork.com", "opentable.com"];
+  const delivery = ["pedidosya.com", "rappi.com", "ifood.com", "ifood.com.uy"];
+  const classBooking = ["mindbody.io", "wodify.com", "classpass.com", "booksy.com"];
+  const appStore = [
+    { pattern: "play.google.com/store/apps", matchType: "substring" },
+    { pattern: "apps.apple.com", matchType: "domain" },
+  ];
+  const menuKeywords = ["pedidosya", "ifood", "menupiu", "ver carta", "ver menu", "escanear qr"];
+  const catalogKeywords = ["catálogo", "catalogo", "stock", "0km", "usados", "kilometraje"];
+  const chatWidgets = [
+    "tawk.to", "intercom.io", "widget.intercom.io", "crisp.chat",
+    "client.crisp.chat", "tidio.co", "code.tidio.co", "livechat.com",
+    "cdn.livechatinc.com", "zendesk.com/embeddable_framework",
+    "freshchat.com", "wchat.freshchat.com",
+  ];
+
   return {
-    booking:      ["booksy.com", "fresha.com", "genbook.com", "simplybook.me", "calendly.com"],
-    reservation:  ["reservando.uy", "thefork.com", "opentable.com"],
-    delivery:     ["pedidosya.com", "rappi.com", "ifood.com", "ifood.com.uy"],
-    classBooking: ["mindbody.io", "wodify.com", "classpass.com", "booksy.com"],
-    appStore: [
-      { pattern: "play.google.com/store/apps", matchType: "substring" },
-      { pattern: "apps.apple.com",             matchType: "domain" },
-    ],
-    menuKeywords:    ["pedidosya", "ifood", "menupiu", "ver carta", "ver menu", "escanear qr"],
-    catalogKeywords: ["catálogo", "catalogo", "stock", "0km", "usados", "kilometraje"],
-    chatWidgets: [
-      "tawk.to", "intercom.io", "widget.intercom.io", "crisp.chat",
-      "client.crisp.chat", "tidio.co", "code.tidio.co", "livechat.com",
-      "cdn.livechatinc.com", "zendesk.com/embeddable_framework",
-      "freshchat.com", "wchat.freshchat.com",
-    ],
+    booking,
+    reservation,
+    delivery,
+    classBooking,
+    appStore,
+    menuKeywords,
+    catalogKeywords,
+    chatWidgets,
+    reservationPlatforms: reservation,
+    deliveryPlatforms: delivery,
+    classBookingPlatforms: classBooking,
+    appStorePlatforms: appStore,
+    chatWidgetPatterns: chatWidgets,
   };
 }
 
@@ -264,15 +283,29 @@ export async function loadRuntimePatterns(): Promise<RuntimePatterns> {
     const substringPatterns = (type: string): string[] =>
       rows.filter((r) => r.platform_type === type && r.match_type === "substring").map((r) => r.pattern);
 
+    const booking = domainPatterns("booking");
+    const reservation = domainPatterns("reservation");
+    const delivery = domainPatterns("delivery");
+    const classBooking = domainPatterns("class_booking");
+    const appStore = allPatterns("app_store");
+    const menuKeywords = keywordPatterns("menu_keyword");
+    const catalogKeywords = keywordPatterns("catalog_keyword");
+    const chatWidgets = substringPatterns("chat_widget");
+
     return {
-      booking:         domainPatterns("booking"),
-      reservation:     domainPatterns("reservation"),
-      delivery:        domainPatterns("delivery"),
-      classBooking:    domainPatterns("class_booking"),
-      appStore:        allPatterns("app_store"),
-      menuKeywords:    keywordPatterns("menu_keyword"),
-      catalogKeywords: keywordPatterns("catalog_keyword"),
-      chatWidgets:     substringPatterns("chat_widget"),
+      booking,
+      reservation,
+      delivery,
+      classBooking,
+      appStore,
+      menuKeywords,
+      catalogKeywords,
+      chatWidgets,
+      reservationPlatforms: reservation,
+      deliveryPlatforms: delivery,
+      classBookingPlatforms: classBooking,
+      appStorePlatforms: appStore,
+      chatWidgetPatterns: chatWidgets,
     };
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -354,35 +387,68 @@ export async function loadAllRuntime(): Promise<AllRuntime> {
 export async function detectAndSeedEmailProviders(minLeadCount = 2): Promise<number> {
   const db = getSupabase();
 
-  // Supabase JS client does not expose raw SQL easily; use rpc for this aggregate query.
-  // The function `detect_email_provider_domains` must exist in the DB (future migration).
-  // For now, fall back gracefully if it doesn't.
   try {
-    const { data, error } = await db.rpc("detect_email_provider_domains", { min_lead_count: minLeadCount });
+    const { data, error } = await db
+      .from("leads")
+      .select("id, emails:digital_footprint->contact_emails")
+      .eq("passed_filter", true)
+      .not("digital_footprint->contact_emails", "is", null);
 
     if (error) {
-      getLogger().warn({ err: error.message }, "detectAndSeedEmailProviders — rpc failed, skipping");
+      getLogger().warn({ err: error.message }, "detectAndSeedEmailProviders — lead query failed, skipping");
       return 0;
     }
 
-    const domains: string[] = (data ?? []).map((r: { domain: string }) => r.domain);
-    if (domains.length === 0) return 0;
+    const leadCounts = new Map<string, number>();
+    for (const row of (data ?? []) as Array<{ id: string; emails: unknown }>) {
+      if (!Array.isArray(row.emails)) continue;
 
-    const rows = domains.map((domain) => ({
+      const domainsForLead = new Set<string>();
+      for (const email of row.emails) {
+        const domain = extractEmailDomain(email);
+        if (domain) domainsForLead.add(domain);
+      }
+
+      for (const domain of domainsForLead) {
+        leadCounts.set(domain, (leadCounts.get(domain) ?? 0) + 1);
+      }
+    }
+
+    const candidateDomains = [...leadCounts.entries()]
+      .filter(([, leadCount]) => leadCount >= minLeadCount);
+
+    if (candidateDomains.length === 0) return 0;
+
+    const { data: existingRows, error: existingError } = await db
+      .from("system_lists")
+      .select("value")
+      .eq("list_name", "blocked_email_domains");
+
+    if (existingError) {
+      getLogger().warn({ err: existingError.message }, "detectAndSeedEmailProviders — existing domain query failed, skipping");
+      return 0;
+    }
+
+    const existingDomains = new Set((existingRows ?? []).map((row: { value: string }) => row.value.toLowerCase()));
+    const rows = candidateDomains
+      .filter(([domain]) => !existingDomains.has(domain))
+      .map(([domain, leadCount]) => ({
       list_name:  "blocked_email_domains",
       value:      domain,
       scope:      null as string | null,
       source:     "auto_detected" as const,
-      confidence: Math.min(minLeadCount / 10, 1.0),
+      confidence: Math.min(leadCount / 10, 1.0),
       reason:     "auto-detected email provider domain",
     }));
 
-    const { error: upsertError } = await db
-      .from("system_lists")
-      .upsert(rows, { onConflict: "list_name,value,COALESCE(scope,'')", ignoreDuplicates: true });
+    if (rows.length === 0) return 0;
 
-    if (upsertError) {
-      getLogger().warn({ err: upsertError.message }, "detectAndSeedEmailProviders — upsert failed");
+    const { error: insertError } = await db
+      .from("system_lists")
+      .insert(rows);
+
+    if (insertError) {
+      getLogger().warn({ err: insertError.message }, "detectAndSeedEmailProviders — insert failed");
       return 0;
     }
 
@@ -393,4 +459,14 @@ export async function detectAndSeedEmailProviders(minLeadCount = 2): Promise<num
     getLogger().warn({ err: msg }, "detectAndSeedEmailProviders — threw, skipping");
     return 0;
   }
+}
+
+function extractEmailDomain(email: unknown): string | null {
+  if (typeof email !== "string") return null;
+
+  const trimmed = email.trim().toLowerCase();
+  const atIndex = trimmed.lastIndexOf("@");
+  if (atIndex <= 0 || atIndex === trimmed.length - 1) return null;
+
+  return trimmed.slice(atIndex + 1);
 }
