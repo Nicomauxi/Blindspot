@@ -2,6 +2,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Browser, BrowserContext } from "playwright";
 import type { Lead } from "../../src/shared/types.js";
 
+vi.mock("../../src/shared/config.js", () => ({
+  getConfig: vi.fn(() => ({
+    HEURISTIC_REFRESH_DAYS: 30,
+    DIRECTORY_REFRESH_DAYS: 30,
+    SOCIAL_SEARCH_REFRESH_DAYS: 30,
+  })),
+}));
+
 vi.mock("../../src/storage/leads.js", () => ({
   loadAllLeads: vi.fn(),
   loadLeadsByRunId: vi.fn(),

@@ -40,8 +40,9 @@ const DimensionSchema = z
     }
   });
 
-const ScoringConfigSchema = z.object({
+const ScoringConfigSchema: z.ZodType<ScoringConfig> = z.object({
   version: z.number(),
+  recent_reviews_threshold_days: z.number().int().positive(),
   business_quality: DimensionSchema,
   digital_gap: DimensionSchema,
   mutual_exclusions: z.object({
@@ -63,7 +64,7 @@ export function parseConfig(yamlString: string): ScoringConfig {
       .join("\n");
     throw new Error(`Invalid scoring config:\n${msgs}`);
   }
-  return result.data as unknown as ScoringConfig;
+  return result.data;
 }
 
 export function getScoringConfig(): ScoringConfig {

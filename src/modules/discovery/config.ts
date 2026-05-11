@@ -3,7 +3,7 @@ import { load } from "js-yaml";
 import { z } from "zod";
 import type { DiscoveryConfig, ProfileConfig } from "../../shared/types.js";
 
-const ProfileConfigSchema = z
+const ProfileConfigSchema: z.ZodType<ProfileConfig> = z
   .object({
     description: z.string().optional(),
     min_rating: z.number().min(0).max(5),
@@ -21,7 +21,7 @@ const ProfileConfigSchema = z
     }
   });
 
-const DiscoveryConfigSchema = z.object({
+const DiscoveryConfigSchema: z.ZodType<DiscoveryConfig> = z.object({
   version: z.literal(1),
   profiles: z.record(z.string(), ProfileConfigSchema),
   social_domains: z.array(z.string()),
@@ -39,7 +39,7 @@ export function parseDiscoveryConfig(yamlString: string): DiscoveryConfig {
       .join("\n");
     throw new Error(`Invalid discovery config:\n${msgs}`);
   }
-  return result.data as unknown as DiscoveryConfig;
+  return result.data;
 }
 
 export function getDiscoveryConfig(): DiscoveryConfig {

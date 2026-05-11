@@ -3,10 +3,11 @@
  * REQUIRES local Supabase running — run `pnpm supabase start` first.
  * Execute with: pnpm vitest run tests/discovery/upsert.test.ts
  */
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from "vitest";
 import { upsertLeads } from "../../src/storage/leads.js";
 import { createRun } from "../../src/storage/runs.js";
 import { getSupabase } from "../../src/shared/supabase.js";
+import * as supabaseModule from "../../src/shared/supabase.js";
 import type { PlaceCandidate } from "../../src/shared/types.js";
 
 // Real run IDs created in beforeAll — required to satisfy FK constraints on
@@ -15,8 +16,7 @@ let run1Id: string;
 let run2Id: string;
 const describeIfSupabase =
   process.env.SUPABASE_URL &&
-  process.env.SUPABASE_SERVICE_ROLE_KEY &&
-  process.env.GOOGLE_PLACES_API_KEY
+  process.env.SUPABASE_SERVICE_ROLE_KEY
     ? describe
     : describe.skip;
 
@@ -41,6 +41,178 @@ function makeCandidate(placeId: string): PlaceCandidate {
 function tagsFn(_c: PlaceCandidate): string[] {
   return ["profile:a", "no-website"];
 }
+
+describe("upsertLeads — null Supabase row guards", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("throws when insert returns null data without an error", async () => {
+    const candidate = makeCandidate("upsert_null_insert");
+    const fetchTable = {
+      select: vi.fn(() => ({
+        in: vi.fn(async () => ({ data: [], error: null })),
+      })),
+    };
+    const insertTable = {
+      insert: vi.fn(() => ({
+        select: vi.fn(() => ({
+          single: vi.fn(async () => ({ data: null, error: null })),
+        })),
+      })),
+    };
+    const db = {
+      from: vi.fn()
+        .mockReturnValueOnce(fetchTable)
+        .mockReturnValueOnce(insertTable),
+    };
+    vi.spyOn(supabaseModule, "getSupabase").mockReturnValue(
+      db as unknown as ReturnType<typeof getSupabase>
+    );
+
+    await expect(
+      upsertLeads(
+        [{ candidate, passed: true, rejection_reasons: [] }],
+        "run-1",
+        "a",
+        tagsFn
+      )
+    ).rejects.toThrow("Supabase returned no row for placeId=upsert_null_insert");
+  });
+
+  it("throws when update returns null data without an error", async () => {
+    const candidate = makeCandidate("upsert_null_update");
+    const fetchTable = {
+      select: vi.fn(() => ({
+        in: vi.fn(async () => ({
+          data: [{
+            place_id: candidate.placeId,
+            tags: ["profile:a"],
+            passed_filter: true,
+            rejection_reasons: [],
+          }],
+          error: null,
+        })),
+      })),
+    };
+    const updateTable = {
+      update: vi.fn(() => ({
+        eq: vi.fn(() => ({
+          select: vi.fn(() => ({
+            single: vi.fn(async () => ({ data: null, error: null })),
+          })),
+        })),
+      })),
+    };
+    const db = {
+      from: vi.fn()
+        .mockReturnValueOnce(fetchTable)
+        .mockReturnValueOnce(updateTable),
+    };
+    vi.spyOn(supabaseModule, "getSupabase").mockReturnValue(
+      db as unknown as ReturnType<typeof getSupabase>
+    );
+
+    await expect(
+      upsertLeads(
+        [{ candidate, passed: true, rejection_reasons: [] }],
+        "run-2",
+        "a",
+        tagsFn
+      )
+    ).rejects.toThrow("Supabase returned no row for placeId=upsert_null_update");
+  });
+});
+
+describe("upsertLeads — unit: first_seen_run_id and flip logic", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function makeDbForUpdate(existingLead: Record<string, unknown>, updatedLead: Record<string, unknown>) {
+    const fetchTable = {
+      select: vi.fn(() => ({
+        in: vi.fn(async () => ({ data: [existingLead], error: null })),
+      })),
+    };
+    const updateTable = {
+      update: vi.fn(() => ({
+        eq: vi.fn(() => ({
+          select: vi.fn(() => ({
+            single: vi.fn(async () => ({ data: updatedLead, error: null })),
+          })),
+        })),
+      })),
+    };
+    return {
+      from: vi.fn()
+        .mockReturnValueOnce(fetchTable)
+        .mockReturnValueOnce(updateTable),
+    };
+  }
+
+  it("preserves first_seen_run_id on re-upsert of existing lead", async () => {
+    const candidate = makeCandidate("existing_place");
+    const existing = {
+      place_id: candidate.placeId,
+      tags: ["profile:a"],
+      passed_filter: true,
+      rejection_reasons: [],
+      first_seen_run_id: "run-original",
+    };
+    const updated = {
+      ...existing,
+      last_seen_run_id: "run-2",
+      tags: ["profile:a", "no-website"],
+    };
+    const db = makeDbForUpdate(existing, updated);
+    vi.spyOn(supabaseModule, "getSupabase").mockReturnValue(
+      db as unknown as ReturnType<typeof getSupabase>
+    );
+
+    const result = await upsertLeads(
+      [{ candidate, passed: true, rejection_reasons: [] }],
+      "run-2",
+      "a",
+      tagsFn
+    );
+    expect(result.updated).toHaveLength(1);
+    expect(result.updated[0]!.first_seen_run_id).toBe("run-original");
+  });
+
+  it("passed→rejected flip: sets passed_filter=false and adds rejected tags", async () => {
+    const candidate = makeCandidate("flip_place");
+    const existing = {
+      place_id: candidate.placeId,
+      tags: ["profile:a", "no-website"],
+      passed_filter: true,
+      rejection_reasons: [],
+      first_seen_run_id: "run-1",
+    };
+    const updated = {
+      ...existing,
+      passed_filter: false,
+      rejection_reasons: ["rating-too-low"],
+      tags: ["profile:a", "no-website", "rejected:rating-too-low"],
+      last_seen_run_id: "run-2",
+    };
+    const db = makeDbForUpdate(existing, updated);
+    vi.spyOn(supabaseModule, "getSupabase").mockReturnValue(
+      db as unknown as ReturnType<typeof getSupabase>
+    );
+
+    const result = await upsertLeads(
+      [{ candidate, passed: false, rejection_reasons: ["rating-too-low"] }],
+      "run-2",
+      "a",
+      tagsFn
+    );
+    expect(result.updated).toHaveLength(1);
+    expect(result.updated[0]!.passed_filter).toBe(false);
+    expect(result.updated[0]!.tags).toContain("rejected:rating-too-low");
+    expect(result.updated[0]!.first_seen_run_id).toBe("run-1");
+  });
+});
 
 describeIfSupabase("upsertLeads — flip logic integration", () => {
   beforeAll(async () => {

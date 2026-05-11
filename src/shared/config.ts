@@ -11,6 +11,9 @@ const envSchema = z.object({
   LOG_LEVEL: z
     .enum(["trace", "debug", "info", "warn", "error", "fatal"])
     .default("info"),
+  HEURISTIC_REFRESH_DAYS: z.coerce.number().int().positive().default(30),
+  DIRECTORY_REFRESH_DAYS: z.coerce.number().int().positive().default(30),
+  SOCIAL_SEARCH_REFRESH_DAYS: z.coerce.number().int().positive().default(30),
 });
 
 export type Config = z.infer<typeof envSchema>;
@@ -30,4 +33,8 @@ export function getConfig(): Config {
 
   _config = result.data;
   return _config;
+}
+
+export function resetConfig(): void {
+  _config = null;
 }

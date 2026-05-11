@@ -3,8 +3,9 @@
  * Bypasses Google Places (no API key needed) — uses realistic fixtures.
  * Proves: run lifecycle, lead upsert, dedup, idempotency.
  *
- * Usage:
- *   node --env-file=.env --import tsx/esm scripts/integration-test.ts
+ * Usage: pnpm test:integration
+ * Requires: Supabase local running + .env with all vars
+ * Warning: mutates DB, no cleanup — manual use only
  */
 
 import { applyProfileFilter, tagCandidate } from "../src/modules/discovery/filters.js";

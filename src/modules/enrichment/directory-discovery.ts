@@ -4,6 +4,7 @@ import type { Cheerio, CheerioAPI } from "cheerio";
 import { load } from "js-yaml";
 import { z } from "zod";
 import { getLogger } from "../../shared/logger.js";
+import { getConfig } from "../../shared/config.js";
 import type {
   DirectoryCandidate,
   DirectoryDiscovery,
@@ -12,7 +13,6 @@ import type {
 } from "../../shared/types.js";
 import { fetchHtml, type FetchHtmlResult } from "./http.js";
 
-const DEFAULT_REFRESH_DAYS = 30;
 const SOURCE = "yelu.uy" as const;
 const BASE_URL = `https://www.${SOURCE}`;
 
@@ -84,10 +84,7 @@ export function resetDirectoryConfigCache(): void {
 }
 
 export function getDirectoryRefreshDays(): number {
-  const raw = process.env.DIRECTORY_REFRESH_DAYS;
-  if (!raw) return DEFAULT_REFRESH_DAYS;
-  const n = Number(raw);
-  return Number.isFinite(n) && n > 0 ? n : DEFAULT_REFRESH_DAYS;
+  return getConfig().DIRECTORY_REFRESH_DAYS;
 }
 
 export function isDirectoryStale(

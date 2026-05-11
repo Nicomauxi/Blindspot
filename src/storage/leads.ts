@@ -1,5 +1,4 @@
 import { getSupabase } from "../shared/supabase.js";
-import { getLogger } from "../shared/logger.js";
 import type { DigitalFootprint, DigitalFootprintEnriched, Lead, LeadUpsert, SocialSearch } from "../shared/types.js";
 import type { ScoreResult } from "../modules/scoring/types.js";
 import { normalizeUruguayMobile } from "../modules/enrichment/parsers/whatsapp.js";
@@ -111,7 +110,6 @@ export async function upsertLeads(
 ): Promise<UpsertResult> {
   if (items.length === 0) return { inserted: [], updated: [] };
 
-  const log = getLogger();
   const db = getSupabase();
 
   const placeIds = items.map((i) => i.candidate.placeId);
@@ -180,11 +178,11 @@ export async function upsertLeads(
         .select()
         .single();
 
-      if (error) {
-        log.error({ placeId: candidate.placeId, error }, "Failed to update lead");
-      } else if (data) {
-        updated.push(data as Lead);
+      if (error) throw new Error(`upsert failed: ${error.message}`);
+      if (!data) {
+        throw new Error(`Supabase returned no row for placeId=${candidate.placeId}`);
       }
+      updated.push(data as Lead);
     } else {
       const tags = passed
         ? tagsFn(candidate)
@@ -213,11 +211,11 @@ export async function upsertLeads(
         .select()
         .single();
 
-      if (error) {
-        log.error({ placeId: candidate.placeId, error }, "Failed to insert lead");
-      } else if (data) {
-        inserted.push(data as Lead);
+      if (error) throw new Error(`upsert failed: ${error.message}`);
+      if (!data) {
+        throw new Error(`Supabase returned no row for placeId=${candidate.placeId}`);
       }
+      inserted.push(data as Lead);
     }
   }
 
@@ -325,6 +323,12 @@ export async function updateLeadEnrichment(
   const currentWhatsapp = (current?.whatsapp as string | null) ?? null;
   const mergedWhatsapp = normalizeStoredWhatsapp(currentWhatsapp) ?? normalizeStoredWhatsapp(whatsappFromSite);
 
+  if (mergedWhatsapp &&
+      !mergedTags.includes("whatsapp-derived") &&
+      !mergedTags.includes("whatsapp-confirmed")) {
+    mergedTags.push("whatsapp-derived");
+  }
+
   const { error } = await db
     .from("leads")
     .update({
@@ -368,6 +372,12 @@ export async function updateLeadSocialSearch(
   const mergedTags = cleanupMergedTagsForEnrichment([...currentTags, ...newTags], footprint);
   const currentWhatsapp = (current?.whatsapp as string | null) ?? null;
   const mergedWhatsapp = normalizeStoredWhatsapp(currentWhatsapp) ?? normalizeStoredWhatsapp(whatsappFromSocial);
+
+  if (mergedWhatsapp &&
+      !mergedTags.includes("whatsapp-derived") &&
+      !mergedTags.includes("whatsapp-confirmed")) {
+    mergedTags.push("whatsapp-derived");
+  }
 
   const { error } = await db
     .from("leads")

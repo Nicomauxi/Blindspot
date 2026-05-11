@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   buildWebsiteCandidates,
   deriveWhatsappCandidate,
@@ -9,6 +9,14 @@ import {
   tokenizeFromSlug,
 } from "../../src/modules/enrichment/heuristic-discovery.js";
 import type { Lead } from "../../src/shared/types.js";
+
+vi.mock("../../src/shared/config.js", () => ({
+  getConfig: vi.fn(() => ({
+    HEURISTIC_REFRESH_DAYS: 30,
+    DIRECTORY_REFRESH_DAYS: 30,
+    SOCIAL_SEARCH_REFRESH_DAYS: 30,
+  })),
+}));
 
 function makeLead(overrides: Partial<Lead> = {}): Lead {
   return {

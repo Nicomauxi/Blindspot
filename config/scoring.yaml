@@ -1,4 +1,5 @@
 version: 1
+recent_reviews_threshold_days: 180
 
 # business_quality: 0-100. Qué tan "valioso como negocio offline" es este lead.
 business_quality:
@@ -30,9 +31,6 @@ business_quality:
     - name: has_recent_reviews
       condition: { field: google_data.has_recent_reviews, op: eq, value: true }
       weight: 10
-    - name: has_owner_replies
-      condition: { field: google_data.has_owner_replies, op: eq, value: true }
-      weight: 5
 
 # digital_gap: 0-100. Qué tan ausente está el negocio digitalmente.
 digital_gap:

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getSupabase } from "../../src/shared/supabase.js";
-import { updateLeadSocialSearch } from "../../src/storage/leads.js";
-import type { SocialSearch } from "../../src/shared/types.js";
+import { updateLeadEnrichment, updateLeadSocialSearch } from "../../src/storage/leads.js";
+import type { DigitalFootprint, SocialSearch } from "../../src/shared/types.js";
 
 vi.mock("../../src/shared/supabase.js", () => ({
   getSupabase: vi.fn(),
@@ -70,5 +70,83 @@ describe("updateLeadSocialSearch", () => {
       tags: expect.arrayContaining(["fb-confirmed", "ig-confirmed"]),
     }));
     expect(updateEq).toHaveBeenCalledWith("id", "lead-1");
+  });
+
+  it("adds whatsapp-derived tag when whatsapp is set and no whatsapp tag exists", async () => {
+    single.mockResolvedValue({
+      data: {
+        digital_footprint: null,
+        tags: ["profile:a"],
+        whatsapp: null,
+      },
+      error: null,
+    });
+    const socialSearch: SocialSearch = {
+      ran_at: "2026-01-01T00:00:00.000Z",
+      source: "playwright",
+      facebook: null,
+      instagram: null,
+    };
+
+    await updateLeadSocialSearch("lead-2", socialSearch, [], "094123456");
+
+    const updateCall = update.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(Array.isArray(updateCall.tags)).toBe(true);
+    expect((updateCall.tags as string[]).includes("whatsapp-derived")).toBe(true);
+  });
+});
+
+describe("updateLeadEnrichment — whatsapp invariant", () => {
+  const single = vi.fn();
+  const selectEq = vi.fn(() => ({ single }));
+  const select = vi.fn(() => ({ eq: selectEq }));
+  const updateEq = vi.fn();
+  const update = vi.fn(() => ({ eq: updateEq }));
+  const from = vi.fn(() => ({ select, update }));
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    updateEq.mockResolvedValue({ error: null });
+    vi.mocked(getSupabase).mockReturnValue({ from } as never);
+  });
+
+  it("adds whatsapp-derived tag when whatsapp is found on site and no whatsapp tag exists", async () => {
+    single.mockResolvedValue({
+      data: {
+        digital_footprint: null,
+        tags: ["profile:a", "no-website"],
+        whatsapp: null,
+      },
+      error: null,
+    });
+    const footprint: DigitalFootprint = {
+      fetched_at: "2026-01-01T00:00:00.000Z",
+    };
+
+    await updateLeadEnrichment("lead-3", footprint, [], "094999888");
+
+    const updateCall = update.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(Array.isArray(updateCall.tags)).toBe(true);
+    expect((updateCall.tags as string[]).includes("whatsapp-derived")).toBe(true);
+  });
+
+  it("does not duplicate whatsapp-derived when tag already present", async () => {
+    single.mockResolvedValue({
+      data: {
+        digital_footprint: null,
+        tags: ["profile:a", "whatsapp-derived"],
+        whatsapp: "094999888",
+      },
+      error: null,
+    });
+    const footprint: DigitalFootprint = {
+      fetched_at: "2026-01-01T00:00:00.000Z",
+    };
+
+    await updateLeadEnrichment("lead-4", footprint, [], null);
+
+    const updateCall = update.mock.calls[0]?.[0] as Record<string, unknown>;
+    const tags = updateCall.tags as string[];
+    expect(tags.filter((t) => t === "whatsapp-derived").length).toBe(1);
   });
 });

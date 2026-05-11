@@ -4,6 +4,7 @@ import {
   getSocialSearchRefreshDays,
   isSocialSearchStale,
 } from "../../src/modules/enrichment/social-search.js";
+import * as configModule from "../../src/shared/config.js";
 import type { Lead } from "../../src/shared/types.js";
 
 function makeLead(overrides: Partial<Lead> = {}): Lead {
@@ -60,7 +61,7 @@ function duckResult(input: {
 
 describe("social search discovery", () => {
   afterEach(() => {
-    delete process.env.SOCIAL_SEARCH_REFRESH_DAYS;
+    vi.restoreAllMocks();
   });
 
   it("parses DuckDuckGo results, scores signals, decodes uddg URLs, and extracts phones", async () => {
@@ -180,7 +181,9 @@ describe("social search discovery", () => {
   });
 
   it("detects stale social search runs with SOCIAL_SEARCH_REFRESH_DAYS", () => {
-    process.env.SOCIAL_SEARCH_REFRESH_DAYS = "10";
+    vi.spyOn(configModule, "getConfig").mockReturnValue({
+      SOCIAL_SEARCH_REFRESH_DAYS: 10,
+    } as ReturnType<typeof configModule.getConfig>);
     const old = { ran_at: "2026-01-01T00:00:00.000Z" };
     const now = Date.parse("2026-01-12T00:00:00.000Z");
 

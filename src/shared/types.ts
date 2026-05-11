@@ -10,7 +10,7 @@ export type RejectionReason =
   | "has-real-website";
 
 export interface ProfileConfig {
-  description?: string;
+  description?: string | undefined;
   min_rating: number;
   min_reviews: number;
   max_reviews: number | null;

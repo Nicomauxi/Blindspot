@@ -133,12 +133,6 @@ describe("evaluateRule — google_data derived fields (Fase 2 enrichment)", () =
     expect(evaluateRule(r, lead).matched).toBe(true);
   });
 
-  it("has_owner_replies eq true matches when has_owner_replies=true", () => {
-    const lead = makeLead({ google_data: { has_owner_replies: true } });
-    const r = rule({ name: "has_owner_replies", weight: 5, condition: { field: "google_data.has_owner_replies", op: "eq", value: true } });
-    expect(evaluateRule(r, lead).matched).toBe(true);
-  });
-
   it("photos_count=0 does not match has_photos rule (gte 5)", () => {
     const lead = makeLead({ google_data: { photos_count: 0 } });
     const r = rule({ name: "has_photos", weight: 10, condition: { field: "google_data.photos_count", op: "gte", value: 5 } });

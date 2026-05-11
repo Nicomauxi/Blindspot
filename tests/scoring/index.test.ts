@@ -141,15 +141,4 @@ describe("scoreLead", () => {
     );
   });
 
-  it("scores owner replies as a business quality signal", () => {
-    const result = scoreLead({
-      ...empty_lead,
-      google_data: { has_owner_replies: true },
-    });
-
-    expect(result.business_quality_score).toBe(5);
-    expect(result.score_breakdown.business_quality.rules).toContainEqual(
-      expect.objectContaining({ name: "has_owner_replies", weight: 5 })
-    );
-  });
 });
