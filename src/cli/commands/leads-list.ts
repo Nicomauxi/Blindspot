@@ -3,6 +3,7 @@ import type { Lead } from "../../shared/types.js";
 
 export async function leadsListCommand(opts: {
   run?: string;
+  seenIn?: string;
   rejectedOnly?: boolean;
   passedOnly?: boolean;
   limit?: string;
@@ -13,6 +14,7 @@ export async function leadsListCommand(opts: {
 
   const leads = await listLeads({
     ...(opts.run !== undefined ? { runId: opts.run } : {}),
+    ...(opts.seenIn !== undefined ? { seenInRunId: opts.seenIn } : {}),
     passedOnly: opts.passedOnly ?? false,
     rejectedOnly: opts.rejectedOnly ?? false,
     limit,

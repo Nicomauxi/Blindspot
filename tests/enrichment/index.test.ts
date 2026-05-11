@@ -747,4 +747,77 @@ describe("enrichLead", () => {
     expect(r.outcome).toBe("fetched-ok");
     expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
+
+  describe("web-only-no-social tag derivation", () => {
+    it("emits web-only-no-social when lead has website, social search ran, no social confirmed", async () => {
+      const lead = makeLead({ website: "https://example.com" });
+      const socialSearchDiscover = vi.fn(async () => emptySocialSearchResult());
+
+      const r = await enrichLead(lead, { forceRefresh: false, withHeuristic: true }, {
+        fetchHtml: fetchHtmlOk(loadFixture("plain-static.html")),
+        whoisLookup: whoisOk(null),
+        socialSearchDiscover,
+      });
+
+      expect(r.tags_to_add).toContain("web-only-no-social");
+    });
+
+    it("does not emit web-only-no-social when fb-confirmed is present", async () => {
+      const lead = makeLead({ website: "https://example.com" });
+      const socialSearchDiscover = vi.fn(async () => socialSearchResult());
+
+      const r = await enrichLead(lead, { forceRefresh: false, withHeuristic: true }, {
+        fetchHtml: fetchHtmlOk(loadFixture("plain-static.html")),
+        whoisLookup: whoisOk(null),
+        socialSearchDiscover,
+      });
+
+      expect(r.tags_to_add).toContain("fb-confirmed");
+      expect(r.tags_to_add).not.toContain("web-only-no-social");
+    });
+
+    it("does not emit web-only-no-social when social search did not run", async () => {
+      const lead = makeLead({ website: "https://example.com" });
+
+      const r = await enrichLead(lead, { forceRefresh: false }, {
+        fetchHtml: fetchHtmlOk(loadFixture("plain-static.html")),
+        whoisLookup: whoisOk(null),
+      });
+
+      expect(r.tags_to_add).not.toContain("web-only-no-social");
+    });
+
+    it("does not emit web-only-no-social when source is duckduckgo-fallback", async () => {
+      const lead = makeLead({ website: "https://example.com" });
+      const fallback: SocialSearch = {
+        ran_at: new Date().toISOString(),
+        source: "duckduckgo-fallback",
+        facebook: {
+          query: 'site:facebook.com "Test Lead" montevideo',
+          results: [],
+          best_url: null,
+          additional_phones: [],
+          confidence: 0,
+          error: "http-429",
+        },
+        instagram: {
+          query: 'site:instagram.com "Test Lead" montevideo',
+          results: [],
+          best_url: null,
+          additional_phones: [],
+          confidence: 0,
+          error: "http-429",
+        },
+      };
+      const socialSearchDiscover = vi.fn(async () => fallback);
+
+      const r = await enrichLead(lead, { forceRefresh: false, withHeuristic: true }, {
+        fetchHtml: fetchHtmlOk(loadFixture("plain-static.html")),
+        whoisLookup: whoisOk(null),
+        socialSearchDiscover,
+      });
+
+      expect(r.tags_to_add).not.toContain("web-only-no-social");
+    });
+  });
 });

@@ -1,7 +1,8 @@
 import * as cheerio from "cheerio";
 import { getLogger } from "../../../shared/logger.js";
 
-const EMAIL_REGEX = /[a-zA-Z0-9._%+\-]+@(?:[a-zA-Z0-9\-]+\.)+(?:com\.uy|gub\.uy|uy|[a-zA-Z]{2,3}(?![a-zA-Z]))/g;
+const EMAIL_REGEX =
+  /(?<![A-Za-z0-9._%+\-])([A-Za-z0-9][A-Za-z0-9_%+\-]{0,62}(?:\.[A-Za-z0-9][A-Za-z0-9_%+\-]{0,62})*)@((?:[A-Za-z0-9\-]+\.)+(?:com\.uy|gub\.uy|uy|[A-Za-z]{2,3}(?![A-Za-z])))/g;
 const MAX_EMAILS = 3;
 
 const BLOCKED_DOMAINS = new Set([
@@ -26,10 +27,18 @@ const BLOCKED_DOMAINS = new Set([
 ]);
 
 const BLOCKED_PREFIXES = ["noreply", "no-reply", "mailer", "bounce"];
+const FREE_EMAIL_DOMAINS = new Set(["gmail.com", "hotmail.com", "outlook.com", "yahoo.com"]);
+const SUSPICIOUS_LOCAL_TLD_SUFFIX = /\.(?:com|net|org|info|uy|comuy)$/i;
 
 export interface EmailParseResult {
   emails: string[];
   has_contact_email: boolean;
+}
+
+export interface EmailParseCtx {
+  blockedDomains?: ReadonlySet<string>;
+  freeDomains?: ReadonlySet<string>;
+  blockedPrefixes?: readonly string[];
 }
 
 function emptyResult(): EmailParseResult {
@@ -40,36 +49,43 @@ function normalizeEmail(raw: string): string {
   return raw.trim().replace(/^mailto:/i, "").split("?")[0]?.toLowerCase() ?? "";
 }
 
-function isUsefulEmail(email: string): boolean {
+function isUsefulEmail(email: string, ctx?: EmailParseCtx): boolean {
   const [local, domain] = email.split("@");
   if (!local || !domain) return false;
+  if (local.length > 64) return false;
+  if (local.startsWith(".") || local.endsWith(".")) return false;
+  if (local.includes("..")) return false;
   const lowerDomain = domain.toLowerCase();
-  if (BLOCKED_DOMAINS.has(lowerDomain)) return false;
-  return !BLOCKED_PREFIXES.some(
+  const freeDomains = ctx?.freeDomains ?? FREE_EMAIL_DOMAINS;
+  const blockedDomains = ctx?.blockedDomains ?? BLOCKED_DOMAINS;
+  const blockedPrefixes = ctx?.blockedPrefixes ?? BLOCKED_PREFIXES;
+  if (freeDomains.has(lowerDomain) && SUSPICIOUS_LOCAL_TLD_SUFFIX.test(local)) return false;
+  if (blockedDomains.has(lowerDomain)) return false;
+  return !blockedPrefixes.some(
     (prefix) => local.toLowerCase().startsWith(prefix) || lowerDomain.startsWith(prefix)
   );
 }
 
-function collectEmails(text: string): string[] {
+function collectEmails(text: string, ctx?: EmailParseCtx): string[] {
   return (text.match(EMAIL_REGEX) ?? [])
     .map(normalizeEmail)
-    .filter((email) => email.length > 0 && isUsefulEmail(email));
+    .filter((email) => email.length > 0 && isUsefulEmail(email, ctx));
 }
 
 function uniqueLimited(values: string[]): string[] {
   return Array.from(new Set(values)).slice(0, MAX_EMAILS);
 }
 
-export function parseEmails(html: string): EmailParseResult {
+export function parseEmails(html: string, ctx?: EmailParseCtx): EmailParseResult {
   try {
     const $ = cheerio.load(html);
     const mailtoEmails = $('a[href^="mailto:" i]')
       .map((_, el) => normalizeEmail($(el).attr("href") ?? ""))
       .get()
-      .filter((email) => email.length > 0 && isUsefulEmail(email));
+      .filter((email) => email.length > 0 && isUsefulEmail(email, ctx));
 
     $("script, style").remove();
-    const textEmails = collectEmails($("body").text());
+    const textEmails = collectEmails($("body").text(), ctx);
     const emails = uniqueLimited([...mailtoEmails, ...textEmails]);
 
     return { emails, has_contact_email: emails.length > 0 };

@@ -59,6 +59,30 @@ describe("parseOperationalSystems", () => {
     expect(result.reservation_platforms).toEqual(["reservando.uy"]);
   });
 
+  it("detects custom delivery platforms", () => {
+    const html = `
+      <html><body>
+        <a href="https://delivery-custom.uy/restaurante/test">Delivery</a>
+      </body></html>
+    `;
+
+    const result = parseOperationalSystems(html, {
+      deliveryPlatforms: ["delivery-custom.uy"],
+    });
+
+    expect(result.delivery_platforms).toEqual(["delivery-custom.uy"]);
+  });
+
+  it("keeps default parsing when ctx is omitted", () => {
+    const html = `
+      <html><body>
+        <a href="https://www.pedidosya.com.uy/restaurantes/test">Delivery</a>
+      </body></html>
+    `;
+
+    expect(parseOperationalSystems(html).delivery_platforms).toEqual(["pedidosya.com"]);
+  });
+
   it("detects class booking platforms and car dealer catalog/contact form signals", () => {
     const html = `
       <html><body>

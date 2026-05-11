@@ -10,8 +10,23 @@ function asciiFold(input: string): string {
   return input.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 }
 
-export function normalizeNiche(raw: string): string {
+type NicheAlias = { niche: string; term: string; matchType: string };
+
+function aliasMatches(normalized: string, alias: NicheAlias): boolean {
+  const term = asciiFold(alias.term).toLowerCase();
+  if (!term) return false;
+
+  if (alias.matchType === "exact") return normalized === term;
+  return normalized.includes(term);
+}
+
+export function normalizeNiche(raw: string, aliases?: readonly NicheAlias[]): string {
   const normalized = asciiFold(raw).toLowerCase();
+
+  if (aliases && aliases.length > 0) {
+    const match = aliases.find((alias) => aliasMatches(normalized, alias));
+    return match?.niche ?? "other";
+  }
 
   if (
     normalized.includes("peluquer") ||

@@ -9,6 +9,18 @@ export interface UpsertResult {
 }
 
 const MAX_CONTACT_EMAILS = 3;
+const DUPLICATE_TAG = "possible-duplicate";
+const DUPLICATE_SECONDARY_TAG = "duplicate-secondary";
+const DUPLICATE_BLOCKED_EMAIL_DOMAINS = new Set([
+  "thinkit.com.uy",
+  "smartserv.com.uy",
+  "hosting.com.uy",
+  "hosteruy.com.uy",
+  "uruhost.com.uy",
+  "datamedios.com.uy",
+  "websitio.com.uy",
+  "enaming.com",
+]);
 const isRejectedTag = (tag: string): boolean => tag.startsWith("rejected:");
 
 function socialSearchConfirmsFacebook(search: SocialSearch): boolean {
@@ -60,6 +72,127 @@ function mergeContactEmails(existing: string[] | undefined, search: SocialSearch
 
 function normalizeStoredWhatsapp(value: string | null): string | null {
   return value ? normalizeUruguayMobile(value) : null;
+}
+
+function normalizeIdentityPhone(value: string | null): string | null {
+  const mobile = normalizeStoredWhatsapp(value);
+  if (mobile) return mobile;
+  const digits = (value ?? "").replace(/\D/g, "");
+  if (digits.length === 0) return null;
+  if (digits.startsWith("598")) return `+${digits}`;
+  if (digits.length === 8 && /^[29]/.test(digits)) return `+598${digits}`;
+  if (digits.length === 9 && digits.startsWith("0")) return `+598${digits.slice(1)}`;
+  return digits;
+}
+
+function normalizeIdentityUrl(value: string | null | undefined): string | null {
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    url.hash = "";
+    url.search = "";
+    url.hostname = url.hostname.toLowerCase().replace(/^www\./, "");
+    url.pathname = url.pathname.replace(/\/+$/, "");
+    return url.toString().replace(/\/$/, "");
+  } catch {
+    return value.trim().toLowerCase().replace(/\/+$/, "") || null;
+  }
+}
+
+function duplicateEmails(lead: Lead): string[] {
+  const emails = lead.digital_footprint?.contact_emails ?? [];
+  return emails
+    .map((email) => email.trim().toLowerCase())
+    .filter((email) => {
+      const domain = email.split("@")[1] ?? "";
+      return email.length > 0 && !DUPLICATE_BLOCKED_EMAIL_DOMAINS.has(domain);
+    });
+}
+
+function duplicateIdentityKeys(lead: Lead): string[] {
+  const keys: string[] = [];
+  const whatsapp = normalizeIdentityPhone(lead.whatsapp);
+  if (whatsapp) keys.push(`wa:${whatsapp}`);
+  const phone = normalizeIdentityPhone(lead.phone);
+  if (phone) keys.push(`phone:${phone}`);
+  const web = normalizeIdentityUrl(lead.digital_footprint?.heuristic_discovery?.selected.website?.url);
+  if (web) keys.push(`web:${web}`);
+  for (const email of duplicateEmails(lead)) {
+    keys.push(`email:${email}`);
+  }
+  return Array.from(new Set(keys));
+}
+
+export function detectDuplicates(leads: Lead[]): Map<string, Lead[]> {
+  const parent = new Map<string, string>();
+  const byId = new Map(leads.map((lead) => [lead.id, lead]));
+  const keyOwner = new Map<string, string>();
+
+  function find(id: string): string {
+    const p = parent.get(id) ?? id;
+    if (p === id) return id;
+    const root = find(p);
+    parent.set(id, root);
+    return root;
+  }
+
+  function union(a: string, b: string): void {
+    const ra = find(a);
+    const rb = find(b);
+    if (ra !== rb) parent.set(rb, ra);
+  }
+
+  for (const lead of leads) {
+    parent.set(lead.id, lead.id);
+    for (const key of duplicateIdentityKeys(lead)) {
+      const owner = keyOwner.get(key);
+      if (owner) union(owner, lead.id);
+      else keyOwner.set(key, lead.id);
+    }
+  }
+
+  const groups = new Map<string, Lead[]>();
+  for (const lead of leads) {
+    const root = find(lead.id);
+    const group = groups.get(root) ?? [];
+    group.push(lead);
+    groups.set(root, group);
+  }
+
+  const duplicates = new Map<string, Lead[]>();
+  for (const [root, group] of groups) {
+    if (group.length <= 1) continue;
+    duplicates.set(
+      root,
+      group.slice().sort((a, b) => {
+        const scoreDiff = (b.prospect_score ?? -1) - (a.prospect_score ?? -1);
+        if (scoreDiff !== 0) return scoreDiff;
+        return a.name.localeCompare(b.name);
+      })
+    );
+  }
+  return duplicates;
+}
+
+export async function tagDuplicates(leads: Lead[]): Promise<void> {
+  const groups = detectDuplicates(leads);
+  if (groups.size === 0) return;
+
+  const db = getSupabase();
+  for (const group of groups.values()) {
+    for (let i = 0; i < group.length; i++) {
+      const lead = group[i]!;
+      const tagSet = new Set(lead.tags);
+      tagSet.add(DUPLICATE_TAG);
+      if (i > 0) tagSet.add(DUPLICATE_SECONDARY_TAG);
+      const tags = Array.from(tagSet);
+      const { error } = await db
+        .from("leads")
+        .update({ tags })
+        .eq("id", lead.id);
+      if (error) throw new Error(`Failed to tag duplicate lead ${lead.id}: ${error.message}`);
+    }
+  }
 }
 
 export function cleanupMergedTagsForEnrichment(
@@ -224,6 +357,7 @@ export async function upsertLeads(
 
 export async function listLeads(params: {
   runId?: string;
+  seenInRunId?: string;
   passedOnly?: boolean;
   rejectedOnly?: boolean;
   limit?: number;
@@ -231,9 +365,10 @@ export async function listLeads(params: {
   let query = getSupabase().from("leads").select("*").order("name");
 
   if (params.runId) {
-    query = query.or(
-      `first_seen_run_id.eq.${params.runId},last_seen_run_id.eq.${params.runId}`
-    );
+    query = query.eq("first_seen_run_id", params.runId);
+  }
+  if (params.seenInRunId) {
+    query = query.eq("last_seen_run_id", params.seenInRunId);
   }
 
   if (params.passedOnly) {
@@ -251,12 +386,19 @@ export async function listLeads(params: {
   return (data ?? []) as Lead[];
 }
 
-export async function loadLeadsByRunId(runId: string): Promise<Lead[]> {
-  const { data, error } = await getSupabase()
+export async function loadLeadsByRunId(
+  runId: string,
+  opts: { passedOnly?: boolean } = { passedOnly: true }
+): Promise<Lead[]> {
+  let query = getSupabase()
     .from("leads")
     .select("*")
     .or(`first_seen_run_id.eq.${runId},last_seen_run_id.eq.${runId}`)
     .order("name");
+  if (opts.passedOnly) {
+    query = query.eq("passed_filter", true);
+  }
+  const { data, error } = await query;
 
   if (error) throw new Error(`Failed to load leads for run ${runId}: ${error.message}`);
   return (data ?? []) as Lead[];
@@ -329,7 +471,7 @@ export async function updateLeadEnrichment(
     mergedTags.push("whatsapp-derived");
   }
 
-  const { error } = await db
+  const updateQuery = db
     .from("leads")
     .update({
       digital_footprint: mergedFootprint,
@@ -337,7 +479,22 @@ export async function updateLeadEnrichment(
       whatsapp: mergedWhatsapp,
     })
     .eq("id", leadId);
+
+  const updateResult = await (
+    typeof (updateQuery as { select?: unknown }).select === "function"
+      ? (updateQuery as unknown as {
+          select: (columns: string) => {
+            single: () => Promise<{ data: unknown; error: { message: string } | null }>;
+          };
+        }).select("id").single()
+      : updateQuery
+  ) as { data?: unknown; error: { message: string } | null };
+
+  const { error } = updateResult;
   if (error) throw new Error(`Failed to update lead ${leadId}: ${error.message}`);
+  if ("data" in updateResult && updateResult.data === null) {
+    throw new Error(`Supabase returned no row for leadId=${leadId}`);
+  }
 }
 
 export async function updateLeadSocialSearch(

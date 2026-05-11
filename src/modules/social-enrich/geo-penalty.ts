@@ -45,6 +45,12 @@ interface GeographicPenaltyInput {
   phone?: string | null;
 }
 
+export interface GeoCtx {
+  foreignTlds?: ReadonlySet<string>;
+  foreignGeoTerms?: readonly string[];
+  foreignPhonePrefixes?: readonly string[];
+}
+
 function asciiFold(input: string): string {
   return input.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 }
@@ -64,27 +70,30 @@ function hostnameFrom(input: string): string | null {
   }
 }
 
-export function hasForeignTld(value: string | null | undefined): boolean {
+export function hasForeignTld(value: string | null | undefined, ctx?: GeoCtx): boolean {
   const hostname = hostnameFrom(value ?? "");
   if (!hostname) return false;
 
   const parts = hostname.split(".");
   const tld = parts.at(-1);
-  return tld ? FOREIGN_TLDS.has(tld) : false;
+  const foreignTlds = ctx?.foreignTlds ?? FOREIGN_TLDS;
+  return tld ? foreignTlds.has(tld) : false;
 }
 
-export function hasForeignGeoText(value: string | null | undefined): boolean {
+export function hasForeignGeoText(value: string | null | undefined, ctx?: GeoCtx): boolean {
   const normalized = asciiFold(value ?? "").toLowerCase();
   if (!normalized) return false;
 
-  return FOREIGN_GEO_TERMS.some((term) => normalized.includes(asciiFold(term).toLowerCase()));
+  const foreignGeoTerms = ctx?.foreignGeoTerms ?? FOREIGN_GEO_TERMS;
+  return foreignGeoTerms.some((term) => normalized.includes(asciiFold(term).toLowerCase()));
 }
 
-export function hasForeignPhonePrefix(value: string | null | undefined): boolean {
+export function hasForeignPhonePrefix(value: string | null | undefined, ctx?: GeoCtx): boolean {
   const normalized = (value ?? "").replace(/[\s().-]+/g, "");
   if (!normalized || normalized.startsWith("+598") || normalized.startsWith("00598")) return false;
 
-  return FOREIGN_PHONE_PREFIXES.some((prefix) => {
+  const foreignPhonePrefixes = ctx?.foreignPhonePrefixes ?? FOREIGN_PHONE_PREFIXES;
+  return foreignPhonePrefixes.some((prefix) => {
     const digits = prefix.replace("+", "");
     return normalized.startsWith(prefix) || normalized.startsWith(`00${digits}`);
   });
@@ -92,13 +101,14 @@ export function hasForeignPhonePrefix(value: string | null | undefined): boolean
 
 export function applyGeographicPenalties(
   confidence: number,
-  input: GeographicPenaltyInput
+  input: GeographicPenaltyInput,
+  ctx?: GeoCtx
 ): number {
   let penalty = 0;
 
-  if (hasForeignTld(input.website)) penalty += 0.3;
-  if (hasForeignGeoText(input.description)) penalty += 0.4;
-  if (hasForeignPhonePrefix(input.phone)) penalty += 0.4;
+  if (hasForeignTld(input.website, ctx)) penalty += 0.3;
+  if (hasForeignGeoText(input.description, ctx)) penalty += 0.4;
+  if (hasForeignPhonePrefix(input.phone, ctx)) penalty += 0.4;
 
   return Number(Math.max(0, confidence - penalty).toFixed(2));
 }

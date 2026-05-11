@@ -17,6 +17,11 @@ vi.mock("../../src/storage/vocabulary.js", () => ({
   loadFilterWordsForNiche: vi.fn(),
 }));
 
+vi.mock("../../src/storage/system-lists.js", () => ({
+  loadAllRuntime: vi.fn(),
+  detectAndSeedEmailProviders: vi.fn(),
+}));
+
 vi.mock("../../src/modules/enrichment/index.js", () => ({
   enrichLead: vi.fn(),
 }));
@@ -25,6 +30,7 @@ import { enrichCommand } from "../../src/cli/commands/enrich.js";
 import { getRunById, createEnrichmentRun, completeRun } from "../../src/storage/runs.js";
 import { loadLeadsByRunId, updateLeadEnrichment } from "../../src/storage/leads.js";
 import { loadFilterWordsForNiche } from "../../src/storage/vocabulary.js";
+import { detectAndSeedEmailProviders, loadAllRuntime } from "../../src/storage/system-lists.js";
 import { enrichLead } from "../../src/modules/enrichment/index.js";
 
 const RUN_ID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
@@ -74,6 +80,40 @@ const baseEnrichResult = {
   duration_ms: 10,
 };
 
+const baseRuntime = {
+  lists: {
+    blockedEmailDomains: new Set<string>(),
+    freeEmailDomains: new Set<string>(),
+    blockedEmailPrefixes: [] as string[],
+    stopWords: new Set<string>(),
+    vocabularyStopWords: new Set<string>(),
+    geographicStopWords: new Set<string>(),
+    properNounStopWords: new Set<string>(),
+    socialDomains: [] as string[],
+    platformHosts: {},
+    blockedInstagramHosts: [] as string[],
+    foreignTlds: new Set<string>(),
+    foreignGeoTerms: [] as string[],
+    foreignPhonePrefixes: [] as string[],
+  },
+  patterns: {
+    booking: [] as string[],
+    reservation: [] as string[],
+    delivery: [] as string[],
+    classBooking: [] as string[],
+    appStore: [] as { pattern: string; matchType: string }[],
+    menuKeywords: [] as string[],
+    catalogKeywords: [] as string[],
+    chatWidgets: [] as string[],
+  },
+  mappings: {
+    descriptorWords: new Map<string, string>(),
+    nicheAliases: [] as { niche: string; term: string; matchType: string }[],
+    directoryCategories: new Map<string, string | null>(),
+    nicheStopWords: new Map<string, Set<string>>(),
+  },
+};
+
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(getRunById).mockResolvedValue({ id: RUN_ID } as never);
@@ -82,6 +122,8 @@ beforeEach(() => {
   vi.mocked(updateLeadEnrichment).mockResolvedValue(undefined);
   vi.mocked(enrichLead).mockResolvedValue(baseEnrichResult);
   vi.mocked(loadFilterWordsForNiche).mockResolvedValue(new Set());
+  vi.mocked(loadAllRuntime).mockResolvedValue(baseRuntime);
+  vi.mocked(detectAndSeedEmailProviders).mockResolvedValue(0);
 });
 
 describe("enrichCommand — vocabulary loading", () => {
@@ -121,7 +163,78 @@ describe("enrichCommand — vocabulary loading", () => {
 
     expect(enrichLead).toHaveBeenCalledWith(
       expect.anything(),
-      expect.objectContaining({ extraStopWords: stopWords })
+      expect.objectContaining({ extraStopWords: stopWords }),
+      undefined,
+      expect.anything()
+    );
+  });
+
+  it("passes runtime-derived context to enrichLead", async () => {
+    vi.mocked(loadAllRuntime).mockResolvedValue({
+      ...baseRuntime,
+      lists: {
+        ...baseRuntime.lists,
+        blockedEmailDomains: new Set(["blocked.test"]),
+        freeEmailDomains: new Set(["gmail.com"]),
+        blockedEmailPrefixes: ["noreply"],
+        stopWords: new Set(["de"]),
+        foreignTlds: new Set(["mx"]),
+        foreignGeoTerms: ["mexico"],
+        foreignPhonePrefixes: ["+52"],
+      },
+      patterns: {
+        ...baseRuntime.patterns,
+        reservation: ["reservando.uy"],
+        delivery: ["pedidosya.com"],
+        classBooking: ["mindbody.io"],
+        appStore: [{ pattern: "apps.apple.com", matchType: "domain" }],
+        menuKeywords: ["ver menu"],
+        catalogKeywords: ["stock"],
+        chatWidgets: ["tawk.to"],
+      },
+      mappings: {
+        ...baseRuntime.mappings,
+        descriptorWords: new Map([["peluqueria", "pelu"]]),
+        nicheStopWords: new Map([
+          ["all", new Set(["centro"])],
+          ["hairdresser", new Set(["barbero"])],
+        ]),
+      },
+    });
+    vi.mocked(loadLeadsByRunId).mockResolvedValue([makeLead({ niche: "hairdresser" })]);
+
+    await enrichCommand({ run: RUN_ID, forceRefresh: false, withHeuristic: false, concurrency: 1 });
+
+    expect(enrichLead).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      undefined,
+      expect.objectContaining({
+        emailCtx: expect.objectContaining({
+          blockedDomains: new Set(["blocked.test"]),
+          freeDomains: new Set(["gmail.com"]),
+          blockedPrefixes: ["noreply"],
+        }),
+        geoCtx: expect.objectContaining({
+          foreignTlds: new Set(["mx"]),
+          foreignGeoTerms: ["mexico"],
+          foreignPhonePrefixes: ["+52"],
+        }),
+        operationalCtx: expect.objectContaining({
+          reservationPlatforms: ["reservando.uy"],
+          deliveryPlatforms: ["pedidosya.com"],
+          classBookingPlatforms: ["mindbody.io"],
+          appStorePlatforms: ["apps.apple.com"],
+          menuKeywords: ["ver menu"],
+          catalogKeywords: ["stock"],
+          chatWidgetPatterns: ["tawk.to"],
+        }),
+        heuristicListsCtx: expect.objectContaining({
+          stopWords: new Set(["de"]),
+          nicheStopWords: new Set(["centro", "barbero"]),
+          descriptorWords: new Map([["peluqueria", "pelu"]]),
+        }),
+      })
     );
   });
 
@@ -153,5 +266,23 @@ describe("enrichCommand — vocabulary loading", () => {
     ).resolves.not.toThrow();
 
     expect(enrichLead).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("enrichCommand — passed_filter scoping", () => {
+  it("loads only passed leads by default (no --all)", async () => {
+    vi.mocked(loadLeadsByRunId).mockResolvedValue([]);
+
+    await enrichCommand({ run: RUN_ID, forceRefresh: false, withHeuristic: false, concurrency: 1 });
+
+    expect(loadLeadsByRunId).toHaveBeenCalledWith(RUN_ID, { passedOnly: true });
+  });
+
+  it("loads all leads when --all is set", async () => {
+    vi.mocked(loadLeadsByRunId).mockResolvedValue([]);
+
+    await enrichCommand({ run: RUN_ID, forceRefresh: false, withHeuristic: false, concurrency: 1, all: true });
+
+    expect(loadLeadsByRunId).toHaveBeenCalledWith(RUN_ID, { passedOnly: false });
   });
 });

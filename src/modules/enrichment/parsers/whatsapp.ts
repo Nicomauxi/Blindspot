@@ -14,11 +14,9 @@ const UY_MOBILE_PREFIXES = new Set(["91", "92", "93", "94", "95", "96", "97", "9
 export function normalizeUruguayMobile(raw: string): string | null {
   const digits = raw.replace(/\D/g, "");
   let local: string | null = null;
-  let localTrunk = false;
 
   if (digits.length === 9 && digits.startsWith("09")) {
     local = digits.slice(1);
-    localTrunk = true;
   } else if (digits.length === 11 && digits.startsWith("5989")) {
     local = digits.slice(3);
   } else if (digits.length === 13 && digits.startsWith("005989")) {
@@ -26,7 +24,6 @@ export function normalizeUruguayMobile(raw: string): string | null {
   }
 
   if (!local || local.length !== 8) return null;
-  if (localTrunk && (local.startsWith("91") || local.startsWith("99"))) return null;
   if (!UY_MOBILE_PREFIXES.has(local.slice(0, 2))) return null;
   return `+598${local}`;
 }

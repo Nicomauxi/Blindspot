@@ -5,6 +5,7 @@ import { normalizeUruguayPhone } from "../enrichment/social-search.js";
 import { applyGeographicPenalties } from "./geo-penalty.js";
 
 const NAVIGATION_TIMEOUT_MS = 15_000;
+const DEFAULT_BLOCKED_HOSTS = ["about.meta.com", "facebook.com", "instagram.com", "meta.com"];
 declare const document: any;
 
 interface InstagramPageData {
@@ -93,7 +94,7 @@ function confidenceFrom(data: InstagramPageData, lead: Pick<Lead, "name">): {
   return { confidence: Number(Math.min(confidence, 0.95).toFixed(2)), signals };
 }
 
-function evaluateInstagramPage(): InstagramPageData {
+function evaluateInstagramPage({ blockedHosts }: { blockedHosts: string[] }): InstagramPageData {
   const metaTitle = document.querySelector("meta[property='og:title']")?.content ?? null;
   const description =
     document.querySelector("meta[property='og:description']")?.content ??
@@ -105,7 +106,6 @@ function evaluateInstagramPage(): InstagramPageData {
   const profileAnchors = profileRoots.flatMap((root) =>
     Array.from(root.querySelectorAll("a[href]")) as Array<{ href: string }>
   );
-  const blockedHosts = ["about.meta.com", "facebook.com", "instagram.com", "meta.com"];
   const external_url =
     profileAnchors.map((anchor) => anchor.href).find((href) => {
       try {
@@ -131,13 +131,17 @@ function evaluateInstagramPage(): InstagramPageData {
 export async function extractInstagramProfile(
   page: SocialEnrichPage,
   url: string,
-  lead: Pick<Lead, "id" | "name">
+  lead: Pick<Lead, "id" | "name">,
+  blockedHosts = DEFAULT_BLOCKED_HOSTS
 ): Promise<PlaywrightInstagramSearchResult | null> {
   const log = getLogger();
   try {
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: NAVIGATION_TIMEOUT_MS });
     await page.waitForLoadState("networkidle", { timeout: NAVIGATION_TIMEOUT_MS });
-    const extracted = await page.evaluate(evaluateInstagramPage);
+    const extracted = await page.evaluate(
+      (args) => evaluateInstagramPage(args),
+      { blockedHosts: [...blockedHosts] }
+    );
     const data: InstagramPageData = {
       name: cleanText(extracted.name),
       bio: cleanText(extracted.bio),

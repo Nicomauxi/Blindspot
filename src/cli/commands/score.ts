@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { getLogger } from "../../shared/logger.js";
-import { loadLeadsByRunId, loadAllLeads, updateLeadScore } from "../../storage/leads.js";
+import { loadLeadsByRunId, loadAllLeads, updateLeadScore, tagDuplicates } from "../../storage/leads.js";
 import { createScoringRun, completeScoringRun, failRun, getRunById } from "../../storage/runs.js";
 import { scoreLead } from "../../modules/scoring/index.js";
 import type { Lead, ScoringRunStats, ProspectEntry } from "../../shared/types.js";
@@ -110,6 +110,13 @@ export async function scoreCommand(rawArgs: RawScoreArgs): Promise<void> {
       }
 
       scored.push({ lead, prospectScore: result.prospect_score });
+    }
+
+    if (!opts.dryRun) {
+      await tagDuplicates(scored.map(({ lead, prospectScore }) => ({
+        ...lead,
+        prospect_score: prospectScore,
+      })));
     }
 
     const duration_ms = Date.now() - startedAt;

@@ -107,4 +107,24 @@ describe("leadsListCommand", () => {
     const callArg = mockListLeads.mock.calls[0]?.[0] as Record<string, unknown>;
     expect(callArg).not.toHaveProperty("runId");
   });
+
+  it("--run <id> passes runId (first_seen) and no seenInRunId", async () => {
+    mockListLeads.mockResolvedValue(makeLeads(2));
+
+    await leadsListCommand({ run: "run-first-001" });
+
+    const callArg = mockListLeads.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(callArg).toHaveProperty("runId", "run-first-001");
+    expect(callArg).not.toHaveProperty("seenInRunId");
+  });
+
+  it("--seen-in <id> passes seenInRunId (last_seen) and no runId", async () => {
+    mockListLeads.mockResolvedValue(makeLeads(2));
+
+    await leadsListCommand({ seenIn: "run-last-002" });
+
+    const callArg = mockListLeads.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(callArg).toHaveProperty("seenInRunId", "run-last-002");
+    expect(callArg).not.toHaveProperty("runId");
+  });
 });

@@ -133,6 +133,60 @@ export const nullScore = base({
   first_seen_run_id: "run-old-999",
 });
 
+// fully enriched lead with social, heuristic web, and contact emails
+export const fullEnriched = base({
+  id: "report-enriched-1",
+  place_id: "ChIJenriched000",
+  niche: "hairdresser",
+  name: "Salon Enriquecido",
+  address: "Colonia 1234, Montevideo",
+  phone: "+59899555666",
+  rating: 4.8,
+  review_count: 60,
+  business_status: "OPERATIONAL",
+  tags: ["profile:a", "website-heuristic", "fb-confirmed"],
+  prospect_score: 65,
+  business_quality_score: 70,
+  digital_gap_score: 30,
+  systems_gap_score: 10,
+  first_seen_run_id: "run-enriched-001",
+  digital_footprint: {
+    skipped: false,
+    fetched_at: "2026-01-01T00:00:00Z",
+    heuristic_discovery: {
+      ran_at: "2026-01-01T00:00:00Z",
+      mode: "full",
+      stale: false,
+      candidates: { website: [], facebook: [], instagram: [], whatsapp: [] },
+      selected: {
+        website: { url: "https://salonenriquecido.com.uy", score: 0.9, signals: [], source: "heuristic", tag: "website-heuristic" },
+        facebook: null,
+        instagram: null,
+        whatsapp: null,
+      },
+    },
+    social_search: {
+      ran_at: "2026-01-01T00:00:00Z",
+      source: "duckduckgo",
+      facebook: {
+        query: "Salon Enriquecido facebook",
+        results: [],
+        best_url: "https://facebook.com/salonenriquecido",
+        additional_phones: [],
+        confidence: 0.8,
+      },
+      instagram: {
+        query: "Salon Enriquecido instagram",
+        results: [],
+        best_url: "https://instagram.com/salonenriquecido",
+        additional_phones: [],
+        confidence: 0.75,
+      },
+    },
+    contact_emails: ["info@salonenriquecido.com.uy", "reservas@salonenriquecido.com.uy"],
+  },
+});
+
 // tildes + ampersand in name — exercises slugify and CSV special-char encoding
 export const specialChars = base({
   id: "report-special-1",

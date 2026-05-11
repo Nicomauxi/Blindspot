@@ -1,15 +1,20 @@
 import { describe, it, expect } from "vitest";
 import Papa from "papaparse";
 import { generateCsv } from "../../src/modules/reporting/csv.js";
-import { fullScored, fbOnly, nullScore, specialChars } from "./fixtures/leads.js";
+import { fullScored, fbOnly, nullScore, specialChars, fullEnriched } from "./fixtures/leads.js";
 
 const CSV_COLUMNS = [
   "place_id",
   "name",
+  "niche",
   "address",
   "phone",
   "whatsapp",
   "website",
+  "heuristic_web",
+  "fb_url",
+  "ig_url",
+  "contact_emails",
   "rating",
   "review_count",
   "business_status",
@@ -81,5 +86,27 @@ describe("generateCsv", () => {
     const { data, errors } = parseBack(csv);
     expect(errors).toHaveLength(0);
     expect(data[0]?.name).toBe('Café "El Rincón", Montevideo');
+  });
+
+  it("fullEnriched: heuristic_web, fb_url, ig_url, contact_emails populated", () => {
+    const csv = generateCsv([fullEnriched]);
+    const { data } = parseBack(csv);
+    const row = data[0];
+    expect(row?.heuristic_web).toBe("https://salonenriquecido.com.uy");
+    expect(row?.fb_url).toBe("https://facebook.com/salonenriquecido");
+    expect(row?.ig_url).toBe("https://instagram.com/salonenriquecido");
+    expect(row?.contact_emails).toBe("info@salonenriquecido.com.uy;reservas@salonenriquecido.com.uy");
+    expect(row?.niche).toBe("hairdresser");
+  });
+
+  it("null footprint: new contact fields render as empty strings", () => {
+    const csv = generateCsv([nullScore]);
+    const { data } = parseBack(csv);
+    const row = data[0];
+    expect(row?.heuristic_web).toBe("");
+    expect(row?.fb_url).toBe("");
+    expect(row?.ig_url).toBe("");
+    expect(row?.contact_emails).toBe("");
+    expect(row?.niche).toBe("");
   });
 });

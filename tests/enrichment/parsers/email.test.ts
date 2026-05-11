@@ -42,6 +42,38 @@ describe("parseEmails", () => {
     expect(result.emails).toEqual(["reservas@negocio.uy"]);
   });
 
+  it("uses custom blocked domains without blocking default domains", () => {
+    const result = parseEmails(
+      `
+      <html><body>
+        <p>contacto@custom.com soporte@sentry.io ventas@negocio.uy</p>
+      </body></html>
+    `,
+      { blockedDomains: new Set(["custom.com"]) }
+    );
+
+    expect(result.emails).toEqual(["soporte@sentry.io", "ventas@negocio.uy"]);
+  });
+
+  it("uses custom blocked prefixes", () => {
+    const result = parseEmails(
+      `
+      <html><body>
+        <p>info@negocio.uy ventas@negocio.uy</p>
+      </body></html>
+    `,
+      { blockedPrefixes: ["info"] }
+    );
+
+    expect(result.emails).toEqual(["ventas@negocio.uy"]);
+  });
+
+  it("keeps default parsing when ctx is omitted", () => {
+    const result = parseEmails("<html><body><p>test@example.com ventas@negocio.uy</p></body></html>");
+
+    expect(result.emails).toEqual(["ventas@negocio.uy"]);
+  });
+
   it("filters hosting-provider emails without blocking business domains", () => {
     const result = parseEmails(`
       <html><body>
@@ -68,5 +100,43 @@ describe("parseEmails", () => {
     const result = parseEmails("<html><body><p>Sin correo visible</p></body></html>");
 
     expect(result).toEqual({ emails: [], has_contact_email: false });
+  });
+
+  it("rejects glued local parts before a free email inbox", () => {
+    const result = parseEmails("<html><body><p>contactameclaudiauy.info@gmail.com</p></body></html>");
+
+    expect(result.emails).not.toContain("contactameclaudiauy.info@gmail.com");
+    expect(result.has_contact_email).toBe(false);
+  });
+
+  it("accepts standalone free email inboxes", () => {
+    const result = parseEmails("<html><body><p>info@gmail.com</p></body></html>");
+
+    expect(result.emails).toContain("info@gmail.com");
+  });
+
+  it("accepts valid local parts with dots", () => {
+    const result = parseEmails("<html><body><p>nombre.apellido@negocio.com.uy</p></body></html>");
+
+    expect(result.emails).toContain("nombre.apellido@negocio.com.uy");
+  });
+
+  it("rejects local parts longer than 64 characters", () => {
+    const local = "a".repeat(65);
+    const result = parseEmails(`<html><body><p>${local}@negocio.uy</p></body></html>`);
+
+    expect(result.emails).toEqual([]);
+  });
+
+  it("rejects local parts with consecutive dots", () => {
+    const result = parseEmails("<html><body><p>a..b@negocio.uy</p></body></html>");
+
+    expect(result.emails).toEqual([]);
+  });
+
+  it("rejects local parts with a leading dot", () => {
+    const result = parseEmails("<html><body><p>.start@negocio.uy</p></body></html>");
+
+    expect(result.emails).toEqual([]);
   });
 });

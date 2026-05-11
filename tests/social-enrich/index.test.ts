@@ -7,6 +7,7 @@ vi.mock("../../src/shared/config.js", () => ({
     HEURISTIC_REFRESH_DAYS: 30,
     DIRECTORY_REFRESH_DAYS: 30,
     SOCIAL_SEARCH_REFRESH_DAYS: 30,
+    SOCIAL_ENRICH_CONCURRENCY: 2,
   })),
 }));
 

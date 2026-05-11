@@ -17,6 +17,7 @@ import {
 } from "./directory-discovery.js";
 import {
   discoverHeuristicSources,
+  type HeuristicListsCtx,
   isHeuristicStale,
 } from "./heuristic-discovery.js";
 import {
@@ -29,12 +30,15 @@ import { parseViewport } from "./parsers/viewport.js";
 import { normalizeUruguayMobile, parseWhatsapp } from "./parsers/whatsapp.js";
 import { parseSocialLinks } from "./parsers/social-links.js";
 import { parseOperationalSystems } from "./parsers/operational-systems.js";
+import type { OperationalSystemsCtx } from "./parsers/operational-systems.js";
 import { parseEmails } from "./parsers/email.js";
+import type { EmailParseCtx } from "./parsers/email.js";
 import { parseWebPhones } from "./parsers/phone-web.js";
 import { parseHoursOnWeb } from "./parsers/hours-web.js";
 import { OUTDATED_YEAR_THRESHOLD, parseCopyrightYear } from "./parsers/copyright-year.js";
 import { parseSsl } from "./parsers/ssl.js";
 import { whoisLookup, normalizeDomain } from "./whois.js";
+import type { GeoCtx } from "../social-enrich/geo-penalty.js";
 
 const HTML_CACHE_MS = 7 * 24 * 60 * 60 * 1_000;
 const WHOIS_CACHE_MS = 30 * 24 * 60 * 60 * 1_000;
@@ -46,6 +50,13 @@ export interface EnrichLeadOptions {
   forceRefresh: boolean;
   withHeuristic?: boolean;
   extraStopWords?: ReadonlySet<string>;
+}
+
+export interface EnrichmentCtx {
+  emailCtx?: EmailParseCtx;
+  geoCtx?: GeoCtx;
+  operationalCtx?: OperationalSystemsCtx;
+  heuristicListsCtx?: HeuristicListsCtx;
 }
 
 export type EnrichOutcome =
@@ -230,6 +241,7 @@ function heuristicTags(discovery: HeuristicDiscovery | null): string[] {
 function socialSearchTags(search: SocialSearch | null): string[] {
   const tags: string[] = [];
   if (!search) return tags;
+  if (search.source === "duckduckgo-fallback") return tags;
   if (search.source === "duckduckgo") {
     if (search.facebook.best_url && search.facebook.confidence >= SOCIAL_SEARCH_THRESHOLD) {
       tags.push("fb-confirmed");
@@ -245,25 +257,30 @@ function socialSearchTags(search: SocialSearch | null): string[] {
     }
     return tags;
   }
-  if (search.facebook && search.facebook.confidence >= 0.7) {
-    tags.push("fb-confirmed");
-    if (search.facebook.whatsapp_button) tags.push("whatsapp-confirmed");
-  }
-  if (search.instagram && search.instagram.confidence >= 0.7) {
-    tags.push("ig-confirmed");
+  if (search.source === "playwright") {
+    if (search.facebook && search.facebook.confidence >= 0.7) {
+      tags.push("fb-confirmed");
+      if (search.facebook.whatsapp_button) tags.push("whatsapp-confirmed");
+    }
+    if (search.instagram && search.instagram.confidence >= 0.7) {
+      tags.push("ig-confirmed");
+    }
   }
   return tags;
 }
 
 function socialSearchAdditionalPhones(search: SocialSearch | null): string[] {
   if (!search) return [];
-  if (search.source === "duckduckgo") {
+  if (search.source === "duckduckgo" || search.source === "duckduckgo-fallback") {
     return Array.from(new Set([
       ...search.facebook.additional_phones,
       ...search.instagram.additional_phones,
     ]));
   }
-  return search.facebook?.phone ? [search.facebook.phone] : [];
+  if (search.source === "playwright") {
+    return search.facebook?.phone ? [search.facebook.phone] : [];
+  }
+  return [];
 }
 
 function socialSearchEmails(search: SocialSearch | null): string[] {
@@ -294,7 +311,8 @@ async function resolveHeuristic(
   mode: HeuristicDiscoveryMode,
   opts: EnrichLeadOptions,
   deps: EnrichmentDeps,
-  additionalWebsiteUrls: string[] = []
+  additionalWebsiteUrls: string[] = [],
+  ctx?: EnrichmentCtx
 ): Promise<HeuristicDiscovery> {
   const previous = getHeuristic(lead.digital_footprint);
   const wasStale = isHeuristicStale(previous);
@@ -316,6 +334,7 @@ async function resolveHeuristic(
     {
       additionalWebsiteUrls,
       ...(opts.extraStopWords !== undefined ? { extraStopWords: opts.extraStopWords } : {}),
+      ...(ctx?.heuristicListsCtx !== undefined ? { listsCtx: ctx.heuristicListsCtx } : {}),
     }
   );
 }
@@ -357,7 +376,8 @@ async function resolveSocialSearch(
 export async function enrichLead(
   lead: Lead,
   opts: EnrichLeadOptions,
-  depsOverrides: Partial<EnrichmentDeps> = {}
+  depsOverrides: Partial<EnrichmentDeps> = {},
+  ctx?: EnrichmentCtx
 ): Promise<EnrichLeadResult> {
   const deps: EnrichmentDeps = { ...DEFAULT_DEPS, ...depsOverrides };
   const log = getLogger();
@@ -389,7 +409,7 @@ export async function enrichLead(
       ? [directoryDiscovery.best_website]
       : [];
     const mode: HeuristicDiscoveryMode = isSocialWebsite ? "website-only" : "full";
-    heuristicDiscovery = await resolveHeuristic(lead, mode, opts, deps, directoryWebsiteUrls);
+    heuristicDiscovery = await resolveHeuristic(lead, mode, opts, deps, directoryWebsiteUrls, ctx);
     if (heuristicDiscovery.selected.website) {
       effectiveWebsite = heuristicDiscovery.selected.website.url;
     }
@@ -494,9 +514,9 @@ export async function enrichLead(
         Promise.resolve(parseViewport(html)),
         Promise.resolve(parseWhatsapp(html)),
         Promise.resolve(parseSocialLinks(html)),
-        Promise.resolve(parseOperationalSystems(html)),
+        Promise.resolve(parseOperationalSystems(html, ctx?.operationalCtx)),
         Promise.resolve(parseCopyrightYear(html)),
-        Promise.resolve(parseEmails(html)),
+        Promise.resolve(parseEmails(html, ctx?.emailCtx)),
         Promise.resolve(parseWebPhones(html, lead.phone)),
         Promise.resolve(parseHoursOnWeb(html)),
       ]);
@@ -554,6 +574,21 @@ export async function enrichLead(
     ...heuristicTags(heuristicDiscovery),
     ...socialSearchTags(socialSearch),
   ];
+
+  // GAP D: website presente pero sin presencia social confirmada o heurística.
+  const hasWeb = tags_to_add.includes("website-heuristic") || !!effectiveWebsite;
+  const hasSocial = [
+    "fb-confirmed", "ig-confirmed",
+    "fb-heuristic", "ig-heuristic",
+    "fb-only-presence", "ig-only-presence",
+    "social-link-only",
+  ].some((t) => tags_to_add.includes(t));
+  // duckduckgo-fallback significa que DDG fue bloqueado; no sabemos si tienen social.
+  const socialRan = !!socialSearch?.source && socialSearch.source !== "duckduckgo-fallback";
+  if (hasWeb && !hasSocial && socialRan) {
+    tags_to_add.push("web-only-no-social");
+  }
+
   const socialMobile = socialSearchAdditionalPhones(socialSearch)
     .map((phone) => normalizeUruguayMobile(phone))
     .find((phone): phone is string => phone !== null) ?? null;

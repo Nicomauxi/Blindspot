@@ -3,6 +3,13 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // ── Mocks (hoisted by Vitest) ────────────────────────────────────────────────
 
 const writtenFiles: Map<string, string> = new Map();
+const mockLogger = vi.hoisted(() => ({
+  level: "info",
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+  debug: vi.fn(),
+}));
 
 vi.mock("fs/promises", () => ({
   mkdir: vi.fn(async () => undefined),
@@ -14,7 +21,7 @@ vi.mock("../../src/shared/config.js", () => ({
 }));
 
 vi.mock("../../src/shared/logger.js", () => ({
-  getLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
+  getLogger: () => mockLogger,
 }));
 
 vi.mock("../../src/storage/runs.js", () => ({
@@ -25,6 +32,45 @@ vi.mock("../../src/storage/runs.js", () => ({
 
 vi.mock("../../src/storage/leads.js", () => ({
   upsertLeads: vi.fn().mockResolvedValue({ inserted: [], updated: [] }),
+}));
+
+vi.mock("../../src/storage/system-lists.js", () => ({
+  loadAllRuntime: vi.fn().mockResolvedValue({
+    lists: {
+      blockedEmailDomains: new Set(),
+      freeEmailDomains: new Set(),
+      blockedEmailPrefixes: [],
+      stopWords: new Set(),
+      vocabularyStopWords: new Set(),
+      geographicStopWords: new Set(),
+      properNounStopWords: new Set(),
+      socialDomains: [],
+      platformHosts: {},
+      blockedInstagramHosts: [],
+      foreignTlds: new Set(),
+      foreignGeoTerms: [],
+      foreignPhonePrefixes: [],
+    },
+    patterns: {
+      booking: [],
+      reservation: [],
+      delivery: [],
+      classBooking: [],
+      appStore: [],
+      menuKeywords: [],
+      catalogKeywords: [],
+      chatWidgets: [],
+    },
+    mappings: {
+      descriptorWords: new Map(),
+      nicheAliases: [
+        { niche: "hairdresser", term: "peluquer", matchType: "contains" },
+        { niche: "car_dealer", term: "car dealer", matchType: "contains" },
+      ],
+      directoryCategories: new Map(),
+      nicheStopWords: new Map(),
+    },
+  }),
 }));
 
 vi.mock("../../src/modules/discovery/places.js", () => ({
@@ -88,6 +134,11 @@ function parseTraceJson() {
 describe("--trace flag", () => {
   beforeEach(() => {
     writtenFiles.clear();
+    mockLogger.level = "info";
+    mockLogger.info.mockClear();
+    mockLogger.warn.mockClear();
+    mockLogger.error.mockClear();
+    mockLogger.debug.mockClear();
     mockWriteFile.mockClear();
     mockCompleteRun.mockClear();
     mockUpsertLeads.mockClear();
@@ -128,6 +179,22 @@ describe("--trace flag", () => {
   it("without --trace: run-trace.json is NOT written", async () => {
     await discoverCommand({ ...BASE_ARGS, trace: false });
     expect(findTraceCall()).toBeUndefined();
+  });
+
+  it("with --trace: restores logger level after command completes", async () => {
+    mockLogger.level = "warn";
+    mockFetchPlaceCandidates.mockImplementationOnce(async () => {
+      expect(mockLogger.level).toBe("debug");
+      return {
+        candidates: [],
+        textSearchRequestCount: 1,
+        requestLog: [],
+      };
+    });
+
+    await discoverCommand({ ...BASE_ARGS, trace: true });
+
+    expect(mockLogger.level).toBe("warn");
   });
 
   it("with --trace: one Text Search and zero Details costs 0.035 in trace and persisted stats", async () => {

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { generateMdPerLead } from "../../src/modules/reporting/md.js";
-import { fullScored, nullScore, specialChars, fbOnly } from "./fixtures/leads.js";
+import { fullScored, nullScore, specialChars, fbOnly, fullEnriched } from "./fixtures/leads.js";
 
 describe("generateMdPerLead", () => {
   it("returns one file per lead", () => {
@@ -55,5 +55,23 @@ describe("generateMdPerLead", () => {
     const content = [...map.values()][0] ?? "";
     expect(content).toContain("## Notas");
     expect(content).toContain("<!--");
+  });
+
+  it("fullEnriched: contact section includes heuristic web, social, and emails", () => {
+    const map = generateMdPerLead([fullEnriched]);
+    const content = [...map.values()][0] ?? "";
+    expect(content).toContain("https://salonenriquecido.com.uy");
+    expect(content).toContain("https://facebook.com/salonenriquecido");
+    expect(content).toContain("https://instagram.com/salonenriquecido");
+    expect(content).toContain("info@salonenriquecido.com.uy");
+  });
+
+  it("null footprint: contact section has no heuristic/social/email lines", () => {
+    const map = generateMdPerLead([nullScore]);
+    const content = [...map.values()][0] ?? "";
+    expect(content).not.toContain("Web detectado:");
+    expect(content).not.toContain("Facebook:");
+    expect(content).not.toContain("Instagram:");
+    expect(content).not.toContain("Email(s):");
   });
 });

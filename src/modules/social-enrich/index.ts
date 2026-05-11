@@ -1,4 +1,5 @@
 import pLimit from "p-limit";
+import { getConfig } from "../../shared/config.js";
 import { getLogger } from "../../shared/logger.js";
 import type {
   HeuristicCandidate,
@@ -33,14 +34,10 @@ export interface SocialEnrichStats {
 }
 
 const DEFAULT_LIMIT = 10;
-const DEFAULT_CONCURRENCY = 2;
 const CONFIRMATION_THRESHOLD = 0.7;
 
 function getConcurrency(): number {
-  const raw = process.env["SOCIAL_ENRICH_CONCURRENCY"];
-  if (!raw) return DEFAULT_CONCURRENCY;
-  const n = Number(raw);
-  return Number.isFinite(n) && n > 0 ? Math.floor(n) : DEFAULT_CONCURRENCY;
+  return getConfig().SOCIAL_ENRICH_CONCURRENCY;
 }
 
 function isFreshPlaywrightSearch(lead: Lead): boolean {
@@ -159,6 +156,7 @@ export async function runSocialEnrich(opts: SocialEnrichOptions): Promise<Social
       )
     );
   } finally {
+    try { await session.context.close(); } catch { /* ignore */ }
     await session.browser.close();
   }
 

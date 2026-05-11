@@ -14,6 +14,8 @@ const envSchema = z.object({
   HEURISTIC_REFRESH_DAYS: z.coerce.number().int().positive().default(30),
   DIRECTORY_REFRESH_DAYS: z.coerce.number().int().positive().default(30),
   SOCIAL_SEARCH_REFRESH_DAYS: z.coerce.number().int().positive().default(30),
+  SOCIAL_ENRICH_CONCURRENCY: z.coerce.number().int().positive().default(2),
+  PLAYWRIGHT_EXECUTABLEPATH: z.string().optional(),
 });
 
 export type Config = z.infer<typeof envSchema>;

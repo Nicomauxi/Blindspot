@@ -154,12 +154,20 @@ interface DirectorySearch {
   firstPageUrl: string;
 }
 
+function getCategoryForNiche(
+  niche: string,
+  categoryMap?: Record<string, string | null>
+): string | null {
+  const map = categoryMap ?? DEFAULT_NICHE_CATEGORY_MAP;
+  return map[niche] ?? null;
+}
+
 function buildSearch(
   lead: Pick<Lead, "address" | "niche">,
   config: DirectoryDiscoveryConfig
 ): DirectorySearch | null {
   if (!lead.niche) return null;
-  const category = config.niche_category_map[lead.niche];
+  const category = getCategoryForNiche(lead.niche, config.niche_category_map);
   if (!category) return null;
 
   const city = deriveDirectoryCitySlug(lead.address);

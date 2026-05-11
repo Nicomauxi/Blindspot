@@ -10,8 +10,10 @@ import { getDiscoveryConfig, getProfileConfig } from "../../modules/discovery/co
 import { createRun, completeRun, failRun } from "../../storage/runs.js";
 import { upsertLeads, loadAllLeads } from "../../storage/leads.js";
 import { rebuildVocabularyForNiche } from "../../storage/vocabulary.js";
+import { loadAllRuntime } from "../../storage/system-lists.js";
 import { computeNicheStopWords } from "../../modules/enrichment/vocabulary.js";
 import type { PlaceCandidate, ProfileConfig, RejectionReason } from "../../shared/types.js";
+import type { RuntimeMappings } from "../../storage/system-lists.js";
 
 // Approximate pricing per request used in trace cost estimate
 const TEXT_SEARCH_COST_PER_REQUEST = 0.035;
@@ -48,7 +50,11 @@ export function collectOverride(val: string, prev: string[]): string[] {
   return [...prev, val];
 }
 
-function resolveCandidateNiche(normalizedRequestedNiche: string, candidate: PlaceCandidate): string {
+function resolveCandidateNiche(
+  normalizedRequestedNiche: string,
+  candidate: PlaceCandidate,
+  aliases?: RuntimeMappings["nicheAliases"]
+): string {
   if (normalizedRequestedNiche !== "other") return normalizedRequestedNiche;
 
   const rawPrimaryType =
@@ -60,7 +66,7 @@ function resolveCandidateNiche(normalizedRequestedNiche: string, candidate: Plac
   const primaryType = candidate.primaryType ?? rawPrimaryType;
   if (!primaryType) return normalizedRequestedNiche;
 
-  const normalizedPrimaryType = normalizeNiche(primaryType.replace(/_/g, " "));
+  const normalizedPrimaryType = normalizeNiche(primaryType.replace(/_/g, " "), aliases);
   return normalizedPrimaryType === "other" ? normalizedRequestedNiche : normalizedPrimaryType;
 }
 
@@ -95,11 +101,6 @@ export async function discoverCommand(rawArgs: {
   override?: string[];
   trace?: boolean;
 }): Promise<void> {
-  // Set LOG_LEVEL before first getLogger() call so debug output appears when --trace is active
-  if (rawArgs.trace) {
-    process.env["LOG_LEVEL"] = "debug";
-  }
-
   const log = getLogger();
 
   const parsed = DiscoverArgsSchema.safeParse({
@@ -115,7 +116,12 @@ export async function discoverCommand(rawArgs: {
   }
 
   const opts = parsed.data;
-  const normalizedNiche = normalizeNiche(opts.niche);
+  const previousLevel = log.level;
+  if (opts.trace) log.level = "debug";
+
+  try {
+  const runtime = await loadAllRuntime();
+  const normalizedNiche = normalizeNiche(opts.niche, runtime.mappings.nicheAliases);
   const startedAt = Date.now();
   const startedAtIso = new Date().toISOString();
   log.info({ niche: opts.niche, location: opts.location, profile: opts.profile }, "Starting discover command");
@@ -136,6 +142,18 @@ export async function discoverCommand(rawArgs: {
     },
   });
   log.info({ runId: run.id }, "Run created");
+
+  const cleanup = async (signal: string) => {
+    log.warn({ runId: run.id, signal }, "Process interrupted, marking run as failed");
+    try {
+      await failRun(run.id, `Process interrupted (${signal})`, Date.now() - startedAt);
+    } catch {
+      // best effort
+    }
+    process.exit(1);
+  };
+  process.once("SIGTERM", () => void cleanup("SIGTERM"));
+  process.once("SIGINT", () => void cleanup("SIGINT"));
 
   // Trace accumulators — only populated when --trace is active
   const detailsRequestLog: DetailsRequestEntry[] = [];
@@ -259,13 +277,13 @@ export async function discoverCommand(rawArgs: {
       candidate: c,
       passed: true,
       rejection_reasons: [] as string[],
-      niche: resolveCandidateNiche(normalizedNiche, c),
+      niche: resolveCandidateNiche(normalizedNiche, c, runtime.mappings.nicheAliases),
     }));
     const rejectedItems = rejected.map(({ candidate, reasons }) => ({
       candidate,
       passed: false,
       rejection_reasons: reasons as string[],
-      niche: resolveCandidateNiche(normalizedNiche, candidate),
+      niche: resolveCandidateNiche(normalizedNiche, candidate, runtime.mappings.nicheAliases),
     }));
 
     const items = discoveryConfig.persist_rejected
@@ -349,6 +367,9 @@ export async function discoverCommand(rawArgs: {
     log.error({ runId: run.id, err }, "Discover command failed");
     await failRun(run.id, msg, duration_ms);
     throw err;
+  }
+  } finally {
+    if (opts.trace) log.level = previousLevel;
   }
 }
 

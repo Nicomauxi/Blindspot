@@ -145,6 +145,11 @@ describe("getScoringConfig", () => {
       weight: 20,
     });
     expect(config.digital_gap.rules).toContainEqual({
+      name: "high_reviews_no_web",
+      condition: { tag: "high-reviews-no-web" },
+      weight: 10,
+    });
+    expect(config.digital_gap.rules).toContainEqual({
       name: "ig_confirmed",
       condition: { tag: "ig-confirmed" },
       weight: 20,
@@ -165,6 +170,11 @@ describe("getScoringConfig", () => {
       weight: -3,
     });
     expect(config.digital_gap.rules).toContainEqual({
+      name: "chat_widget_missing",
+      condition: { tag: "chat-widget-missing" },
+      weight: 3,
+    });
+    expect(config.digital_gap.rules).toContainEqual({
       name: "hours_missing_on_web",
       condition: { tag: "hours-missing-on-web" },
       weight: 3,
@@ -181,5 +191,81 @@ describe("getScoringConfig", () => {
     const first = getScoringConfig();
     const second = getScoringConfig();
     expect(second).toBe(first);
+  });
+});
+
+describe("parseConfig — gap-3 validation regression", () => {
+  it("throws when mutual_exclusions references an unknown business_quality rule", () => {
+    const yaml = `
+version: 1
+recent_reviews_threshold_days: 180
+business_quality:
+  rules:
+    - name: rating_excellent
+      condition: { field: rating, op: gte, value: 4.5 }
+      weight: 25
+digital_gap:
+  rules:
+    - name: no_website
+      condition: { tag: no-website }
+      weight: 35
+mutual_exclusions:
+  business_quality:
+    - [rating_excellent, nonexistent_rule]
+  digital_gap: []
+cap: 100
+prospect_formula: "business_quality * digital_gap / 100"
+`;
+    expect(() => parseConfig(yaml)).toThrow(/Unknown rule/i);
+  });
+
+  it("throws when cap is zero or negative", () => {
+    const yaml = `
+version: 1
+recent_reviews_threshold_days: 180
+business_quality:
+  rules:
+    - name: rating_excellent
+      condition: { field: rating, op: gte, value: 4.5 }
+      weight: 25
+digital_gap:
+  rules:
+    - name: no_website
+      condition: { tag: no-website }
+      weight: 35
+mutual_exclusions:
+  business_quality: []
+  digital_gap: []
+cap: -1
+prospect_formula: "business_quality * digital_gap / 100"
+`;
+    expect(() => parseConfig(yaml)).toThrow(/cap must be > 0/i);
+  });
+
+  it("valid config with mutual_exclusions referencing real rules loads without error", () => {
+    const yaml = `
+version: 1
+recent_reviews_threshold_days: 180
+business_quality:
+  rules:
+    - name: rating_excellent
+      condition: { field: rating, op: gte, value: 4.5 }
+      weight: 25
+    - name: rating_good
+      condition: { field: rating, op: between, value: [4.0, 4.5] }
+      weight: 15
+digital_gap:
+  rules:
+    - name: no_website
+      condition: { tag: no-website }
+      weight: 35
+mutual_exclusions:
+  business_quality:
+    - [rating_excellent, rating_good]
+  digital_gap: []
+cap: 100
+prospect_formula: "business_quality * digital_gap / 100"
+`;
+    expect(() => parseConfig(yaml)).not.toThrow();
   });
 });

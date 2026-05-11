@@ -110,6 +110,20 @@ describe("summarizeFootprint", () => {
     expect(result).toContain("4.9");
     expect(result).toContain("7");
   });
+
+  it("gap-8: does not throw TypeError when pixels has null sub-fields", () => {
+    const fp: DigitalFootprintEnriched = {
+      fetched_at: new Date().toISOString(),
+      pixels: {
+        meta_pixel: null as unknown as { present: boolean; id: string | null },
+        ga4: { present: true, id: "G-123" },
+        ga_universal: null as unknown as { present: boolean; id: string | null },
+        gtm: null as unknown as { present: boolean; id: string | null },
+      },
+    };
+    expect(() => summarizeFootprint(fp)).not.toThrow();
+    expect(summarizeFootprint(fp)).toContain("Con pixels de tracking");
+  });
 });
 
 describe("parseScoreBreakdown", () => {

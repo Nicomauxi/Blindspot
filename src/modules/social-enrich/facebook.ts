@@ -15,7 +15,10 @@ export interface SocialEnrichPage {
     state: "networkidle",
     opts: { timeout: number }
   ) => Promise<unknown>;
-  evaluate: <T>(fn: () => T) => Promise<T>;
+  evaluate: {
+    <T>(fn: () => T): Promise<T>;
+    <T, A>(fn: (arg: A) => T, arg: A): Promise<T>;
+  };
 }
 
 interface FacebookPageData {
