@@ -43,10 +43,16 @@ export function getSocialSearchRefreshDays(): number {
 }
 
 export function isSocialSearchStale(
-  discovery: Pick<SocialSearch, "ran_at"> | null | undefined,
+  discovery: SocialSearch | null | undefined,
   now = Date.now()
 ): boolean {
   if (!discovery?.ran_at) return true;
+  if (discovery.source === "duckduckgo-fallback") return false;
+  if (discovery.source === "duckduckgo") {
+    const fbBlocked = !!discovery.facebook?.error;
+    const igBlocked = !!discovery.instagram?.error;
+    if (fbBlocked && igBlocked) return true;
+  }
   const t = Date.parse(discovery.ran_at);
   if (Number.isNaN(t)) return true;
   return now - t >= getSocialSearchRefreshDays() * 24 * 60 * 60 * 1_000;
@@ -148,10 +154,15 @@ function normalizeResultUrl(raw: string): string | null {
   }
 }
 
-function platformMatches(url: string, platform: SocialSearchPlatform): boolean {
+function platformMatches(
+  url: string,
+  platform: SocialSearchPlatform,
+  hosts?: Record<SocialSearchPlatform, string[]>
+): boolean {
   try {
     const host = new URL(url).hostname.toLowerCase().replace(/^www\./, "");
-    return PLATFORM_HOSTS[platform].some((expected) => host === expected || host.endsWith(`.${expected}`));
+    const platformHosts = hosts ?? PLATFORM_HOSTS;
+    return platformHosts[platform].some((expected) => host === expected || host.endsWith(`.${expected}`));
   } catch {
     return false;
   }
@@ -315,9 +326,10 @@ export async function discoverSocialSearch(
   await deps.delay(INTER_QUERY_DELAY_MS);
   const instagram = await discoverPlatform("instagram", lead, deps);
 
+  const bothBlocked = !!facebook.error && !!instagram.error;
   return {
     ran_at: new Date().toISOString(),
-    source: "duckduckgo",
+    source: bothBlocked ? "duckduckgo-fallback" : "duckduckgo",
     facebook,
     instagram,
   };

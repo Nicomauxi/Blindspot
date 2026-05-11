@@ -1,4 +1,5 @@
 import { chromium, type Browser, type BrowserContext } from "playwright";
+import { getConfig } from "../../shared/config.js";
 
 export interface SocialEnrichBrowserSession {
   browser: Browser;
@@ -6,7 +7,7 @@ export interface SocialEnrichBrowserSession {
 }
 
 export function resolvePlaywrightExecutablePath(): string {
-  const configured = process.env["PLAYWRIGHT_EXECUTABLEPATH"]?.trim();
+  const configured = getConfig().PLAYWRIGHT_EXECUTABLEPATH?.trim();
   return configured && configured.length > 0
     ? configured
     : chromium.executablePath();

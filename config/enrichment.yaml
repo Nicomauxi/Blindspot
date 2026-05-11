@@ -22,6 +22,41 @@ heuristic_discovery:
     - "97"
     - "98"
     - "99"
+  geographic_stop_words:
+    - uruguay
+    - uruguaya
+    - uruguayo
+    - uy
+    - mvd
+    - montevideo
+    - salto
+    - paysandu
+    - colonia
+    - rivera
+    - maldonado
+    - tacuarembo
+    - melo
+    - trinidad
+    - durazno
+    - fray_bentos
+    - rocha
+    - canelones
+    - florida
+    - san_jose
+    - mercedes
+    - minas
+    - artigas
+    - young
+    - colon
+    - cerro_largo
+    - paso_de_los_toros
+
+  proper_noun_stop_words:
+    - olivera
+    - vipercar
+    - carrica
+    - fiancar
+    - shoppingcar
 
 
 directory_discovery:

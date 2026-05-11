@@ -42,16 +42,21 @@ vi.mock("../../src/storage/vocabulary.js", () => ({
   rebuildVocabularyForNiche: vi.fn(),
 }));
 
+vi.mock("../../src/storage/system-lists.js", () => ({
+  loadAllRuntime: vi.fn(),
+}));
+
 vi.mock("../../src/modules/enrichment/vocabulary.js", () => ({
   computeNicheStopWords: vi.fn(),
 }));
 
 import { discoverCommand } from "../../src/cli/commands/discover.js";
 import { fetchPlaceCandidates } from "../../src/modules/discovery/places.js";
-import { applyProfileFilter } from "../../src/modules/discovery/filters.js";
+import { applyProfileFilter, normalizeNiche } from "../../src/modules/discovery/filters.js";
 import { createRun, completeRun } from "../../src/storage/runs.js";
 import { upsertLeads, loadAllLeads } from "../../src/storage/leads.js";
 import { rebuildVocabularyForNiche } from "../../src/storage/vocabulary.js";
+import { loadAllRuntime } from "../../src/storage/system-lists.js";
 import { computeNicheStopWords } from "../../src/modules/enrichment/vocabulary.js";
 
 const RUN_ID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
@@ -73,6 +78,39 @@ beforeEach(() => {
   vi.mocked(createRun).mockResolvedValue({ id: RUN_ID } as never);
   vi.mocked(completeRun).mockResolvedValue(undefined);
   vi.mocked(upsertLeads).mockResolvedValue({ inserted: [], updated: [] });
+  vi.mocked(loadAllRuntime).mockResolvedValue({
+    lists: {
+      blockedEmailDomains: new Set(),
+      freeEmailDomains: new Set(),
+      blockedEmailPrefixes: [],
+      stopWords: new Set(),
+      vocabularyStopWords: new Set(),
+      geographicStopWords: new Set(),
+      properNounStopWords: new Set(),
+      socialDomains: [],
+      platformHosts: {},
+      blockedInstagramHosts: [],
+      foreignTlds: new Set(),
+      foreignGeoTerms: [],
+      foreignPhonePrefixes: [],
+    },
+    patterns: {
+      booking: [],
+      reservation: [],
+      delivery: [],
+      classBooking: [],
+      appStore: [],
+      menuKeywords: [],
+      catalogKeywords: [],
+      chatWidgets: [],
+    },
+    mappings: {
+      descriptorWords: new Map(),
+      nicheAliases: [{ niche: "hairdresser", term: "salon", matchType: "contains" }],
+      directoryCategories: new Map(),
+      nicheStopWords: new Map(),
+    },
+  });
   vi.mocked(fetchPlaceCandidates).mockResolvedValue({
     candidates: [baseCandidate],
     textSearchRequestCount: 1,
@@ -85,6 +123,24 @@ beforeEach(() => {
 });
 
 describe("discoverCommand — vocabulary rebuild post-hook", () => {
+  it("calls normalizeNiche with runtime aliases", async () => {
+    vi.mocked(loadAllLeads).mockResolvedValue([]);
+    vi.mocked(computeNicheStopWords).mockReturnValue(new Map());
+    vi.mocked(rebuildVocabularyForNiche).mockResolvedValue(undefined);
+
+    await discoverCommand({
+      niche: "salon",
+      location: "Montevideo",
+      profile: "a",
+      maxResults: 10,
+    });
+
+    expect(normalizeNiche).toHaveBeenCalledWith(
+      "salon",
+      [{ niche: "hairdresser", term: "salon", matchType: "contains" }]
+    );
+  });
+
   it("calls loadAllLeads and rebuildVocabularyForNiche after upsertLeads", async () => {
     const allLeads = [
       { id: "l1", niche: "hairdresser", name: "Salon Bella" },

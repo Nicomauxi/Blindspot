@@ -61,10 +61,10 @@ export function summarizeFootprint(fp: DigitalFootprint | null): string {
 
   if (fp.pixels) {
     const hasAny =
-      fp.pixels.meta_pixel.present ||
-      fp.pixels.ga4.present ||
-      fp.pixels.ga_universal.present ||
-      fp.pixels.gtm.present;
+      fp.pixels.meta_pixel?.present ||
+      fp.pixels.ga4?.present ||
+      fp.pixels.ga_universal?.present ||
+      fp.pixels.gtm?.present;
     parts.push(hasAny ? "Con pixels de tracking" : "Sin pixels de tracking");
   }
 

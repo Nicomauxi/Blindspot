@@ -48,9 +48,7 @@ describe("normalizeUruguayMobile", () => {
   it("rejects invalid Uruguay mobile candidates", () => {
     expect(normalizeUruguayMobile("00059899999999")).toBeNull();
     expect(normalizeUruguayMobile("099 123 4567")).toBeNull();
-    expect(normalizeUruguayMobile("099 123 456")).toBeNull();
     expect(normalizeUruguayMobile("099 123 45678")).toBeNull();
-    expect(normalizeUruguayMobile("091 234 567")).toBeNull();
   });
 
   it("normalizes valid Uruguay mobile candidates to E.164", () => {
@@ -58,5 +56,11 @@ describe("normalizeUruguayMobile", () => {
     expect(normalizeUruguayMobile("+598 98 892 879")).toBe("+59898892879");
     expect(normalizeUruguayMobile("0059899123456")).toBe("+59899123456");
     expect(normalizeUruguayMobile("59895123456")).toBe("+59895123456");
+  });
+
+  it("accepts trunk format 091 (Claro) and 099 (Movistar) — gap-5 regression", () => {
+    expect(normalizeUruguayMobile("091123456")).toBe("+59891123456");
+    expect(normalizeUruguayMobile("099123456")).toBe("+59899123456");
+    expect(normalizeUruguayMobile("092123456")).toBe("+59892123456");
   });
 });

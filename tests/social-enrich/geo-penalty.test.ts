@@ -14,6 +14,26 @@ describe("geo-penalty", () => {
     expect(hasForeignTld("https://negocio.com")).toBe(false);
   });
 
+  it("uses custom foreign TLDs when provided", () => {
+    const ctx = { foreignTlds: new Set(["custom"]) };
+
+    expect(hasForeignTld("https://negocio.custom", ctx)).toBe(true);
+    expect(hasForeignTld("https://negocio.com.uy", ctx)).toBe(false);
+  });
+
+  it("keeps default detection when ctx is omitted", () => {
+    expect(hasForeignTld("https://negocio.mx")).toBe(true);
+    expect(hasForeignGeoText("Sucursal en México")).toBe(true);
+    expect(hasForeignPhonePrefix("+52 238 123 4567")).toBe(true);
+    expect(
+      applyGeographicPenalties(0.95, {
+        website: "https://negocio.mx",
+        description: "Local en Montevideo, Uruguay",
+        phone: "+598 99 123 456",
+      })
+    ).toBe(0.65);
+  });
+
   it("detects foreign geographic text", () => {
     expect(hasForeignGeoText("Sucursal en Tehuacán, México")).toBe(true);
     expect(hasForeignGeoText("Local en Montevideo, Uruguay")).toBe(false);

@@ -54,6 +54,21 @@ describe("scoreLead", () => {
     expect(result.digital_gap_score).toBe(20);
   });
 
+  it("high-reviews-no-web stacks as +10 digital_gap", () => {
+    const withoutTag = scoreLead({ ...empty_lead, tags: ["no-website"] });
+    const withTag = scoreLead({
+      ...empty_lead,
+      tags: ["no-website", "high-reviews-no-web"],
+    });
+
+    expect(withTag.digital_gap_score).toBe(withoutTag.digital_gap_score + 10);
+    expect(withTag.score_breakdown.digital_gap.rules).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: "high_reviews_no_web", weight: 10 }),
+      ])
+    );
+  });
+
   it("fb-heuristic and ig-heuristic are picked by scoring", () => {
     const result = scoreLead(with_social_heuristics);
     const dgRules = result.score_breakdown.digital_gap.rules;
@@ -138,6 +153,42 @@ describe("scoreLead", () => {
     expect(result.digital_gap_score).toBe(0);
     expect(result.score_breakdown.digital_gap.rules).toContainEqual(
       expect.objectContaining({ name: "chat_widget_present", weight: -3 })
+    );
+  });
+
+  it("chat-widget-missing adds +3 digital_gap", () => {
+    const result = scoreLead({ ...empty_lead, tags: ["chat-widget-missing"] });
+
+    expect(result.digital_gap_score).toBe(3);
+    expect(result.score_breakdown.digital_gap.rules).toContainEqual(
+      expect.objectContaining({ name: "chat_widget_missing", weight: 3 })
+    );
+  });
+
+  it("chat-widget subtracts 3 digital_gap before clamp", () => {
+    const result = scoreLead({ ...empty_lead, tags: ["pixel-missing", "chat-widget"] });
+
+    expect(result.digital_gap_score).toBe(2);
+    expect(result.score_breakdown.digital_gap.rules).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: "pixel_missing", weight: 5 }),
+        expect.objectContaining({ name: "chat_widget_present", weight: -3 }),
+      ])
+    );
+  });
+
+  it("chat widget present and missing tags cancel if bad data contains both", () => {
+    const result = scoreLead({
+      ...empty_lead,
+      tags: ["chat-widget", "chat-widget-missing"],
+    });
+
+    expect(result.digital_gap_score).toBe(0);
+    expect(result.score_breakdown.digital_gap.rules).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: "chat_widget_present", weight: -3 }),
+        expect.objectContaining({ name: "chat_widget_missing", weight: 3 }),
+      ])
     );
   });
 

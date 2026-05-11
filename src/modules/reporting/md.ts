@@ -1,6 +1,24 @@
 import Handlebars from "handlebars";
-import type { Lead } from "../../shared/types.js";
+import type { DigitalFootprint, Lead } from "../../shared/types.js";
 import { slugify, formatTagsForDisplay, summarizeFootprint, parseScoreBreakdown, sortLeadsForReport } from "./shared.js";
+
+function extractContactFields(fp: DigitalFootprint | null) {
+  const heuristicWeb = fp?.heuristic_discovery?.selected?.website?.url ?? null;
+  let fbUrl: string | null = null;
+  let igUrl: string | null = null;
+  if (fp?.social_search?.source === "duckduckgo") {
+    fbUrl = fp.social_search.facebook.best_url ?? null;
+    igUrl = fp.social_search.instagram.best_url ?? null;
+  } else if (fp?.social_search?.source === "playwright") {
+    fbUrl = fp.social_search.facebook?.url ?? null;
+    igUrl = fp.social_search.instagram?.url ?? null;
+  } else if (fp && !fp.skipped) {
+    fbUrl = fp.social_links?.facebook ?? null;
+    igUrl = fp.social_links?.instagram ?? null;
+  }
+  const contactEmails = fp?.contact_emails?.length ? fp.contact_emails.join("; ") : null;
+  return { heuristicWeb, fbUrl, igUrl, contactEmails };
+}
 import { LEAD_TPL } from "./templates.js";
 
 const compiledLead = Handlebars.compile(LEAD_TPL);
@@ -35,6 +53,7 @@ function buildMdContext(lead: Lead, rank: string, runId: string) {
       }
     : null;
 
+  const contact = extractContactFields(lead.digital_footprint);
   return {
     rank,
     name: lead.name,
@@ -42,6 +61,10 @@ function buildMdContext(lead: Lead, rank: string, runId: string) {
     phone: str(lead.phone),
     whatsapp: str(lead.whatsapp),
     website: str(lead.website),
+    heuristicWeb: contact.heuristicWeb,
+    fbUrl: contact.fbUrl,
+    igUrl: contact.igUrl,
+    contactEmails: contact.contactEmails,
     googleMapsUrl: `https://www.google.com/maps/place/?q=place_id:${encodeURIComponent(lead.place_id)}`,
     scores: {
       prospect: lead.prospect_score !== null ? String(lead.prospect_score) : "—",

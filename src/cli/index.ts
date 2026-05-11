@@ -1,4 +1,6 @@
 import { Command } from "commander";
+import { getScoringConfig } from "../modules/scoring/config.js";
+import { getDiscoveryConfig } from "../modules/discovery/config.js";
 import { discoverCommand, collectOverride } from "./commands/discover.js";
 import { enrichCommand } from "./commands/enrich.js";
 import { heuristicRefreshCommand } from "./commands/heuristic-refresh.js";
@@ -58,17 +60,20 @@ program
   .option("--force-refresh", "Ignore cache and re-fetch HTML / WHOIS for every lead", false)
   .option("--with-heuristic", "Discover candidate websites/social/WhatsApp before enrichment", false)
   .option("--concurrency <number>", "Max parallel HTTP fetches", "5")
+  .option("--all", "Enrich all leads in the run including rejected ones (default: passed only)", false)
   .action(async (opts: {
     run: string;
     forceRefresh: boolean;
     withHeuristic: boolean;
     concurrency: string;
+    all: boolean;
   }) => {
     await enrichCommand({
       run: opts.run,
       forceRefresh: opts.forceRefresh,
       withHeuristic: opts.withHeuristic,
       concurrency: opts.concurrency,
+      all: opts.all,
     });
   });
 
@@ -158,13 +163,15 @@ const leadsCmd = program
 leadsCmd
   .command("list")
   .description("List leads for a run, or all leads if --run is omitted")
-  .option("--run <uuid>", "Filter by run id (optional)")
+  .option("--run <uuid>", "Filter by first_seen_run_id (leads discovered in this run)")
+  .option("--seen-in <uuid>", "Filter by last_seen_run_id (leads last seen in this run)")
   .option("--rejected-only", "Show only rejected leads", false)
   .option("--passed-only", "Show only passed leads", false)
   .option("--limit <number>", "Max results", "100")
   .option("--format <table|json>", "Output format", "table")
   .action(async (opts: {
     run?: string;
+    seenIn?: string;
     rejectedOnly?: boolean;
     passedOnly?: boolean;
     limit: string;
@@ -201,5 +208,14 @@ vocabCmd
   .action(async (opts: { niche: string }) => {
     await vocabularyCommand({ subcommand: "show", niche: opts.niche });
   });
+
+try {
+  getScoringConfig();
+  getDiscoveryConfig();
+} catch (err) {
+  const msg = err instanceof Error ? err.message : String(err);
+  process.stderr.write(`[blindspot] Config validation failed: ${msg}\n`);
+  process.exit(1);
+}
 
 program.parse(process.argv);

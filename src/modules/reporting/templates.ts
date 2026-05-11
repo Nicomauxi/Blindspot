@@ -13,7 +13,11 @@ export const LEAD_TPL = `# {{{name}}}
 - Teléfono: {{{phone}}}
 - WhatsApp: {{{whatsapp}}}
 - Website: {{{website}}}
-- Google Maps: {{{googleMapsUrl}}}
+{{#if heuristicWeb}}- Web detectado: {{{heuristicWeb}}}
+{{/if}}{{#if fbUrl}}- Facebook: {{{fbUrl}}}
+{{/if}}{{#if igUrl}}- Instagram: {{{igUrl}}}
+{{/if}}{{#if contactEmails}}- Email(s): {{{contactEmails}}}
+{{/if}}- Google Maps: {{{googleMapsUrl}}}
 
 ## Por qué este score
 

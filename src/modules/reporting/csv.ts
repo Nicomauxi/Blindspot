@@ -1,14 +1,19 @@
 import Papa from "papaparse";
-import type { Lead } from "../../shared/types.js";
+import type { DigitalFootprint, Lead } from "../../shared/types.js";
 import { googleMapsUrl } from "./shared.js";
 
 const CSV_COLUMNS = [
   "place_id",
   "name",
+  "niche",
   "address",
   "phone",
   "whatsapp",
   "website",
+  "heuristic_web",
+  "fb_url",
+  "ig_url",
+  "contact_emails",
   "rating",
   "review_count",
   "business_status",
@@ -25,15 +30,41 @@ const CSV_COLUMNS = [
 
 type CsvRow = Record<(typeof CSV_COLUMNS)[number], string>;
 
+function extractHeuristicWeb(fp: DigitalFootprint | null): string {
+  return fp?.heuristic_discovery?.selected?.website?.url ?? "";
+}
+
+function extractFbUrl(fp: DigitalFootprint | null): string {
+  if (!fp) return "";
+  if (fp.social_search?.source === "duckduckgo") return fp.social_search.facebook.best_url ?? "";
+  if (fp.social_search?.source === "playwright") return fp.social_search.facebook?.url ?? "";
+  if (!fp.skipped) return fp.social_links?.facebook ?? "";
+  return "";
+}
+
+function extractIgUrl(fp: DigitalFootprint | null): string {
+  if (!fp) return "";
+  if (fp.social_search?.source === "duckduckgo") return fp.social_search.instagram.best_url ?? "";
+  if (fp.social_search?.source === "playwright") return fp.social_search.instagram?.url ?? "";
+  if (!fp.skipped) return fp.social_links?.instagram ?? "";
+  return "";
+}
+
 function leadToCsvRow(lead: Lead): CsvRow {
   const str = (v: unknown): string => (v === null || v === undefined ? "" : String(v));
+  const fp = lead.digital_footprint;
   return {
     place_id: lead.place_id,
     name: lead.name,
+    niche: str(lead.niche),
     address: str(lead.address),
     phone: str(lead.phone),
     whatsapp: str(lead.whatsapp),
     website: str(lead.website),
+    heuristic_web: extractHeuristicWeb(fp),
+    fb_url: extractFbUrl(fp),
+    ig_url: extractIgUrl(fp),
+    contact_emails: fp?.contact_emails?.join(";") ?? "",
     rating: str(lead.rating),
     review_count: str(lead.review_count),
     business_status: str(lead.business_status),

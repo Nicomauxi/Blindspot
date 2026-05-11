@@ -88,4 +88,76 @@ describe("computeNicheStopWords", () => {
     const result = computeNicheStopWords(leads, 2, 0);
     expect(result.get("tech")).toBe(2);
   });
+
+  it("filters words from geographic_stop_words", () => {
+    const leads = [
+      { name: "Salto Fitness" },
+      { name: "Salto Gym" },
+      { name: "Salto Power" },
+    ];
+
+    const result = computeNicheStopWords(leads, 3, 0);
+
+    expect(result.has("salto")).toBe(false);
+  });
+
+  it("filters centro as a generic vocabulary word", () => {
+    const leads = [
+      { name: "Centro Fitness" },
+      { name: "Centro Gym" },
+      { name: "Centro Power" },
+    ];
+
+    const result = computeNicheStopWords(leads, 3, 0);
+
+    expect(result.has("centro")).toBe(false);
+  });
+
+  it("does not filter valid niche words such as peluqueria", () => {
+    const leads = [
+      { name: "Peluqueria Bella" },
+      { name: "Peluqueria Linda" },
+      { name: "Peluqueria Rosa" },
+    ];
+
+    const result = computeNicheStopWords(leads, 3, 0);
+
+    expect(result.get("peluqueria")).toBe(3);
+  });
+
+  it("filters olivera from proper_noun_stop_words", () => {
+    const leads = [
+      { name: "Olivera Automoviles" },
+      { name: "Olivera Autos" },
+      { name: "Olivera Motors" },
+    ];
+
+    const result = computeNicheStopWords(leads, 3, 0);
+
+    expect(result.has("olivera")).toBe(false);
+  });
+
+  it("filters vipercar from proper_noun_stop_words", () => {
+    const leads = [
+      { name: "Vipercar Automoviles" },
+      { name: "Vipercar Autos" },
+      { name: "Vipercar Motors" },
+    ];
+
+    const result = computeNicheStopWords(leads, 3, 0);
+
+    expect(result.has("vipercar")).toBe(false);
+  });
+
+  it("does not filter valid niche terms such as automoviles", () => {
+    const leads = [
+      { name: "Olivera Automoviles" },
+      { name: "Vipercar Automoviles" },
+      { name: "Carrica Automoviles" },
+    ];
+
+    const result = computeNicheStopWords(leads, 3, 0);
+
+    expect(result.get("automoviles")).toBe(3);
+  });
 });

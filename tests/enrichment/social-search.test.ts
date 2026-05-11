@@ -191,4 +191,99 @@ describe("social search discovery", () => {
     expect(isSocialSearchStale(old, now)).toBe(true);
     expect(isSocialSearchStale(null, now)).toBe(true);
   });
+
+  const ddgBase = {
+    source: "duckduckgo" as const,
+    facebook: { query: "q", results: [], best_url: null, additional_phones: [], confidence: 0 },
+    instagram: { query: "q", results: [], best_url: null, additional_phones: [], confidence: 0 },
+  };
+
+  it("forces stale when both facebook and instagram have error (DDG blocked)", () => {
+    vi.spyOn(configModule, "getConfig").mockReturnValue({
+      SOCIAL_SEARCH_REFRESH_DAYS: 30,
+    } as ReturnType<typeof configModule.getConfig>);
+
+    expect(
+      isSocialSearchStale({
+        ...ddgBase,
+        ran_at: new Date().toISOString(),
+        facebook: { ...ddgBase.facebook, error: "403" },
+        instagram: { ...ddgBase.instagram, error: "403" },
+      })
+    ).toBe(true);
+  });
+
+  it("uses ran_at normally when only facebook has error but instagram has data", () => {
+    vi.spyOn(configModule, "getConfig").mockReturnValue({
+      SOCIAL_SEARCH_REFRESH_DAYS: 30,
+    } as ReturnType<typeof configModule.getConfig>);
+
+    expect(
+      isSocialSearchStale({
+        ...ddgBase,
+        ran_at: new Date().toISOString(),
+        facebook: { ...ddgBase.facebook, error: "403" },
+        instagram: { ...ddgBase.instagram, best_url: "https://instagram.com/test" },
+      })
+    ).toBe(false);
+  });
+
+  it("is not stale when neither platform has error and ran_at is recent", () => {
+    vi.spyOn(configModule, "getConfig").mockReturnValue({
+      SOCIAL_SEARCH_REFRESH_DAYS: 30,
+    } as ReturnType<typeof configModule.getConfig>);
+
+    expect(
+      isSocialSearchStale({ ...ddgBase, ran_at: new Date().toISOString() })
+    ).toBe(false);
+  });
+
+  it("returns source='duckduckgo-fallback' when both platforms error", async () => {
+    const fetchDuckDuckGo = vi.fn(async () => ({
+      status: 429,
+      html: null,
+      error: "http-429",
+    }));
+
+    const result = await discoverSocialSearch(makeLead(), {
+      fetchDuckDuckGo,
+      delay: async () => undefined,
+    });
+
+    expect(result.source).toBe("duckduckgo-fallback");
+    expect(result.facebook.error).toBeDefined();
+    expect(result.instagram.error).toBeDefined();
+  });
+
+  it("returns source='duckduckgo' when only facebook errors", async () => {
+    const fetchDuckDuckGo = vi
+      .fn()
+      .mockResolvedValueOnce({ status: 429, html: null, error: "http-429" })
+      .mockResolvedValueOnce({ status: 200, html: "<html></html>" });
+
+    const result = await discoverSocialSearch(makeLead(), {
+      fetchDuckDuckGo,
+      delay: async () => undefined,
+    });
+
+    expect(result.source).toBe("duckduckgo");
+    expect(result.facebook.error).toBeDefined();
+    expect(result.instagram.error).toBeUndefined();
+  });
+
+  it("isSocialSearchStale returns false for duckduckgo-fallback regardless of age", () => {
+    vi.spyOn(configModule, "getConfig").mockReturnValue({
+      SOCIAL_SEARCH_REFRESH_DAYS: 30,
+    } as ReturnType<typeof configModule.getConfig>);
+
+    const fallbackBase = {
+      ...ddgBase,
+      source: "duckduckgo-fallback" as const,
+      facebook: { ...ddgBase.facebook, error: "429" },
+      instagram: { ...ddgBase.instagram, error: "429" },
+    };
+
+    expect(isSocialSearchStale({ ...fallbackBase, ran_at: new Date().toISOString() })).toBe(false);
+    expect(isSocialSearchStale({ ...fallbackBase, ran_at: "2020-01-01T00:00:00.000Z" }, Date.now())).toBe(false);
+  });
 });

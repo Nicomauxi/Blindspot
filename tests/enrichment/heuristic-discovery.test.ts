@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  buildSingleWordCandidates,
+  buildSlugVariants,
   buildWebsiteCandidates,
   deriveWhatsappCandidate,
   discoverHeuristicSources,
@@ -104,6 +106,27 @@ heuristic_discovery:
       "https://violetpeluqueria-mvd.com.uy",
     ]);
     expect(new Set(urls).size).toBe(urls.length);
+  });
+
+  it("buildSlugVariants uses custom descriptorWords", () => {
+    expect(
+      buildSlugVariants("Cancha Padel", {
+        descriptorWords: new Map([["padel", "pdl"]]),
+      })
+    ).toEqual(["cancha", "cancha-pdl", "cancha-padel", "canchapadel"]);
+  });
+
+  it("buildSingleWordCandidates uses custom nicheStopWords", () => {
+    const candidates = buildSingleWordCandidates(
+      "Cancha Padel",
+      ["com.uy"],
+      null,
+      new Set(),
+      { nicheStopWords: new Set(["cancha"]) }
+    );
+
+    expect(candidates).not.toContain("https://cancha.com.uy");
+    expect(candidates).toContain("https://padel.com.uy");
   });
 
   it("scores website signals and selects candidates over threshold", async () => {
@@ -463,5 +486,64 @@ heuristic_discovery:
       {}
     );
     expect(withEmpty).toEqual(withoutArg);
+  });
+
+  it("geographic stop words: city names from config do not generate single-word candidates", () => {
+    const saltoCandidates = buildWebsiteCandidates(
+      { name: "Peluquería Salto", address: null },
+      ["com.uy"],
+      {}
+    );
+    expect(saltoCandidates).not.toContain("https://salto.com.uy");
+
+    const colonCandidates = buildWebsiteCandidates(
+      { name: "Gym Colón", address: null },
+      ["com.uy"],
+      {}
+    );
+    expect(colonCandidates).not.toContain("https://colon.com.uy");
+  });
+
+  it("geographic stop words: legacy geo words still filtered (now via config)", () => {
+    const uruguayCandidates = buildWebsiteCandidates(
+      { name: "Centro Uruguay", address: null },
+      ["com.uy"],
+      {}
+    );
+    expect(uruguayCandidates).not.toContain("https://uruguay.com.uy");
+
+    const mvdCandidates = buildWebsiteCandidates(
+      { name: "Salon MVD Bella", address: null },
+      ["com.uy"],
+      {}
+    );
+    expect(mvdCandidates).not.toContain("https://mvd.com.uy");
+  });
+
+  it("parseHeuristicConfig: geographic_stop_words defaults to empty array when absent", () => {
+    const config = parseHeuristicConfig(`
+heuristic_discovery:
+  enabled: true
+  thresholds: { website: 0.7, social: 0.6 }
+  tld_priority: [com.uy]
+  max_candidates_to_probe: 6
+  mobile_prefixes_uy: ["91"]
+`);
+    expect(config.geographic_stop_words).toEqual([]);
+  });
+
+  it("parseHeuristicConfig: geographic_stop_words parsed when present", () => {
+    const config = parseHeuristicConfig(`
+heuristic_discovery:
+  enabled: true
+  thresholds: { website: 0.7, social: 0.6 }
+  tld_priority: [com.uy]
+  max_candidates_to_probe: 6
+  mobile_prefixes_uy: ["91"]
+  geographic_stop_words:
+    - salto
+    - rivera
+`);
+    expect(config.geographic_stop_words).toEqual(["salto", "rivera"]);
   });
 });

@@ -13,6 +13,9 @@ import {
 } from "../../storage/leads.js";
 import { loadFilterWordsForNiche } from "../../storage/vocabulary.js";
 import { enrichLead } from "../../modules/enrichment/index.js";
+import type { EnrichmentCtx } from "../../modules/enrichment/index.js";
+import { detectAndSeedEmailProviders, loadAllRuntime } from "../../storage/system-lists.js";
+import type { AllRuntime } from "../../storage/system-lists.js";
 import type { EnrichmentRunStats } from "../../shared/types.js";
 
 const UUID_RE =
@@ -23,6 +26,7 @@ const EnrichArgsSchema = z.object({
   forceRefresh: z.coerce.boolean().default(false),
   withHeuristic: z.coerce.boolean().default(false),
   concurrency: z.coerce.number().int().min(1).max(50).default(5),
+  all: z.coerce.boolean().default(false),
 });
 
 interface RawEnrichArgs {
@@ -30,6 +34,76 @@ interface RawEnrichArgs {
   forceRefresh: boolean | string;
   withHeuristic: boolean | string;
   concurrency: string | number;
+  all?: boolean | string;
+}
+
+function optionalSet<T>(values: ReadonlySet<T>): ReadonlySet<T> | undefined {
+  return values.size > 0 ? values : undefined;
+}
+
+function optionalArray<T>(values: readonly T[]): readonly T[] | undefined {
+  return values.length > 0 ? values : undefined;
+}
+
+function optionalMap<K, V>(values: ReadonlyMap<K, V>): ReadonlyMap<K, V> | undefined {
+  return values.size > 0 ? values : undefined;
+}
+
+function unionSets<T>(...sets: Array<ReadonlySet<T> | undefined>): ReadonlySet<T> | undefined {
+  const merged = new Set<T>();
+  for (const set of sets) {
+    for (const value of set ?? []) merged.add(value);
+  }
+  return merged.size > 0 ? merged : undefined;
+}
+
+function buildRuntimeCtx(runtime: AllRuntime, niche: string | null): EnrichmentCtx {
+  const runtimeNicheStopWords = unionSets(
+    runtime.mappings.nicheStopWords.get("all"),
+    niche ? runtime.mappings.nicheStopWords.get(niche) : undefined
+  );
+  const blockedDomains = optionalSet(runtime.lists.blockedEmailDomains);
+  const freeDomains = optionalSet(runtime.lists.freeEmailDomains);
+  const blockedPrefixes = optionalArray(runtime.lists.blockedEmailPrefixes);
+  const foreignTlds = optionalSet(runtime.lists.foreignTlds);
+  const foreignGeoTerms = optionalArray(runtime.lists.foreignGeoTerms);
+  const foreignPhonePrefixes = optionalArray(runtime.lists.foreignPhonePrefixes);
+  const reservationPlatforms = optionalArray(runtime.patterns.reservation);
+  const deliveryPlatforms = optionalArray(runtime.patterns.delivery);
+  const classBookingPlatforms = optionalArray(runtime.patterns.classBooking);
+  const appStorePlatforms = optionalArray(runtime.patterns.appStore.map((p) => p.pattern));
+  const menuKeywords = optionalArray(runtime.patterns.menuKeywords);
+  const catalogKeywords = optionalArray(runtime.patterns.catalogKeywords);
+  const chatWidgetPatterns = optionalArray(runtime.patterns.chatWidgets);
+  const stopWords = optionalSet(runtime.lists.stopWords);
+  const descriptorWords = optionalMap(runtime.mappings.descriptorWords);
+
+  return {
+    emailCtx: {
+      ...(blockedDomains ? { blockedDomains } : {}),
+      ...(freeDomains ? { freeDomains } : {}),
+      ...(blockedPrefixes ? { blockedPrefixes } : {}),
+    },
+    geoCtx: {
+      ...(foreignTlds ? { foreignTlds } : {}),
+      ...(foreignGeoTerms ? { foreignGeoTerms } : {}),
+      ...(foreignPhonePrefixes ? { foreignPhonePrefixes } : {}),
+    },
+    operationalCtx: {
+      ...(reservationPlatforms ? { reservationPlatforms } : {}),
+      ...(deliveryPlatforms ? { deliveryPlatforms } : {}),
+      ...(classBookingPlatforms ? { classBookingPlatforms } : {}),
+      ...(appStorePlatforms ? { appStorePlatforms } : {}),
+      ...(menuKeywords ? { menuKeywords } : {}),
+      ...(catalogKeywords ? { catalogKeywords } : {}),
+      ...(chatWidgetPatterns ? { chatWidgetPatterns } : {}),
+    },
+    heuristicListsCtx: {
+      ...(stopWords ? { stopWords } : {}),
+      ...(runtimeNicheStopWords ? { nicheStopWords: runtimeNicheStopWords } : {}),
+      ...(descriptorWords ? { descriptorWords } : {}),
+    },
+  };
 }
 
 export async function enrichCommand(rawArgs: RawEnrichArgs): Promise<void> {
@@ -75,8 +149,21 @@ export async function enrichCommand(rawArgs: RawEnrichArgs): Promise<void> {
   });
   log.info({ runId: enrichRun.id }, "Enrichment run created");
 
+  const cleanup = async (signal: string) => {
+    log.warn({ runId: enrichRun.id, signal }, "Process interrupted, marking run as failed");
+    try {
+      await failRun(enrichRun.id, `Process interrupted (${signal})`, Date.now() - startedAt);
+    } catch {
+      // best effort
+    }
+    process.exit(1);
+  };
+  process.once("SIGTERM", () => void cleanup("SIGTERM"));
+  process.once("SIGINT", () => void cleanup("SIGINT"));
+
   try {
-    const leads = await loadLeadsByRunId(sourceRun.id);
+    const runtime = await loadAllRuntime();
+    const leads = await loadLeadsByRunId(sourceRun.id, { passedOnly: !parsed.data.all });
     log.info({ count: leads.length }, "Leads loaded");
 
     if (leads.length === 0) {
@@ -137,11 +224,12 @@ export async function enrichCommand(rawArgs: RawEnrichArgs): Promise<void> {
             const extraStopWords = lead.niche
               ? (nicheStopWords.get(lead.niche) ?? new Set<string>())
               : new Set<string>();
+            const leadRuntimeCtx = buildRuntimeCtx(runtime, lead.niche);
             const result = await enrichLead(lead, {
               forceRefresh: opts.forceRefresh,
               withHeuristic: opts.withHeuristic,
               ...(extraStopWords.size > 0 ? { extraStopWords } : {}),
-            });
+            }, undefined, leadRuntimeCtx);
             await updateLeadEnrichment(
               lead.id,
               result.digital_footprint,
@@ -216,6 +304,17 @@ export async function enrichCommand(rawArgs: RawEnrichArgs): Promise<void> {
       whois_errors,
     };
     await completeRun(enrichRun.id, stats);
+    if (leads_processed > 0) {
+      try {
+        const seeded = await detectAndSeedEmailProviders();
+        if (seeded > 0) {
+          log.info({ count: seeded }, "email provider domains auto-detected after enrichment");
+        }
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        log.warn({ err: msg }, "email provider auto-detection failed — skipping");
+      }
+    }
     printSummary(enrichRun.id, stats);
   } catch (err: unknown) {
     const duration_ms = Date.now() - startedAt;

@@ -188,7 +188,7 @@ export interface SocialSearchPlatformResult {
 
 export interface DuckDuckGoSocialSearch {
   ran_at: string;
-  source: "duckduckgo";
+  source: "duckduckgo" | "duckduckgo-fallback";
   facebook: SocialSearchPlatformResult;
   instagram: SocialSearchPlatformResult;
 }

@@ -28,6 +28,8 @@ const HeuristicConfigSchema = z.object({
     max_social_variants: z.number().int().positive().default(1),
     city_suffixes: z.record(z.string(), z.string().min(1)).default({}),
     mobile_prefixes_uy: z.array(z.string().regex(/^\d+$/)),
+    geographic_stop_words: z.array(z.string()).default([]),
+    proper_noun_stop_words: z.array(z.string()).default([]),
   }),
 });
 
@@ -39,9 +41,16 @@ interface HeuristicDeps {
   fetchHtml: typeof fetchHtml;
 }
 
+export interface HeuristicListsCtx {
+  stopWords?: ReadonlySet<string>;
+  nicheStopWords?: ReadonlySet<string>;
+  descriptorWords?: ReadonlyMap<string, string>;
+}
+
 interface HeuristicDiscoveryOptions {
   additionalWebsiteUrls?: string[];
   extraStopWords?: ReadonlySet<string>;
+  listsCtx?: HeuristicListsCtx;
 }
 
 const DEFAULT_DEPS: HeuristicDeps = { fetchHtml };
@@ -131,30 +140,32 @@ const NICHE_STOP_WORDS = new Set([
   "cardio", "musculacion",
   "center", "centre", "centro", "studio", "estudio", "group", "grupo",
   "servicios", "service", "services", "soluciones", "solutions",
-  "uruguay", "uruguaya", "uruguayo", "uy", "mvd", "montevideo",
+  // Geographic words removed — now loaded from config/enrichment.yaml: geographic_stop_words
 ]);
 
 function dedupe<T>(items: T[]): T[] {
   return Array.from(new Set(items));
 }
 
-function buildSlugVariants(name: string): string[] {
+export function buildSlugVariants(name: string, ctx?: HeuristicListsCtx): string[] {
   const slug = slugifyBusinessName(name);
   if (!slug) return [];
 
   const words = slug.split("-").filter(Boolean);
-  const meaningful = words.filter((word) => !STOP_WORDS.has(word));
+  const stopWords = ctx?.stopWords ?? STOP_WORDS;
+  const descriptorWords = ctx?.descriptorWords ?? DESCRIPTOR_WORDS;
+  const meaningful = words.filter((word) => !stopWords.has(word));
   const variants: string[] = [];
 
   if (meaningful.length > 1) {
     const withoutTrailingDescriptor = meaningful.filter((word, index) => {
       const isLast = index === meaningful.length - 1;
-      return !(isLast && DESCRIPTOR_WORDS.has(word));
+      return !(isLast && descriptorWords.has(word));
     });
     if (withoutTrailingDescriptor.length > 0) variants.push(withoutTrailingDescriptor.join("-"));
 
     variants.push(
-      meaningful.map((word) => DESCRIPTOR_WORDS.get(word) ?? word).join("-")
+      meaningful.map((word) => descriptorWords.get(word) ?? word).join("-")
     );
   }
 
@@ -281,19 +292,23 @@ function classifySocialUrl(url: string): "facebook" | "instagram" | null {
   }
 }
 
-function buildSingleWordCandidates(
+export function buildSingleWordCandidates(
   name: string,
   tldPriority: string[],
   citySuffix: string | null,
-  extraStopWords: ReadonlySet<string> = new Set()
+  extraStopWords: ReadonlySet<string> = new Set(),
+  ctx?: HeuristicListsCtx
 ): string[] {
   const words = tokenizeFromSlug(name);
+  const stopWords = ctx?.stopWords ?? STOP_WORDS;
+  const nicheStopWords = ctx?.nicheStopWords ?? NICHE_STOP_WORDS;
+  const descriptorWords = ctx?.descriptorWords ?? DESCRIPTOR_WORDS;
   const qualifying = words.filter(
     (w) =>
       w.length >= 4 &&
-      !STOP_WORDS.has(w) &&
-      !NICHE_STOP_WORDS.has(w) &&
-      !DESCRIPTOR_WORDS.has(w) &&
+      !stopWords.has(w) &&
+      !nicheStopWords.has(w) &&
+      !descriptorWords.has(w) &&
       !extraStopWords.has(w)
   );
   return qualifying.flatMap((word) => [
@@ -308,11 +323,15 @@ export function buildWebsiteCandidates(
   lead: Pick<Lead, "name"> & Partial<Pick<Lead, "address">>,
   tldPriority = getHeuristicConfig().tld_priority,
   citySuffixes = getHeuristicConfig().city_suffixes,
-  extraStopWords: ReadonlySet<string> = new Set()
+  extraStopWords: ReadonlySet<string> = new Set(),
+  ctx?: HeuristicListsCtx
 ): string[] {
+  const geoWords = getHeuristicConfig().geographic_stop_words;
+  const effectiveStopWords: ReadonlySet<string> =
+    geoWords.length > 0 ? new Set([...extraStopWords, ...geoWords]) : extraStopWords;
   const citySuffix = deriveCitySuffix(lead.address ?? null, citySuffixes);
-  const singleWord = buildSingleWordCandidates(lead.name, tldPriority, citySuffix, extraStopWords);
-  const fullName = withCityVariants(buildSlugVariants(lead.name), citySuffix).flatMap(
+  const singleWord = buildSingleWordCandidates(lead.name, tldPriority, citySuffix, effectiveStopWords, ctx);
+  const fullName = withCityVariants(buildSlugVariants(lead.name, ctx), citySuffix).flatMap(
     (variant) => tldPriority.map((tld) => `https://${variant}.${tld}`)
   );
   return dedupe([...singleWord, ...fullName]);
@@ -321,10 +340,11 @@ export function buildWebsiteCandidates(
 function buildSocialCandidateUrls(
   lead: Pick<Lead, "name"> & Partial<Pick<Lead, "address">>,
   kind: "facebook" | "instagram",
-  config: HeuristicDiscoveryConfig
+  config: HeuristicDiscoveryConfig,
+  ctx?: HeuristicListsCtx
 ): string[] {
   const variants = withCityVariants(
-    buildSlugVariants(lead.name),
+    buildSlugVariants(lead.name, ctx),
     deriveCitySuffix(lead.address ?? null, config.city_suffixes)
   ).slice(0, config.max_social_variants);
   const base =
@@ -580,7 +600,8 @@ export async function discoverHeuristicSources(
       lead,
       config.tld_priority,
       config.city_suffixes,
-      options.extraStopWords ?? new Set()
+      options.extraStopWords ?? new Set(),
+      options.listsCtx
     ),
   ]).slice(0, config.max_candidates_to_probe);
   const probeLimit = pLimit(3);
@@ -598,11 +619,11 @@ export async function discoverHeuristicSources(
   const schemaInstagramRefs = selectedSchemaRefs.instagram ?? [];
   const facebookUrls =
     mode === "full"
-      ? dedupe([...buildSocialCandidateUrls(lead, "facebook", config), ...schemaFacebookRefs])
+      ? dedupe([...buildSocialCandidateUrls(lead, "facebook", config, options.listsCtx), ...schemaFacebookRefs])
       : [];
   const instagramUrls =
     mode === "full"
-      ? dedupe([...buildSocialCandidateUrls(lead, "instagram", config), ...schemaInstagramRefs])
+      ? dedupe([...buildSocialCandidateUrls(lead, "instagram", config, options.listsCtx), ...schemaInstagramRefs])
       : [];
   const facebook = await Promise.all(
     facebookUrls.map((url) =>

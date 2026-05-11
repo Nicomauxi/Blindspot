@@ -41,6 +41,9 @@ digital_gap:
     - name: no_website
       condition: { tag: no-website }
       weight: 35
+    - name: high_reviews_no_web
+      condition: { tag: high-reviews-no-web }
+      weight: 10
     - name: fb_heuristic
       condition: { tag: fb-heuristic }
       weight: 15
@@ -62,6 +65,9 @@ digital_gap:
     - name: social_link_only
       condition: { tag: social-link-only }
       weight: 20
+    - name: web_only_no_social
+      condition: { tag: web-only-no-social }
+      weight: 28
     - name: ssl_missing
       condition: { tag: ssl-missing }
       weight: 10
@@ -80,6 +86,9 @@ digital_gap:
     - name: chat_widget_present
       condition: { tag: chat-widget }
       weight: -3
+    - name: chat_widget_missing
+      condition: { tag: chat-widget-missing }
+      weight: 3
     - name: whatsapp_missing
       condition: { tag: whatsapp-missing }
       weight: 10
@@ -111,7 +120,7 @@ mutual_exclusions:
     - [rating_excellent, rating_good]
     - [reviews_high, reviews_medium, reviews_low]
   digital_gap:
-    - [website_heuristic, no_website, fb_only, ig_only, social_link_only]
+    - [website_heuristic, no_website, fb_only, ig_only, social_link_only, web_only_no_social]
     - [fb_only, fb_confirmed, fb_heuristic]
     - [ig_only, ig_confirmed, ig_heuristic]
     - [whatsapp_confirmed, whatsapp_derived, whatsapp_missing]

@@ -1,4 +1,16 @@
-import { STOP_WORDS, tokenizeFromSlug } from "./heuristic-discovery.js";
+import { STOP_WORDS, getHeuristicConfig, tokenizeFromSlug } from "./heuristic-discovery.js";
+
+const VOCABULARY_STOP_WORDS = new Set(["center", "centre", "centro"]);
+
+export function getVocabularyStopWords(): ReadonlySet<string> {
+  const config = getHeuristicConfig();
+  return new Set([
+    ...STOP_WORDS,
+    ...VOCABULARY_STOP_WORDS,
+    ...config.geographic_stop_words,
+    ...config.proper_noun_stop_words,
+  ]);
+}
 
 export function computeNicheStopWords(
   leads: Array<Pick<{ name: string }, "name">>,
@@ -8,11 +20,12 @@ export function computeNicheStopWords(
   if (leads.length === 0) return new Map();
 
   const wordCounts = new Map<string, number>();
+  const stopWords = getVocabularyStopWords();
 
   for (const lead of leads) {
     const tokens = tokenizeFromSlug(lead.name);
     const uniqueWords = new Set(
-      tokens.filter((w) => w.length >= 4 && !STOP_WORDS.has(w))
+      tokens.filter((w) => w.length >= 4 && !stopWords.has(w))
     );
     for (const word of uniqueWords) {
       wordCounts.set(word, (wordCounts.get(word) ?? 0) + 1);

@@ -54,7 +54,7 @@ function makeDomPage(input: {
   return {
     goto: vi.fn(async () => undefined),
     waitForLoadState: vi.fn(async () => undefined),
-    evaluate: vi.fn(async (fn: () => unknown) => {
+    evaluate: vi.fn(async (fn: (arg: { blockedHosts: string[] }) => unknown, arg: { blockedHosts: string[] }) => {
       const previousDocument = (globalThis as { document?: unknown }).document;
       const profileRoot = {
         querySelectorAll: vi.fn(() => input.profileLinks.map((href) => ({ href }))),
@@ -83,7 +83,7 @@ function makeDomPage(input: {
       };
       (globalThis as { document?: unknown }).document = fakeDocument;
       try {
-        return fn();
+        return fn(arg);
       } finally {
         (globalThis as { document?: unknown }).document = previousDocument;
       }
@@ -158,6 +158,37 @@ describe("extractInstagramProfile", () => {
     );
 
     expect(result?.external_url).toBeNull();
+  });
+
+  it("default blocked hosts exclude Meta-owned profile links", async () => {
+    const page = makeDomPage({
+      profileLinks: ["https://about.meta.com/", "https://facebook.com/salonbella"],
+      footerLinks: [],
+    });
+
+    const result = await extractInstagramProfile(
+      page,
+      "https://instagram.com/salonbella",
+      makeLead()
+    );
+
+    expect(result?.external_url).toBeNull();
+  });
+
+  it("uses custom blocked hosts and selects the next external profile link", async () => {
+    const page = makeDomPage({
+      profileLinks: ["https://linkhub.example/salonbella", "https://salonbella.uy"],
+      footerLinks: [],
+    });
+
+    const result = await extractInstagramProfile(
+      page,
+      "https://instagram.com/salonbella",
+      makeLead(),
+      ["linkhub.example"]
+    );
+
+    expect(result?.external_url).toBe("https://salonbella.uy");
   });
 
   it("accepts a real profile bio link as external_url", async () => {

@@ -43,6 +43,18 @@ describe("normalizeNiche", () => {
     expect(normalizeNiche("Peluquería y barbería")).toBe("hairdresser");
   });
 
+  it("keeps default hairdresser normalization without aliases", () => {
+    expect(normalizeNiche("peluquería")).toBe("hairdresser");
+  });
+
+  it("uses custom aliases when provided", () => {
+    const aliases = [
+      { niche: "beauty_salon", term: "salon de belleza", matchType: "contains" },
+    ];
+
+    expect(normalizeNiche("salon de belleza", aliases)).toBe("beauty_salon");
+  });
+
   it("maps car dealer terms accent-insensitively", () => {
     expect(normalizeNiche("concesionaria de automóviles")).toBe("car_dealer");
   });
@@ -56,6 +68,10 @@ describe("normalizeNiche", () => {
 
   it("falls back to other for unknown niches", () => {
     expect(normalizeNiche("algo desconocido")).toBe("other");
+  });
+
+  it("falls back to other for unknown niches without aliases", () => {
+    expect(normalizeNiche("unknown")).toBe("other");
   });
 });
 

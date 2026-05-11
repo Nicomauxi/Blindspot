@@ -40,18 +40,48 @@ const DimensionSchema = z
     }
   });
 
-const ScoringConfigSchema: z.ZodType<ScoringConfig> = z.object({
-  version: z.number(),
-  recent_reviews_threshold_days: z.number().int().positive(),
-  business_quality: DimensionSchema,
-  digital_gap: DimensionSchema,
-  mutual_exclusions: z.object({
-    business_quality: z.array(z.array(z.string())).default([]),
-    digital_gap: z.array(z.array(z.string())).default([]),
-  }),
-  cap: z.number().default(100),
-  prospect_formula: z.literal("business_quality * digital_gap / 100"),
-});
+const ScoringConfigSchema: z.ZodType<ScoringConfig> = z
+  .object({
+    version: z.number(),
+    recent_reviews_threshold_days: z.number().int().positive(),
+    business_quality: DimensionSchema,
+    digital_gap: DimensionSchema,
+    mutual_exclusions: z.object({
+      business_quality: z.array(z.array(z.string())).default([]),
+      digital_gap: z.array(z.array(z.string())).default([]),
+    }),
+    cap: z.number().default(100),
+    prospect_formula: z.literal("business_quality * digital_gap / 100"),
+  })
+  .superRefine((cfg, ctx) => {
+    if (cfg.cap <= 0) {
+      ctx.addIssue({ code: "custom", path: ["cap"], message: "cap must be > 0" });
+    }
+    const bqNames = new Set(cfg.business_quality.rules.map((r) => r.name));
+    const dgNames = new Set(cfg.digital_gap.rules.map((r) => r.name));
+    for (const group of cfg.mutual_exclusions.business_quality) {
+      for (const name of group) {
+        if (!bqNames.has(name)) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["mutual_exclusions", "business_quality"],
+            message: `Unknown rule: "${name}"`,
+          });
+        }
+      }
+    }
+    for (const group of cfg.mutual_exclusions.digital_gap) {
+      for (const name of group) {
+        if (!dgNames.has(name)) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["mutual_exclusions", "digital_gap"],
+            message: `Unknown rule: "${name}"`,
+          });
+        }
+      }
+    }
+  });
 
 let cached: ScoringConfig | null = null;
 
