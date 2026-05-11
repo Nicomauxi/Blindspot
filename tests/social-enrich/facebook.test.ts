@@ -51,6 +51,7 @@ describe("extractFacebookProfile", () => {
   it("navigates with Playwright and extracts public page signals", async () => {
     const page = makePage({
       name: "AMAYA Motors Propios",
+      email: "ventas@amaya.com.uy",
       phone: "098365592",
       website: "https://amaya.com.uy",
       description: "Venta de autos usados y 0km en Montevideo.",
@@ -71,6 +72,7 @@ describe("extractFacebookProfile", () => {
     expect(result).toMatchObject({
       url: "https://facebook.com/amayamotorsusadosy0km",
       name: "AMAYA Motors Propios",
+      email: "ventas@amaya.com.uy",
       phone: "+59898365592",
       website: "https://amaya.com.uy",
       description: "Venta de autos usados y 0km en Montevideo.",
@@ -78,7 +80,7 @@ describe("extractFacebookProfile", () => {
     });
     expect(result.confidence).toBeGreaterThanOrEqual(0.7);
     expect(result.signals).toEqual(
-      expect.arrayContaining(["page_loaded", "name_match", "phone_found", "whatsapp_button"])
+      expect.arrayContaining(["page_loaded", "name_match", "email_found", "phone_found", "whatsapp_button"])
     );
   });
 

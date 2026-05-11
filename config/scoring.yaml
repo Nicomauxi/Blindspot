@@ -30,6 +30,9 @@ business_quality:
     - name: has_recent_reviews
       condition: { field: google_data.has_recent_reviews, op: eq, value: true }
       weight: 10
+    - name: has_owner_replies
+      condition: { field: google_data.has_owner_replies, op: eq, value: true }
+      weight: 5
 
 # digital_gap: 0-100. Qué tan ausente está el negocio digitalmente.
 digital_gap:
@@ -73,6 +76,12 @@ digital_gap:
     - name: analytics_missing
       condition: { tag: analytics-missing }
       weight: 5
+    - name: email_missing
+      condition: { tag: email-missing }
+      weight: 5
+    - name: chat_widget_present
+      condition: { tag: chat-widget }
+      weight: -3
     - name: whatsapp_missing
       condition: { tag: whatsapp-missing }
       weight: 10
@@ -91,6 +100,9 @@ digital_gap:
     - name: web_outdated
       condition: { tag: web-outdated }
       weight: 8
+    - name: hours_missing_on_web
+      condition: { tag: hours-missing-on-web }
+      weight: 3
     - name: site_unreachable
       condition: { tag: site-unreachable }
       weight: 15

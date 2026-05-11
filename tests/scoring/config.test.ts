@@ -62,6 +62,30 @@ prospect_formula: "business_quality * digital_gap / 100"
     expect(() => parseConfig(yaml)).toThrow();
   });
 
+  it("accepts negative rule weights", () => {
+    const yaml = `
+version: 1
+business_quality:
+  rules: []
+digital_gap:
+  rules:
+    - name: chat_widget_present
+      condition: { tag: chat-widget }
+      weight: -3
+mutual_exclusions:
+  business_quality: []
+  digital_gap: []
+cap: 100
+prospect_formula: "business_quality * digital_gap / 100"
+`;
+    const config = parseConfig(yaml);
+    expect(config.digital_gap.rules).toContainEqual({
+      name: "chat_widget_present",
+      condition: { tag: "chat-widget" },
+      weight: -3,
+    });
+  });
+
   it("throws when prospect_formula is not the expected literal", () => {
     const yaml = VALID_YAML.replace(
       '"business_quality * digital_gap / 100"',
@@ -118,6 +142,26 @@ describe("getScoringConfig", () => {
       name: "whatsapp_confirmed",
       condition: { tag: "whatsapp-confirmed" },
       weight: 3,
+    });
+    expect(config.digital_gap.rules).toContainEqual({
+      name: "email_missing",
+      condition: { tag: "email-missing" },
+      weight: 5,
+    });
+    expect(config.digital_gap.rules).toContainEqual({
+      name: "chat_widget_present",
+      condition: { tag: "chat-widget" },
+      weight: -3,
+    });
+    expect(config.digital_gap.rules).toContainEqual({
+      name: "hours_missing_on_web",
+      condition: { tag: "hours-missing-on-web" },
+      weight: 3,
+    });
+    expect(config.business_quality.rules).toContainEqual({
+      name: "has_owner_replies",
+      condition: { field: "google_data.has_owner_replies", op: "eq", value: true },
+      weight: 5,
     });
     expect(config.mutual_exclusions.digital_gap).toContainEqual([
       "whatsapp_confirmed",

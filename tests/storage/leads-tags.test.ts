@@ -143,6 +143,7 @@ describe("enrichment tag cleanup", () => {
           facebook: {
             url: "https://facebook.com/business",
             name: "Business",
+            email: null,
             phone: "+59898365592",
             website: "https://business.uy",
             description: "About",
@@ -154,6 +155,8 @@ describe("enrichment tag cleanup", () => {
             url: "https://instagram.com/business",
             name: "Business",
             bio: "Bio",
+            email: null,
+            phone: null,
             external_url: "https://business.uy",
             has_contact_button: false,
             confidence: 0.8,

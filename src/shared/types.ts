@@ -159,6 +159,7 @@ export type SocialSearchSignal =
 export type PlaywrightSocialSignal =
   | "page_loaded"
   | "name_match"
+  | "email_found"
   | "phone_found"
   | "website_found"
   | "description_found"
@@ -195,6 +196,7 @@ export interface DuckDuckGoSocialSearch {
 export interface PlaywrightFacebookSearchResult {
   url: string;
   name: string | null;
+  email: string | null;
   phone: string | null;
   website: string | null;
   description: string | null;
@@ -207,6 +209,8 @@ export interface PlaywrightInstagramSearchResult {
   url: string;
   name: string | null;
   bio: string | null;
+  email: string | null;
+  phone: string | null;
   external_url: string | null;
   has_contact_button: boolean;
   confidence: number;
@@ -239,6 +243,7 @@ export type DigitalFootprintSkipped = {
   skipped: true;
   reason: "no-website" | "social-only";
   fetched_at: string;
+  contact_emails?: string[];
   heuristic_discovery?: HeuristicDiscovery;
   directory_discovery?: DirectoryDiscovery;
   social_search?: SocialSearch;
@@ -278,6 +283,10 @@ export interface DigitalFootprintEnriched {
   };
   copyright_year?: number | null;
   operational_systems?: OperationalSystemsSignal;
+  contact_emails?: string[];
+  phone_confirmed?: boolean;
+  phone_alternatives?: string[];
+  has_hours_on_web?: boolean;
   whois?: {
     fetched_at: string;
     created_at: string | null;

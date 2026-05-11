@@ -15,6 +15,20 @@ const CLASS_BOOKING_PLATFORMS = ["mindbody.io", "wodify.com", "classpass.com", "
 const APP_STORE_PLATFORMS = ["play.google.com/store/apps", "apps.apple.com"];
 const MENU_KEYWORDS = ["pedidosya", "ifood", "menupiu", "ver carta", "ver menu", "escanear qr"];
 const CATALOG_KEYWORDS = ["catálogo", "catalogo", "stock", "0km", "usados", "kilometraje"];
+const CHAT_WIDGET_PATTERNS = [
+  "tawk.to",
+  "intercom.io",
+  "widget.intercom.io",
+  "crisp.chat",
+  "client.crisp.chat",
+  "tidio.co",
+  "code.tidio.co",
+  "livechat.com",
+  "cdn.livechatinc.com",
+  "zendesk.com/embeddable_framework",
+  "freshchat.com",
+  "wchat.freshchat.com",
+];
 
 function emptySignal(): OperationalSystemsSignal {
   return {
@@ -56,7 +70,11 @@ export function parseOperationalSystems(html: string): OperationalSystemsSignal 
       .filter(Boolean);
     const htmlLower = html.toLowerCase();
     const textLower = $("body").text().toLowerCase();
-    const urls = [...hrefs, ...scriptSrcs];
+    const inlineScripts = $("script")
+      .map((_, el) => $(el).text().trim().toLowerCase())
+      .get()
+      .filter(Boolean);
+    const urls = [...hrefs, ...scriptSrcs, ...inlineScripts];
 
     const menu_links = hrefs.filter((href) => {
       const path = href.split("?")[0] ?? href;
@@ -69,9 +87,9 @@ export function parseOperationalSystems(html: string): OperationalSystemsSignal 
       $("form").length > 0 ||
       htmlLower.includes("contact-form") ||
       htmlLower.includes("cotizar");
-    const chat_widget =
-      hrefs.some((href) => href.includes("wa.me/") || href.includes("api.whatsapp.com/send")) ||
-      urls.some((url) => url.includes("tawk.to"));
+    const chat_widget = urls.some((url) =>
+      CHAT_WIDGET_PATTERNS.some((platform) => url.includes(platform))
+    );
 
     return {
       booking_platforms: unique(presentPlatforms(urls, BOOKING_PLATFORMS)),

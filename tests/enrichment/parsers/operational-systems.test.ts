@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { parseOperationalSystems } from "../../../src/modules/enrichment/parsers/operational-systems.js";
 
 describe("parseOperationalSystems", () => {
-  it("detects booking, WhatsApp chat, tawk.to chat, and app store links", () => {
+  it("detects booking, tawk.to chat, and app store links", () => {
     const html = `
       <html><body>
         <a href="https://booksy.com/es-uy/123">Reservar</a>
@@ -15,6 +15,32 @@ describe("parseOperationalSystems", () => {
     expect(result.booking_platforms).toEqual(["booksy.com"]);
     expect(result.chat_widget).toBe(true);
     expect(result.app_store_links).toEqual(["play.google.com/store/apps"]);
+  });
+
+  it("does not treat WhatsApp links as chat widgets", () => {
+    const html = `
+      <html><body>
+        <a href="https://wa.me/59899123456">WhatsApp</a>
+        <a href="https://api.whatsapp.com/send?phone=59899123456">WhatsApp API</a>
+      </body></html>
+    `;
+
+    expect(parseOperationalSystems(html).chat_widget).toBe(false);
+  });
+
+  it("detects known chat widget platforms in scripts and hrefs", () => {
+    const platforms = [
+      '<script src="https://widget.intercom.io/widget/app"></script>',
+      '<script src="https://client.crisp.chat/l.js"></script>',
+      '<script src="https://code.tidio.co/test.js"></script>',
+      '<script src="https://cdn.livechatinc.com/tracking.js"></script>',
+      '<script src="https://example.zendesk.com/embeddable_framework/main.js"></script>',
+      '<a href="https://wchat.freshchat.com/js/widget.js">Chat</a>',
+    ];
+
+    for (const snippet of platforms) {
+      expect(parseOperationalSystems(`<html><body>${snippet}</body></html>`).chat_widget).toBe(true);
+    }
   });
 
   it("detects restaurant menu and delivery/reservation platforms", () => {

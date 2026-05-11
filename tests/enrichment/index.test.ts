@@ -578,6 +578,64 @@ describe("enrichLead", () => {
     });
   });
 
+  it("persists web contact signals and emits positive tags after successful scrape", async () => {
+    const lead = makeLead({ website: "https://example.com", phone: "+59899123456" });
+    const html = `
+      <html><head>
+        <script src="https://embed.tawk.to/site/default"></script>
+        <script type="application/ld+json">
+          {"@context":"https://schema.org","@type":"LocalBusiness","openingHoursSpecification":[{"@type":"OpeningHoursSpecification","opens":"09:00","closes":"18:00"}]}
+        </script>
+      </head><body>
+        <a href="mailto:ventas@negocio.uy">Email</a>
+        <a href="tel:099123456">Llamar</a>
+      </body></html>
+    `;
+
+    const r = await enrichLead(lead, { forceRefresh: false }, {
+      fetchHtml: fetchHtmlOk(html),
+      whoisLookup: whoisOk(null),
+    });
+
+    expect(r.digital_footprint).toMatchObject({
+      contact_emails: ["ventas@negocio.uy"],
+      phone_confirmed: true,
+      phone_alternatives: [],
+      has_hours_on_web: true,
+      operational_systems: { chat_widget: true },
+    });
+    expect(r.tags_to_add).toEqual(expect.arrayContaining([
+      "email-found",
+      "phone-web-confirmed",
+      "chat-widget",
+    ]));
+    expect(r.tags_to_add).not.toContain("email-missing");
+    expect(r.tags_to_add).not.toContain("hours-missing-on-web");
+    expect(r.tags_to_add).not.toContain("chat-widget-missing");
+  });
+
+  it("emits absence tags for new web signals only after successful scrape", async () => {
+    const lead = makeLead({ website: "https://example.com", phone: "+59899111222" });
+
+    const r = await enrichLead(lead, { forceRefresh: false }, {
+      fetchHtml: fetchHtmlOk("<html><body><p>Bienvenidos</p></body></html>"),
+      whoisLookup: whoisOk(null),
+    });
+
+    expect(r.digital_footprint).toMatchObject({
+      contact_emails: [],
+      phone_confirmed: false,
+      phone_alternatives: [],
+      has_hours_on_web: false,
+      operational_systems: { chat_widget: false },
+    });
+    expect(r.tags_to_add).toEqual(expect.arrayContaining([
+      "email-missing",
+      "chat-widget-missing",
+      "hours-missing-on-web",
+    ]));
+  });
+
   it("persists copyright year and emits web-outdated tag", async () => {
     const lead = makeLead({ website: "https://example.com" });
     const html = "<html><body><footer>Copyright 2020 Test Lead</footer></body></html>";
@@ -658,6 +716,9 @@ describe("enrichLead", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
     // Tags re-emitted idempotently from cached footprint
     expect(r.tags_to_add).toContain("analytics-missing");
+    expect(r.tags_to_add).not.toContain("email-missing");
+    expect(r.tags_to_add).not.toContain("chat-widget-missing");
+    expect(r.tags_to_add).not.toContain("hours-missing-on-web");
   });
 
   it("ignores cache when forceRefresh is true", async () => {

@@ -21,7 +21,7 @@ const TagConditionSchema = z.object({
 const RuleSchema = z.object({
   name: z.string(),
   condition: z.union([TagConditionSchema, FieldConditionSchema]),
-  weight: z.number().positive(),
+  weight: z.number(),
 });
 
 const DimensionSchema = z

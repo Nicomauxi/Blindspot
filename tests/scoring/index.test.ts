@@ -132,4 +132,24 @@ describe("scoreLead", () => {
     expect(result.digital_gap_score).toBe(35);
     expect(result.prospect_score).toBe(15); // floor(43*35/100) = floor(15.05) = 15
   });
+
+  it("clamps digital_gap to 0 after summing negative weights", () => {
+    const result = scoreLead({ ...empty_lead, tags: ["chat-widget"] });
+    expect(result.digital_gap_score).toBe(0);
+    expect(result.score_breakdown.digital_gap.rules).toContainEqual(
+      expect.objectContaining({ name: "chat_widget_present", weight: -3 })
+    );
+  });
+
+  it("scores owner replies as a business quality signal", () => {
+    const result = scoreLead({
+      ...empty_lead,
+      google_data: { has_owner_replies: true },
+    });
+
+    expect(result.business_quality_score).toBe(5);
+    expect(result.score_breakdown.business_quality.rules).toContainEqual(
+      expect.objectContaining({ name: "has_owner_replies", weight: 5 })
+    );
+  });
 });

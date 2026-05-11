@@ -1,6 +1,6 @@
 import { getSupabase } from "../shared/supabase.js";
 import { getLogger } from "../shared/logger.js";
-import type { DigitalFootprint, Lead, LeadUpsert, SocialSearch } from "../shared/types.js";
+import type { DigitalFootprint, DigitalFootprintEnriched, Lead, LeadUpsert, SocialSearch } from "../shared/types.js";
 import type { ScoreResult } from "../modules/scoring/types.js";
 
 export interface UpsertResult {
@@ -8,6 +8,7 @@ export interface UpsertResult {
   updated: Lead[];
 }
 
+const MAX_CONTACT_EMAILS = 3;
 const isRejectedTag = (tag: string): boolean => tag.startsWith("rejected:");
 
 function socialSearchConfirmsFacebook(search: SocialSearch): boolean {
@@ -39,6 +40,22 @@ function socialSearchConfirmsWhatsapp(search: SocialSearch): boolean {
     search.facebook !== null &&
     search.facebook.confidence >= 0.7 &&
     search.facebook.whatsapp_button;
+}
+
+function socialSearchEmails(search: SocialSearch): string[] {
+  if (search.source !== "playwright") return [];
+  return Array.from(new Set([
+    search.facebook?.email ?? null,
+    search.instagram?.email ?? null,
+  ].filter((email): email is string => email !== null)));
+}
+
+function mergeContactEmails(existing: string[] | undefined, search: SocialSearch): string[] | undefined {
+  const merged = Array.from(new Set([
+    ...(existing ?? []),
+    ...socialSearchEmails(search),
+  ])).slice(0, MAX_CONTACT_EMAILS);
+  return merged.length > 0 ? merged : existing;
 }
 
 export function cleanupMergedTagsForEnrichment(
@@ -232,6 +249,45 @@ export async function loadLeadsByRunId(runId: string): Promise<Lead[]> {
   return (data ?? []) as Lead[];
 }
 
+function isEnriched(fp: DigitalFootprint): fp is DigitalFootprintEnriched {
+  return fp.skipped !== true;
+}
+
+export function mergeFootprint(
+  existing: DigitalFootprint | null,
+  fresh: DigitalFootprint
+): DigitalFootprint {
+  if (existing === null || !isEnriched(existing) || !isEnriched(fresh)) return fresh;
+
+  const prevSocial = existing.social_search ?? null;
+  const nextSocial = fresh.social_search ?? null;
+  const prevFbOk = prevSocial !== null && socialSearchConfirmsFacebook(prevSocial);
+  const prevIgOk = prevSocial !== null && socialSearchConfirmsInstagram(prevSocial);
+  const nextFbOk = nextSocial !== null && socialSearchConfirmsFacebook(nextSocial);
+  const nextIgOk = nextSocial !== null && socialSearchConfirmsInstagram(nextSocial);
+
+  // Preserve confirming social_search — never downgrade confirmed → non-confirmed.
+  const social_search =
+    ((prevFbOk && !nextFbOk) || (prevIgOk && !nextIgOk)) && prevSocial !== null
+      ? prevSocial
+      : nextSocial;
+
+  // Preserve phone_confirmed: true — never downgrade to false/null.
+  const phone_confirmed = existing.phone_confirmed === true ? true : fresh.phone_confirmed;
+
+  // Preserve contact_emails — only replace when fresh brings real emails.
+  const prevEmails = existing.contact_emails ?? [];
+  const nextEmails = fresh.contact_emails ?? [];
+  const contact_emails = nextEmails.length > 0 ? nextEmails : prevEmails;
+
+  return {
+    ...fresh,
+    ...(phone_confirmed !== undefined ? { phone_confirmed } : {}),
+    contact_emails,
+    ...(social_search !== null ? { social_search } : {}),
+  };
+}
+
 export async function updateLeadEnrichment(
   leadId: string,
   footprint: DigitalFootprint,
@@ -241,20 +297,23 @@ export async function updateLeadEnrichment(
   const db = getSupabase();
   const { data: current, error: fetchErr } = await db
     .from("leads")
-    .select("tags, whatsapp")
+    .select("tags, whatsapp, digital_footprint")
     .eq("id", leadId)
     .single();
   if (fetchErr) throw new Error(`Failed to load lead ${leadId}: ${fetchErr.message}`);
 
+  const existingFootprint = (current?.digital_footprint as DigitalFootprint | null) ?? null;
+  const mergedFootprint = mergeFootprint(existingFootprint, footprint);
+
   const currentTags: string[] = Array.isArray(current?.tags) ? (current?.tags as string[]) : [];
-  const mergedTags = cleanupMergedTagsForEnrichment([...currentTags, ...newTags], footprint);
+  const mergedTags = cleanupMergedTagsForEnrichment([...currentTags, ...newTags], mergedFootprint);
   const currentWhatsapp = (current?.whatsapp as string | null) ?? null;
   const mergedWhatsapp = currentWhatsapp ?? whatsappFromSite ?? null;
 
   const { error } = await db
     .from("leads")
     .update({
-      digital_footprint: footprint,
+      digital_footprint: mergedFootprint,
       tags: mergedTags,
       whatsapp: mergedWhatsapp,
     })
@@ -278,9 +337,18 @@ export async function updateLeadSocialSearch(
 
   const currentFootprint = (current?.digital_footprint as DigitalFootprint | null) ?? null;
   const fetchedAt = socialSearch.ran_at;
+  const contactEmails = mergeContactEmails(currentFootprint?.contact_emails, socialSearch);
   const footprint: DigitalFootprint = currentFootprint
-    ? { ...currentFootprint, social_search: socialSearch }
-    : { fetched_at: fetchedAt, social_search: socialSearch };
+    ? {
+        ...currentFootprint,
+        social_search: socialSearch,
+        ...(contactEmails !== undefined ? { contact_emails: contactEmails } : {}),
+      }
+    : {
+        fetched_at: fetchedAt,
+        social_search: socialSearch,
+        ...(contactEmails !== undefined ? { contact_emails: contactEmails } : {}),
+      };
   const currentTags: string[] = Array.isArray(current?.tags) ? (current?.tags as string[]) : [];
   const mergedTags = cleanupMergedTagsForEnrichment([...currentTags, ...newTags], footprint);
   const currentWhatsapp = (current?.whatsapp as string | null) ?? null;
