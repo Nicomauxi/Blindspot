@@ -27,6 +27,7 @@ export interface MutualExclusions {
 
 export interface ScoringConfig {
   version: number;
+  recent_reviews_threshold_days: number;
   business_quality: Dimension;
   digital_gap: Dimension;
   mutual_exclusions: MutualExclusions;

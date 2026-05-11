@@ -7,6 +7,7 @@ import {
   parseDirectoryConfig,
   resetDirectoryConfigCache,
 } from "../../src/modules/enrichment/directory-discovery.js";
+import * as configModule from "../../src/shared/config.js";
 import type { Lead } from "../../src/shared/types.js";
 
 function makeLead(overrides: Partial<Lead> = {}): Lead {
@@ -67,7 +68,7 @@ function yeluCompany(id: number, name: string, phone: string | null = null) {
 
 describe("directory discovery", () => {
   afterEach(() => {
-    delete process.env.DIRECTORY_REFRESH_DAYS;
+    vi.restoreAllMocks();
     resetDirectoryConfigCache();
   });
 
@@ -233,7 +234,9 @@ directory_discovery:
   });
 
   it("detects stale directory runs with DIRECTORY_REFRESH_DAYS", () => {
-    process.env.DIRECTORY_REFRESH_DAYS = "10";
+    vi.spyOn(configModule, "getConfig").mockReturnValue({
+      DIRECTORY_REFRESH_DAYS: 10,
+    } as ReturnType<typeof configModule.getConfig>);
     const old = { ran_at: "2026-01-01T00:00:00.000Z" };
     const now = Date.parse("2026-01-12T00:00:00.000Z");
 

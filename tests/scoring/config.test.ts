@@ -7,6 +7,7 @@ beforeEach(() => {
 
 const VALID_YAML = `
 version: 1
+recent_reviews_threshold_days: 180
 business_quality:
   rules:
     - name: rating_excellent
@@ -32,6 +33,7 @@ describe("parseConfig", () => {
   it("parses valid YAML and returns a ScoringConfig", () => {
     const config = parseConfig(VALID_YAML);
     expect(config.version).toBe(1);
+    expect(config.recent_reviews_threshold_days).toBe(180);
     expect(config.business_quality.rules).toHaveLength(2);
     expect(config.digital_gap.rules).toHaveLength(1);
     expect(config.cap).toBe(100);
@@ -43,9 +45,15 @@ describe("parseConfig", () => {
     expect(() => parseConfig(yaml)).toThrow();
   });
 
+  it("throws when recent_reviews_threshold_days is not positive", () => {
+    const yaml = VALID_YAML.replace("recent_reviews_threshold_days: 180", "recent_reviews_threshold_days: 0");
+    expect(() => parseConfig(yaml)).toThrow(/recent_reviews_threshold_days/i);
+  });
+
   it("throws when a rule has non-numeric weight", () => {
     const yaml = `
 version: 1
+recent_reviews_threshold_days: 180
 business_quality:
   rules:
     - name: bad_rule
@@ -65,6 +73,7 @@ prospect_formula: "business_quality * digital_gap / 100"
   it("accepts negative rule weights", () => {
     const yaml = `
 version: 1
+recent_reviews_threshold_days: 180
 business_quality:
   rules: []
 digital_gap:
@@ -97,6 +106,7 @@ prospect_formula: "business_quality * digital_gap / 100"
   it("throws when a dimension has duplicate rule names", () => {
     const yaml = `
 version: 1
+recent_reviews_threshold_days: 180
 business_quality:
   rules:
     - name: dup_rule
@@ -121,6 +131,7 @@ describe("getScoringConfig", () => {
   it("loads the real scoring.yaml and returns valid config", () => {
     const config = getScoringConfig();
     expect(config.version).toBe(1);
+    expect(config.recent_reviews_threshold_days).toBe(180);
     expect(config.business_quality.rules.length).toBeGreaterThan(0);
     expect(config.digital_gap.rules.length).toBeGreaterThan(0);
     expect(config.digital_gap.rules).toContainEqual({
@@ -157,11 +168,6 @@ describe("getScoringConfig", () => {
       name: "hours_missing_on_web",
       condition: { tag: "hours-missing-on-web" },
       weight: 3,
-    });
-    expect(config.business_quality.rules).toContainEqual({
-      name: "has_owner_replies",
-      condition: { field: "google_data.has_owner_replies", op: "eq", value: true },
-      weight: 5,
     });
     expect(config.mutual_exclusions.digital_gap).toContainEqual([
       "whatsapp_confirmed",

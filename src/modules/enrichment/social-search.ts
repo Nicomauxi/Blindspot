@@ -1,6 +1,7 @@
 import { fetch } from "undici";
 import { load as loadHtml } from "cheerio";
 import { getLogger } from "../../shared/logger.js";
+import { getConfig } from "../../shared/config.js";
 import type {
   Lead,
   SocialSearch,
@@ -12,7 +13,6 @@ import type {
 import { USER_AGENT } from "./http.js";
 import { deriveDirectoryCitySlug } from "./directory-discovery.js";
 
-const DEFAULT_REFRESH_DAYS = 30;
 const THRESHOLD = 0.4;
 const INTER_QUERY_DELAY_MS = 500;
 const DUCKDUCKGO_HTML_URL = "https://duckduckgo.com/html/";
@@ -39,10 +39,7 @@ const DEFAULT_DEPS: SocialSearchDeps = {
 };
 
 export function getSocialSearchRefreshDays(): number {
-  const raw = process.env.SOCIAL_SEARCH_REFRESH_DAYS;
-  if (!raw) return DEFAULT_REFRESH_DAYS;
-  const n = Number(raw);
-  return Number.isFinite(n) && n > 0 ? n : DEFAULT_REFRESH_DAYS;
+  return getConfig().SOCIAL_SEARCH_REFRESH_DAYS;
 }
 
 export function isSocialSearchStale(

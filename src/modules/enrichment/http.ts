@@ -2,7 +2,7 @@ import { fetch } from "undici";
 import pRetry from "p-retry";
 import { getLogger } from "../../shared/logger.js";
 
-export const USER_AGENT = "blindspot/1.0 (+https://github.com/yourorg/blindspot)";
+export const USER_AGENT = "blindspot/1.0";
 export const FETCH_TIMEOUT_MS = 8_000;
 export const MAX_BODY_BYTES = 2 * 1024 * 1024;
 

@@ -1,4 +1,13 @@
 import { describe, it, expect, vi } from "vitest";
+
+vi.mock("../../src/shared/config.js", () => ({
+  getConfig: vi.fn(() => ({
+    HEURISTIC_REFRESH_DAYS: 30,
+    DIRECTORY_REFRESH_DAYS: 30,
+    SOCIAL_SEARCH_REFRESH_DAYS: 30,
+  })),
+}));
+
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";

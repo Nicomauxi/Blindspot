@@ -68,31 +68,13 @@ describe("enrichWithDetails — has_recent_reviews", () => {
     const result = enrichWithDetails(RAW_BASE, details);
     expect(result["has_recent_reviews"]).toBe(false);
   });
-});
 
-describe("enrichWithDetails — has_owner_replies", () => {
-  it("returns true when at least one review has an ownerReply", () => {
-    const details = {
-      reviews: [
-        {
-          publishTime: new Date().toISOString(),
-          rating: 5,
-          ownerReply: { text: { text: "Gracias por visitarnos." } },
-        },
-      ],
-    } as unknown as PlaceDetailsResult;
-
-    const result = enrichWithDetails(RAW_BASE, details);
-    expect(result["has_owner_replies"]).toBe(true);
-  });
-
-  it("returns false when reviews do not include owner replies", () => {
+  it("returns false when review publishTime is invalid", () => {
     const details: PlaceDetailsResult = {
-      reviews: [{ publishTime: new Date().toISOString(), rating: 5 }],
+      reviews: [{ publishTime: "not-a-date", rating: 5 }],
     };
-
     const result = enrichWithDetails(RAW_BASE, details);
-    expect(result["has_owner_replies"]).toBe(false);
+    expect(result["has_recent_reviews"]).toBe(false);
   });
 });
 

@@ -4,6 +4,7 @@ import pLimit from "p-limit";
 import { load } from "js-yaml";
 import { z } from "zod";
 import { getLogger } from "../../shared/logger.js";
+import { getConfig } from "../../shared/config.js";
 import type {
   HeuristicCandidate,
   HeuristicDiscovery,
@@ -13,8 +14,6 @@ import type {
   Lead,
 } from "../../shared/types.js";
 import { fetchHtml } from "./http.js";
-
-const DEFAULT_REFRESH_DAYS = 30;
 
 const HeuristicConfigSchema = z.object({
   heuristic_discovery: z.object({
@@ -77,10 +76,7 @@ export function resetHeuristicConfigCache(): void {
 }
 
 export function getHeuristicRefreshDays(): number {
-  const raw = process.env.HEURISTIC_REFRESH_DAYS;
-  if (!raw) return DEFAULT_REFRESH_DAYS;
-  const n = Number(raw);
-  return Number.isFinite(n) && n > 0 ? n : DEFAULT_REFRESH_DAYS;
+  return getConfig().HEURISTIC_REFRESH_DAYS;
 }
 
 export function isHeuristicStale(

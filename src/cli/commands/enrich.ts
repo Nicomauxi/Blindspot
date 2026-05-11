@@ -13,7 +13,7 @@ import {
 } from "../../storage/leads.js";
 import { loadFilterWordsForNiche } from "../../storage/vocabulary.js";
 import { enrichLead } from "../../modules/enrichment/index.js";
-import type { EnrichmentRunStats, RunStats } from "../../shared/types.js";
+import type { EnrichmentRunStats } from "../../shared/types.js";
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -98,7 +98,7 @@ export async function enrichCommand(rawArgs: RawEnrichArgs): Promise<void> {
         fetched_error: 0,
         whois_errors: 0,
       };
-      await completeRun(enrichRun.id, stats as unknown as RunStats);
+      await completeRun(enrichRun.id, stats);
       printSummary(enrichRun.id, stats);
       return;
     }
@@ -215,7 +215,7 @@ export async function enrichCommand(rawArgs: RawEnrichArgs): Promise<void> {
       fetched_error,
       whois_errors,
     };
-    await completeRun(enrichRun.id, stats as unknown as RunStats);
+    await completeRun(enrichRun.id, stats);
     printSummary(enrichRun.id, stats);
   } catch (err: unknown) {
     const duration_ms = Date.now() - startedAt;
