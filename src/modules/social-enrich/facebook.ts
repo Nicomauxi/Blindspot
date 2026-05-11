@@ -1,6 +1,7 @@
 import { getLogger } from "../../shared/logger.js";
 import type { Lead, PlaywrightFacebookSearchResult, PlaywrightSocialSignal } from "../../shared/types.js";
 import { normalizeUruguayPhone } from "../enrichment/social-search.js";
+import { applyGeographicPenalties } from "./geo-penalty.js";
 
 const NAVIGATION_TIMEOUT_MS = 15_000;
 declare const document: any;
@@ -94,6 +95,11 @@ function confidenceFrom(data: FacebookPageData, lead: Pick<Lead, "name">): {
     signals.push("whatsapp_button");
     confidence += 0.05;
   }
+
+  confidence = applyGeographicPenalties(confidence, {
+    website: data.website,
+    description: data.description,
+  });
 
   return { confidence: Number(Math.min(confidence, 0.95).toFixed(2)), signals };
 }

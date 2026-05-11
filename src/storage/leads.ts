@@ -2,6 +2,7 @@ import { getSupabase } from "../shared/supabase.js";
 import { getLogger } from "../shared/logger.js";
 import type { DigitalFootprint, DigitalFootprintEnriched, Lead, LeadUpsert, SocialSearch } from "../shared/types.js";
 import type { ScoreResult } from "../modules/scoring/types.js";
+import { normalizeUruguayMobile } from "../modules/enrichment/parsers/whatsapp.js";
 
 export interface UpsertResult {
   inserted: Lead[];
@@ -58,6 +59,10 @@ function mergeContactEmails(existing: string[] | undefined, search: SocialSearch
   return merged.length > 0 ? merged : existing;
 }
 
+function normalizeStoredWhatsapp(value: string | null): string | null {
+  return value ? normalizeUruguayMobile(value) : null;
+}
+
 export function cleanupMergedTagsForEnrichment(
   tags: string[],
   footprint?: DigitalFootprint
@@ -70,6 +75,16 @@ export function cleanupMergedTagsForEnrichment(
   if (set.has("ig-confirmed")) set.delete("ig-heuristic");
   if (set.has("whatsapp-derived")) set.delete("whatsapp-missing");
   if (set.has("whatsapp-confirmed")) set.delete("whatsapp-missing");
+
+  const contactEmails = Array.isArray(footprint?.contact_emails)
+    ? footprint.contact_emails.filter((email) => email.trim().length > 0)
+    : [];
+  if (contactEmails.length > 0) {
+    set.delete("email-missing");
+  } else {
+    set.delete("email-found");
+  }
+
   const heuristic = footprint?.heuristic_discovery;
   if (heuristic) {
     if (heuristic.selected.website === null) set.delete("website-heuristic");
@@ -308,7 +323,7 @@ export async function updateLeadEnrichment(
   const currentTags: string[] = Array.isArray(current?.tags) ? (current?.tags as string[]) : [];
   const mergedTags = cleanupMergedTagsForEnrichment([...currentTags, ...newTags], mergedFootprint);
   const currentWhatsapp = (current?.whatsapp as string | null) ?? null;
-  const mergedWhatsapp = currentWhatsapp ?? whatsappFromSite ?? null;
+  const mergedWhatsapp = normalizeStoredWhatsapp(currentWhatsapp) ?? normalizeStoredWhatsapp(whatsappFromSite);
 
   const { error } = await db
     .from("leads")
@@ -352,7 +367,7 @@ export async function updateLeadSocialSearch(
   const currentTags: string[] = Array.isArray(current?.tags) ? (current?.tags as string[]) : [];
   const mergedTags = cleanupMergedTagsForEnrichment([...currentTags, ...newTags], footprint);
   const currentWhatsapp = (current?.whatsapp as string | null) ?? null;
-  const mergedWhatsapp = currentWhatsapp ?? whatsappFromSocial ?? null;
+  const mergedWhatsapp = normalizeStoredWhatsapp(currentWhatsapp) ?? normalizeStoredWhatsapp(whatsappFromSocial);
 
   const { error } = await db
     .from("leads")

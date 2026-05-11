@@ -22,12 +22,11 @@ import {
 import {
   discoverSocialSearch,
   isSocialSearchStale,
-  isUruguayMobilePhone,
 } from "./social-search.js";
 import { parsePixels } from "./parsers/pixels.js";
 import { parseStack } from "./parsers/stack.js";
 import { parseViewport } from "./parsers/viewport.js";
-import { parseWhatsapp } from "./parsers/whatsapp.js";
+import { normalizeUruguayMobile, parseWhatsapp } from "./parsers/whatsapp.js";
 import { parseSocialLinks } from "./parsers/social-links.js";
 import { parseOperationalSystems } from "./parsers/operational-systems.js";
 import { parseEmails } from "./parsers/email.js";
@@ -404,7 +403,9 @@ export async function enrichLead(
       ...heuristicTags(heuristicDiscovery),
       ...socialSearchTags(socialSearch),
     ];
-    const socialMobile = socialSearchAdditionalPhones(socialSearch).find(isUruguayMobilePhone) ?? null;
+    const socialMobile = socialSearchAdditionalPhones(socialSearch)
+      .map((phone) => normalizeUruguayMobile(phone))
+      .find((phone): phone is string => phone !== null) ?? null;
     if (socialMobile && (lead.tags.includes("whatsapp-missing") || opts.withHeuristic === true)) {
       tags.push("whatsapp-derived");
     }
@@ -418,7 +419,7 @@ export async function enrichLead(
         ...(socialSearch ? { social_search: socialSearch } : {}),
       },
       tags_to_add: tags,
-      whatsapp_from_site: heuristicDiscovery?.selected.whatsapp?.number ?? socialMobile,
+      whatsapp_from_site: normalizeUruguayMobile(heuristicDiscovery?.selected.whatsapp?.number ?? "") ?? socialMobile,
       outcome: "skipped-no-website",
       duration_ms: Date.now() - start,
     };
@@ -553,14 +554,16 @@ export async function enrichLead(
     ...heuristicTags(heuristicDiscovery),
     ...socialSearchTags(socialSearch),
   ];
-  const socialMobile = socialSearchAdditionalPhones(socialSearch).find(isUruguayMobilePhone) ?? null;
+  const socialMobile = socialSearchAdditionalPhones(socialSearch)
+    .map((phone) => normalizeUruguayMobile(phone))
+    .find((phone): phone is string => phone !== null) ?? null;
+  const parsedWhatsapp = footprint.whatsapp?.numbers
+    .map((number) => normalizeUruguayMobile(number))
+    .find((number): number is string => number !== null) ?? null;
   if (socialMobile && tags_to_add.includes("whatsapp-missing")) {
     tags_to_add.push("whatsapp-derived");
   }
-  const whatsapp_from_site =
-    footprint.whatsapp && footprint.whatsapp.numbers.length > 0
-      ? footprint.whatsapp.numbers[0] ?? null
-      : socialMobile;
+  const whatsapp_from_site = parsedWhatsapp ?? socialMobile;
 
   const outcome: EnrichOutcome = cachedHtml
     ? "cache-hit"

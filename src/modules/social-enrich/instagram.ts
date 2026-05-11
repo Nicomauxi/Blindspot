@@ -2,6 +2,7 @@ import { getLogger } from "../../shared/logger.js";
 import type { Lead, PlaywrightInstagramSearchResult, PlaywrightSocialSignal } from "../../shared/types.js";
 import type { SocialEnrichPage } from "./facebook.js";
 import { normalizeUruguayPhone } from "../enrichment/social-search.js";
+import { applyGeographicPenalties } from "./geo-penalty.js";
 
 const NAVIGATION_TIMEOUT_MS = 15_000;
 declare const document: any;
@@ -84,21 +85,12 @@ function confidenceFrom(data: InstagramPageData, lead: Pick<Lead, "name">): {
     confidence += 0.05;
   }
 
-  return { confidence: Number(Math.min(confidence, 0.95).toFixed(2)), signals };
-}
+  confidence = applyGeographicPenalties(confidence, {
+    website: data.external_url,
+    description: data.bio,
+  });
 
-function isAllowedBioExternalUrl(href: string): boolean {
-  try {
-    const host = new URL(href).hostname.toLowerCase().replace(/^www\./, "");
-    return ![
-      "about.meta.com",
-      "facebook.com",
-      "instagram.com",
-      "meta.com",
-    ].some((blocked) => host === blocked || host.endsWith(`.${blocked}`));
-  } catch {
-    return false;
-  }
+  return { confidence: Number(Math.min(confidence, 0.95).toFixed(2)), signals };
 }
 
 function evaluateInstagramPage(): InstagramPageData {
@@ -113,8 +105,16 @@ function evaluateInstagramPage(): InstagramPageData {
   const profileAnchors = profileRoots.flatMap((root) =>
     Array.from(root.querySelectorAll("a[href]")) as Array<{ href: string }>
   );
+  const blockedHosts = ["about.meta.com", "facebook.com", "instagram.com", "meta.com"];
   const external_url =
-    profileAnchors.map((anchor) => anchor.href).find(isAllowedBioExternalUrl) ?? null;
+    profileAnchors.map((anchor) => anchor.href).find((href) => {
+      try {
+        const host = new URL(href).hostname.toLowerCase().replace(/^www\./, "");
+        return !blockedHosts.some((b) => host === b || host.endsWith(`.${b}`));
+      } catch {
+        return false;
+      }
+    }) ?? null;
   const text = document.body?.innerText ?? "";
   const has_contact_button = /\b(contact|email|call|llamar|correo|contacto)\b/i.test(text);
 

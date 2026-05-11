@@ -174,4 +174,89 @@ describe("extractInstagramProfile", () => {
 
     expect(result?.external_url).toBe("https://amaya.com.uy");
   });
+
+  it("does not penalize an otherwise Uruguayan profile", async () => {
+    const page = makePage({
+      name: "Salon Bella",
+      bio: "Color, corte y belleza en Montevideo, Uruguay.",
+      email: null,
+      phone: null,
+      external_url: "https://salonbella.uy",
+      has_contact_button: false,
+    });
+
+    const result = await extractInstagramProfile(
+      page,
+      "https://instagram.com/salonbella",
+      makeLead()
+    );
+
+    expect(result?.confidence).toBe(0.9);
+  });
+
+  it("penalizes foreign geographic bio text by 0.4", async () => {
+    const basePage = makePage({
+      name: "Salon Bella",
+      bio: "Color, corte y belleza en Montevideo, Uruguay.",
+      email: null,
+      phone: null,
+      external_url: "https://salonbella.uy",
+      has_contact_button: false,
+    });
+    const foreignPage = makePage({
+      name: "Salon Bella",
+      bio: "Color, corte y belleza en Tehuacán, México.",
+      email: null,
+      phone: null,
+      external_url: "https://salonbella.uy",
+      has_contact_button: false,
+    });
+
+    const base = await extractInstagramProfile(
+      basePage,
+      "https://instagram.com/salonbella",
+      makeLead()
+    );
+    const foreign = await extractInstagramProfile(
+      foreignPage,
+      "https://instagram.com/salonbella",
+      makeLead()
+    );
+
+    expect(base?.confidence).toBe(0.9);
+    expect(foreign?.confidence).toBe(0.5);
+  });
+
+  it("penalizes foreign external URL TLDs by 0.3", async () => {
+    const basePage = makePage({
+      name: "Salon Bella",
+      bio: "Color, corte y belleza en Montevideo, Uruguay.",
+      email: null,
+      phone: null,
+      external_url: "https://salonbella.uy",
+      has_contact_button: false,
+    });
+    const foreignPage = makePage({
+      name: "Salon Bella",
+      bio: "Color, corte y belleza en Montevideo, Uruguay.",
+      email: null,
+      phone: null,
+      external_url: "https://salonbella.mx",
+      has_contact_button: false,
+    });
+
+    const base = await extractInstagramProfile(
+      basePage,
+      "https://instagram.com/salonbella",
+      makeLead()
+    );
+    const foreign = await extractInstagramProfile(
+      foreignPage,
+      "https://instagram.com/salonbella",
+      makeLead()
+    );
+
+    expect(base?.confidence).toBe(0.9);
+    expect(foreign?.confidence).toBe(0.6);
+  });
 });

@@ -48,6 +48,22 @@ export function collectOverride(val: string, prev: string[]): string[] {
   return [...prev, val];
 }
 
+function resolveCandidateNiche(normalizedRequestedNiche: string, candidate: PlaceCandidate): string {
+  if (normalizedRequestedNiche !== "other") return normalizedRequestedNiche;
+
+  const rawPrimaryType =
+    typeof candidate.raw["primary_type"] === "string"
+      ? candidate.raw["primary_type"]
+      : typeof candidate.raw["primaryType"] === "string"
+        ? candidate.raw["primaryType"]
+        : null;
+  const primaryType = candidate.primaryType ?? rawPrimaryType;
+  if (!primaryType) return normalizedRequestedNiche;
+
+  const normalizedPrimaryType = normalizeNiche(primaryType.replace(/_/g, " "));
+  return normalizedPrimaryType === "other" ? normalizedRequestedNiche : normalizedPrimaryType;
+}
+
 function estimatePlacesCostUsd(textSearchRequestCount: number, detailsRequestCount: number): number {
   return (
     textSearchRequestCount * TEXT_SEARCH_COST_PER_REQUEST +
@@ -243,13 +259,13 @@ export async function discoverCommand(rawArgs: {
       candidate: c,
       passed: true,
       rejection_reasons: [] as string[],
-      niche: normalizedNiche,
+      niche: resolveCandidateNiche(normalizedNiche, c),
     }));
     const rejectedItems = rejected.map(({ candidate, reasons }) => ({
       candidate,
       passed: false,
       rejection_reasons: reasons as string[],
-      niche: normalizedNiche,
+      niche: resolveCandidateNiche(normalizedNiche, candidate),
     }));
 
     const items = discoveryConfig.persist_rejected

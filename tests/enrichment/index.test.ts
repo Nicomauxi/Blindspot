@@ -678,7 +678,7 @@ describe("enrichLead", () => {
     expect(r.tags_to_add).not.toContain("pixel-missing");
     expect(r.tags_to_add).not.toContain("not-responsive");
     expect(r.tags_to_add).not.toContain("whatsapp-missing");
-    expect(r.whatsapp_from_site).toBe("59899123456");
+    expect(r.whatsapp_from_site).toBe("+59899123456");
   });
 
   it("uses cached HTML when fetched_at is recent and forceRefresh is false", async () => {
