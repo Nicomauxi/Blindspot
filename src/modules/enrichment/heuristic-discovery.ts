@@ -45,6 +45,7 @@ export interface HeuristicListsCtx {
   stopWords?: ReadonlySet<string>;
   nicheStopWords?: ReadonlySet<string>;
   descriptorWords?: ReadonlyMap<string, string>;
+  blockedHeuristicDomains?: ReadonlySet<string>;
 }
 
 interface HeuristicDiscoveryOptions {
@@ -232,6 +233,18 @@ function hasRedirectMismatch(probedUrl: string, finalUrl: string | null): boolea
   return probedApex !== null && finalApex !== null && probedApex !== finalApex;
 }
 
+function isPureComDomain(url: string): boolean {
+  try {
+    const hostname = new URL(url).hostname.toLowerCase().replace(/^www\./, "");
+    return hostname.endsWith(".com") &&
+      !hostname.endsWith(".com.uy") &&
+      !hostname.endsWith(".com.ar") &&
+      !hostname.endsWith(".com.br");
+  } catch {
+    return false;
+  }
+}
+
 function htmlTextMatches(html: string, value: string): boolean {
   const folded = asciiFold(html).toLowerCase();
   return folded.includes(asciiFold(value).toLowerCase());
@@ -365,7 +378,10 @@ export function buildWebsiteCandidates(
   const fullName = withCityVariants(buildSlugVariants(lead.name, ctx), citySuffix).flatMap(
     (variant) => tldPriority.map((tld) => `https://${variant}.${tld}`)
   );
-  return dedupe([...singleWord, ...fullName]);
+  return dedupe([...singleWord, ...fullName]).filter((url) => {
+    const domain = extractApexDomain(url);
+    return !domain || !ctx?.blockedHeuristicDomains?.has(domain);
+  });
 }
 
 function buildSocialCandidateUrls(
@@ -454,6 +470,17 @@ async function probeWebsiteCandidate(
   if (city && fetched.html && htmlTextMatches(fetched.html, city)) {
     signals.push("city-match");
     score += 0.2;
+  }
+
+  if (
+    isPureComDomain(url) &&
+    signals.includes("name-match") &&
+    !signals.includes("city-match") &&
+    !signals.includes("name_in_schema") &&
+    !signals.includes("phone_in_schema")
+  ) {
+    score *= 0.5;
+    signals.push("foreign-com-penalty");
   }
 
   if (hasRedirectMismatch(url, fetched.finalUrl)) {
