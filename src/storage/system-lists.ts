@@ -6,19 +6,21 @@ import { getLogger } from "../shared/logger.js";
 // ============================================================
 
 export interface RuntimeLists {
-  blockedEmailDomains:   ReadonlySet<string>;
-  freeEmailDomains:      ReadonlySet<string>;
-  blockedEmailPrefixes:  readonly string[];
-  stopWords:             ReadonlySet<string>;
-  vocabularyStopWords:   ReadonlySet<string>;
-  geographicStopWords:   ReadonlySet<string>;
-  properNounStopWords:   ReadonlySet<string>;
-  socialDomains:         readonly string[];
-  platformHosts:         Readonly<Record<string, readonly string[]>>;
-  blockedInstagramHosts: readonly string[];
-  foreignTlds:           ReadonlySet<string>;
-  foreignGeoTerms:       readonly string[];
-  foreignPhonePrefixes:  readonly string[];
+  blockedEmailDomains:    ReadonlySet<string>;
+  blockedHeuristicDomains: ReadonlySet<string>;
+  freeEmailDomains:       ReadonlySet<string>;
+  blockedEmailPrefixes:   readonly string[];
+  stopWords:              ReadonlySet<string>;
+  vocabularyStopWords:    ReadonlySet<string>;
+  geographicStopWords:    ReadonlySet<string>;
+  properNounStopWords:    ReadonlySet<string>;
+  socialDomains:          readonly string[];
+  platformHosts:          Readonly<Record<string, readonly string[]>>;
+  blockedInstagramHosts:  readonly string[];
+  foreignTlds:            ReadonlySet<string>;
+  foreignEmailTlds:       ReadonlySet<string>;
+  foreignGeoTerms:        readonly string[];
+  foreignPhonePrefixes:   readonly string[];
 }
 
 export interface RuntimePatterns {
@@ -64,6 +66,7 @@ function fallbackLists(): RuntimeLists {
       "hosteruy.com.uy", "uruhost.com.uy", "datamedios.com.uy", "websitio.com.uy",
       "enaming.com",
     ]),
+    blockedHeuristicDomains: new Set(),
     freeEmailDomains: new Set(["gmail.com", "hotmail.com", "outlook.com", "yahoo.com"]),
     blockedEmailPrefixes: ["noreply", "no-reply", "mailer", "bounce"],
     stopWords: new Set(["de", "del", "la", "las", "el", "los", "y", "e", "the"]),
@@ -88,6 +91,11 @@ function fallbackLists(): RuntimeLists {
     },
     blockedInstagramHosts: ["about.meta.com", "facebook.com", "instagram.com", "meta.com"],
     foreignTlds: new Set(["ar", "br", "cl", "co", "mx", "pe", "py"]),
+    foreignEmailTlds: new Set([
+      "ar", "br", "cl", "co", "mx", "pe", "py",
+      "co.uk", "com.br", "com.ar", "com.mx", "com.co",
+      "com.pe", "com.py",
+    ]),
     foreignGeoTerms: [
       "argentina", "buenos aires", "brasil", "brazil", "chile", "colombia",
       "mexico", "mexico city", "méxico", "paraguay", "peru", "perú",
@@ -207,6 +215,30 @@ type NicheMappingRow = {
   match_type: string;
 };
 
+function extractApexDomain(url: string): string | null {
+  try {
+    const hostname = new URL(url).hostname.toLowerCase().replace(/^www\./, "");
+    const parts = hostname.split(".");
+    const ccTld = parts.at(-1);
+    const secondLevel = parts.at(-2);
+    const registrable = parts.at(-3);
+    if (
+      parts.length >= 3 &&
+      ccTld?.length === 2 &&
+      secondLevel !== undefined &&
+      registrable !== undefined
+    ) {
+      if (["com", "net", "org", "edu", "gub", "mil"].includes(secondLevel)) {
+        return `${registrable}.${ccTld}`;
+      }
+      return `${registrable}.${secondLevel}.${ccTld}`;
+    }
+    return parts.length >= 2 ? parts.slice(-2).join(".") : hostname;
+  } catch {
+    return null;
+  }
+}
+
 export async function loadRuntimeLists(): Promise<RuntimeLists> {
   try {
     const { data, error } = await getSupabase()
@@ -236,19 +268,21 @@ export async function loadRuntimeLists(): Promise<RuntimeLists> {
     }
 
     return {
-      blockedEmailDomains:   new Set(byName("blocked_email_domains")),
-      freeEmailDomains:      new Set(byName("free_email_domains")),
-      blockedEmailPrefixes:  byName("blocked_email_prefixes"),
-      stopWords:             new Set(byName("stop_words")),
-      vocabularyStopWords:   new Set(byName("vocabulary_stop_words")),
-      geographicStopWords:   new Set(byName("geographic_stop_words")),
-      properNounStopWords:   new Set(byName("proper_noun_stop_words")),
-      socialDomains:         byName("social_domains"),
+      blockedEmailDomains:    new Set(byName("blocked_email_domains")),
+      blockedHeuristicDomains: new Set(byName("blocked_heuristic_domains")),
+      freeEmailDomains:       new Set(byName("free_email_domains")),
+      blockedEmailPrefixes:   byName("blocked_email_prefixes"),
+      stopWords:              new Set(byName("stop_words")),
+      vocabularyStopWords:    new Set(byName("vocabulary_stop_words")),
+      geographicStopWords:    new Set(byName("geographic_stop_words")),
+      properNounStopWords:    new Set(byName("proper_noun_stop_words")),
+      socialDomains:          byName("social_domains"),
       platformHosts,
-      blockedInstagramHosts: byName("blocked_instagram_hosts"),
-      foreignTlds:           new Set(byName("foreign_tlds")),
-      foreignGeoTerms:       byName("foreign_geo_terms"),
-      foreignPhonePrefixes:  byName("foreign_phone_prefixes"),
+      blockedInstagramHosts:  byName("blocked_instagram_hosts"),
+      foreignTlds:            new Set(byName("foreign_tlds")),
+      foreignEmailTlds:       new Set(byName("foreign_tlds")),
+      foreignGeoTerms:        byName("foreign_geo_terms"),
+      foreignPhonePrefixes:   byName("foreign_phone_prefixes"),
     };
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -457,6 +491,81 @@ export async function detectAndSeedEmailProviders(minLeadCount = 2): Promise<num
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     getLogger().warn({ err: msg }, "detectAndSeedEmailProviders — threw, skipping");
+    return 0;
+  }
+}
+
+export async function detectAndSeedHeuristicDomains(minLeadCount = 2): Promise<number> {
+  const db = getSupabase();
+
+  try {
+    const { data, error } = await db
+      .from("leads")
+      .select("id, heuristic_url:digital_footprint->heuristic_discovery->selected->website->>url")
+      .eq("passed_filter", true)
+      .not("digital_footprint->heuristic_discovery->selected->website->>url", "is", null);
+
+    if (error) {
+      getLogger().warn({ err: error.message }, "detectAndSeedHeuristicDomains — lead query failed, skipping");
+      return 0;
+    }
+
+    const leadCounts = new Map<string, Set<string>>();
+    for (const row of (data ?? []) as Array<{ id: string; heuristic_url: unknown }>) {
+      const domain = typeof row.heuristic_url === "string"
+        ? extractApexDomain(row.heuristic_url)
+        : null;
+      if (!domain) continue;
+
+      const ids = leadCounts.get(domain) ?? new Set<string>();
+      ids.add(row.id);
+      leadCounts.set(domain, ids);
+    }
+
+    const candidateDomains = [...leadCounts.entries()]
+      .map(([domain, ids]) => [domain, ids.size] as const)
+      .filter(([, leadCount]) => leadCount >= minLeadCount);
+
+    if (candidateDomains.length === 0) return 0;
+
+    const { data: existingRows, error: existingError } = await db
+      .from("system_lists")
+      .select("value")
+      .eq("list_name", "blocked_heuristic_domains");
+
+    if (existingError) {
+      getLogger().warn({ err: existingError.message }, "detectAndSeedHeuristicDomains — existing domain query failed, skipping");
+      return 0;
+    }
+
+    const existingDomains = new Set((existingRows ?? []).map((row: { value: string }) => row.value.toLowerCase()));
+    const rows = candidateDomains
+      .filter(([domain]) => !existingDomains.has(domain))
+      .map(([domain, leadCount]) => ({
+        list_name: "blocked_heuristic_domains",
+        value: domain,
+        scope: null as string | null,
+        source: "auto_detected" as const,
+        confidence: Math.min(leadCount / 10, 1.0),
+        reason: "auto-detected shared heuristic domain",
+      }));
+
+    if (rows.length === 0) return 0;
+
+    const { error: insertError } = await db
+      .from("system_lists")
+      .insert(rows);
+
+    if (insertError) {
+      getLogger().warn({ err: insertError.message }, "detectAndSeedHeuristicDomains — insert failed");
+      return 0;
+    }
+
+    getLogger().info({ count: rows.length }, "detectAndSeedHeuristicDomains — inserted new domains");
+    return rows.length;
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    getLogger().warn({ err: msg }, "detectAndSeedHeuristicDomains — threw, skipping");
     return 0;
   }
 }

@@ -14,7 +14,11 @@ import {
 import { loadFilterWordsForNiche } from "../../storage/vocabulary.js";
 import { enrichLead } from "../../modules/enrichment/index.js";
 import type { EnrichmentCtx } from "../../modules/enrichment/index.js";
-import { detectAndSeedEmailProviders, loadAllRuntime } from "../../storage/system-lists.js";
+import {
+  detectAndSeedEmailProviders,
+  detectAndSeedHeuristicDomains,
+  loadAllRuntime,
+} from "../../storage/system-lists.js";
 import type { AllRuntime } from "../../storage/system-lists.js";
 import type { EnrichmentRunStats } from "../../shared/types.js";
 
@@ -37,8 +41,8 @@ interface RawEnrichArgs {
   all?: boolean | string;
 }
 
-function optionalSet<T>(values: ReadonlySet<T>): ReadonlySet<T> | undefined {
-  return values.size > 0 ? values : undefined;
+function optionalSet<T>(values: ReadonlySet<T> | undefined): ReadonlySet<T> | undefined {
+  return values && values.size > 0 ? values : undefined;
 }
 
 function optionalArray<T>(values: readonly T[]): readonly T[] | undefined {
@@ -65,6 +69,7 @@ function buildRuntimeCtx(runtime: AllRuntime, niche: string | null): EnrichmentC
   const blockedDomains = optionalSet(runtime.lists.blockedEmailDomains);
   const freeDomains = optionalSet(runtime.lists.freeEmailDomains);
   const blockedPrefixes = optionalArray(runtime.lists.blockedEmailPrefixes);
+  const foreignEmailTlds = optionalSet(runtime.lists.foreignEmailTlds);
   const foreignTlds = optionalSet(runtime.lists.foreignTlds);
   const foreignGeoTerms = optionalArray(runtime.lists.foreignGeoTerms);
   const foreignPhonePrefixes = optionalArray(runtime.lists.foreignPhonePrefixes);
@@ -77,12 +82,14 @@ function buildRuntimeCtx(runtime: AllRuntime, niche: string | null): EnrichmentC
   const chatWidgetPatterns = optionalArray(runtime.patterns.chatWidgets);
   const stopWords = optionalSet(runtime.lists.stopWords);
   const descriptorWords = optionalMap(runtime.mappings.descriptorWords);
+  const blockedHeuristicDomains = optionalSet(runtime.lists.blockedHeuristicDomains);
 
   return {
     emailCtx: {
       ...(blockedDomains ? { blockedDomains } : {}),
       ...(freeDomains ? { freeDomains } : {}),
       ...(blockedPrefixes ? { blockedPrefixes } : {}),
+      ...(foreignEmailTlds ? { foreignEmailTlds } : {}),
     },
     geoCtx: {
       ...(foreignTlds ? { foreignTlds } : {}),
@@ -102,6 +109,7 @@ function buildRuntimeCtx(runtime: AllRuntime, niche: string | null): EnrichmentC
       ...(stopWords ? { stopWords } : {}),
       ...(runtimeNicheStopWords ? { nicheStopWords: runtimeNicheStopWords } : {}),
       ...(descriptorWords ? { descriptorWords } : {}),
+      ...(blockedHeuristicDomains ? { blockedHeuristicDomains } : {}),
     },
   };
 }
@@ -309,6 +317,12 @@ export async function enrichCommand(rawArgs: RawEnrichArgs): Promise<void> {
         const seeded = await detectAndSeedEmailProviders();
         if (seeded > 0) {
           log.info({ count: seeded }, "email provider domains auto-detected after enrichment");
+        }
+        if (typeof detectAndSeedHeuristicDomains === "function") {
+          const newHeuristicBlocked = await detectAndSeedHeuristicDomains();
+          if (newHeuristicBlocked > 0) {
+            log.info({ count: newHeuristicBlocked }, "Auto-detected new blocked heuristic domains");
+          }
         }
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);

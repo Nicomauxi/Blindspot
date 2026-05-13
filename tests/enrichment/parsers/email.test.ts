@@ -139,4 +139,49 @@ describe("parseEmails", () => {
 
     expect(result.emails).toEqual([]);
   });
+
+  it("rejects emails with foreign compound TLDs", () => {
+    const result = parseEmails(
+      "<html><body><p>info@negocio.co.uk</p></body></html>",
+      { foreignEmailTlds: new Set(["co.uk", "com.ar"]) }
+    );
+
+    expect(result.emails).toEqual([]);
+  });
+
+  it("accepts generic .com emails when the TLD is not marked foreign", () => {
+    const result = parseEmails(
+      "<html><body><p>general@hamwi-int.com</p></body></html>",
+      { foreignEmailTlds: new Set(["co.uk", "com.ar"]) }
+    );
+
+    expect(result.emails).toEqual(["general@hamwi-int.com"]);
+  });
+
+  it("rejects emails with foreign country domains", () => {
+    const result = parseEmails(
+      "<html><body><p>ventas@negocio.com.ar</p></body></html>",
+      { foreignEmailTlds: new Set(["co.uk", "com.ar"]) }
+    );
+
+    expect(result.emails).toEqual([]);
+  });
+
+  it("accepts Uruguay business domains with foreign TLD filtering enabled", () => {
+    const result = parseEmails(
+      "<html><body><p>contacto@negocio.com.uy</p></body></html>",
+      { foreignEmailTlds: new Set(["co.uk", "com.ar"]) }
+    );
+
+    expect(result.emails).toEqual(["contacto@negocio.com.uy"]);
+  });
+
+  it("accepts free email providers when the TLD is not foreign", () => {
+    const result = parseEmails(
+      "<html><body><p>info@gmail.com</p></body></html>",
+      { foreignEmailTlds: new Set(["co.uk", "com.ar"]) }
+    );
+
+    expect(result.emails).toEqual(["info@gmail.com"]);
+  });
 });

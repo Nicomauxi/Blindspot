@@ -454,6 +454,98 @@ heuristic_discovery:
     expect(result.selected.website?.url).toBe("https://lander.com.uy");
   });
 
+  it("penalizes pure .com domains when they only match by name", async () => {
+    const result = await discoverHeuristicSources(
+      makeLead({ name: "Americano", address: null, phone: null }),
+      "website-only",
+      {
+        fetchHtml: async () => ({
+          status: 200,
+          finalUrl: "https://americano.com",
+          html: "<html><title>Americano</title></html>",
+          headers: {},
+          fetchedAt: "2026-01-01T00:00:00.000Z",
+        }),
+      },
+      { additionalWebsiteUrls: ["https://americano.com"] }
+    );
+
+    const candidate = result.candidates.website.find((entry) => entry.url === "https://americano.com");
+    expect(candidate?.signals).toEqual(["http-ok", "name-match", "foreign-com-penalty"]);
+    expect(candidate?.score).toBe(0.35);
+    expect(result.selected.website).toBeNull();
+  });
+
+  it("does not penalize .com.uy domains when they only match by name", async () => {
+    const result = await discoverHeuristicSources(
+      makeLead({ name: "Mood", address: null, phone: null }),
+      "website-only",
+      {
+        fetchHtml: async () => ({
+          status: 200,
+          finalUrl: "https://mood.com.uy",
+          html: "<html><title>Mood</title></html>",
+          headers: {},
+          fetchedAt: "2026-01-01T00:00:00.000Z",
+        }),
+      },
+      { additionalWebsiteUrls: ["https://mood.com.uy"] }
+    );
+
+    const candidate = result.candidates.website.find((entry) => entry.url === "https://mood.com.uy");
+    expect(candidate?.signals).toEqual(["http-ok", "name-match"]);
+    expect(candidate?.score).toBe(0.7);
+    expect(result.selected.website?.url).toBe("https://mood.com.uy");
+  });
+
+  it("does not penalize pure .com domains when city-match is present", async () => {
+    const result = await discoverHeuristicSources(
+      makeLead({ name: "Karma", address: "Montevideo", phone: null }),
+      "website-only",
+      {
+        fetchHtml: async () => ({
+          status: 200,
+          finalUrl: "https://karma.com",
+          html: "<html><title>Karma Montevideo</title></html>",
+          headers: {},
+          fetchedAt: "2026-01-01T00:00:00.000Z",
+        }),
+      },
+      { additionalWebsiteUrls: ["https://karma.com"] }
+    );
+
+    const candidate = result.candidates.website.find((entry) => entry.url === "https://karma.com");
+    expect(candidate?.signals).toEqual(["http-ok", "name-match", "city-match"]);
+    expect(candidate?.score).toBe(0.9);
+    expect(result.selected.website?.url).toBe("https://karma.com");
+  });
+
+  it("does not penalize pure .com domains when schema confirmation is present", async () => {
+    const result = await discoverHeuristicSources(
+      makeLead({ name: "Leblon", address: null, phone: "+59899123456" }),
+      "website-only",
+      {
+        fetchHtml: async () => ({
+          status: 200,
+          finalUrl: "https://leblon.com",
+          html: `<script type="application/ld+json">${JSON.stringify({
+            "@type": "LocalBusiness",
+            name: "Otro nombre",
+            telephone: "+59899123456",
+          })}</script>`,
+          headers: {},
+          fetchedAt: "2026-01-01T00:00:00.000Z",
+        }),
+      },
+      { additionalWebsiteUrls: ["https://leblon.com"] }
+    );
+
+    const candidate = result.candidates.website.find((entry) => entry.url === "https://leblon.com");
+    expect(candidate?.signals).toEqual(["http-ok", "phone_in_schema"]);
+    expect(candidate?.score).toBe(0.7);
+    expect(result.selected.website?.url).toBe("https://leblon.com");
+  });
+
   it("keeps multi-word website candidates on the higher website threshold", async () => {
     const result = await discoverHeuristicSources(
       makeLead({ name: "Urban Mood Gym", address: "Montevideo, Uruguay", phone: null }),

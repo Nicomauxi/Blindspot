@@ -39,6 +39,7 @@ export interface EmailParseCtx {
   blockedDomains?: ReadonlySet<string>;
   freeDomains?: ReadonlySet<string>;
   blockedPrefixes?: readonly string[];
+  foreignEmailTlds?: ReadonlySet<string>;
 }
 
 function emptyResult(): EmailParseResult {
@@ -61,6 +62,19 @@ function isUsefulEmail(email: string, ctx?: EmailParseCtx): boolean {
   const blockedPrefixes = ctx?.blockedPrefixes ?? BLOCKED_PREFIXES;
   if (freeDomains.has(lowerDomain) && SUSPICIOUS_LOCAL_TLD_SUFFIX.test(local)) return false;
   if (blockedDomains.has(lowerDomain)) return false;
+  if (ctx?.foreignEmailTlds) {
+    const domainParts = lowerDomain.split(".");
+    const tld1 = domainParts.at(-1);
+    const tld2 = domainParts.length >= 2
+      ? `${domainParts.at(-2)}.${domainParts.at(-1)}`
+      : null;
+    if (
+      (tld1 && ctx.foreignEmailTlds.has(tld1)) ||
+      (tld2 && ctx.foreignEmailTlds.has(tld2))
+    ) {
+      return false;
+    }
+  }
   return !blockedPrefixes.some(
     (prefix) => local.toLowerCase().startsWith(prefix) || lowerDomain.startsWith(prefix)
   );

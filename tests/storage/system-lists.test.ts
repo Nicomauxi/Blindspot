@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getSupabase } from "../../src/shared/supabase.js";
 import {
   detectAndSeedEmailProviders,
+  detectAndSeedHeuristicDomains,
   loadAllRuntime,
   loadRuntimePatterns,
 } from "../../src/storage/system-lists.js";
@@ -87,6 +88,62 @@ describe("detectAndSeedEmailProviders", () => {
       expect.objectContaining({
         list_name: "blocked_email_domains",
         value: "newco.uy",
+        source: "auto_detected",
+        confidence: 0.2,
+      }),
+    ]);
+  });
+});
+
+describe("detectAndSeedHeuristicDomains", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("aggregates shared heuristic domains from distinct passed leads, skips existing domains, and inserts new ones", async () => {
+    const insert = vi.fn().mockResolvedValue({ error: null });
+    const existingEq = vi.fn().mockResolvedValue({
+      data: [{ value: "existing.uy" }],
+      error: null,
+    });
+    const existingSelect = vi.fn(() => ({ eq: existingEq }));
+    const leadsNot = vi.fn().mockResolvedValue({
+      data: [
+        { id: "lead-1", heuristic_url: "https://www.repeat.com.uy" },
+        { id: "lead-2", heuristic_url: "https://repeat.uy" },
+        { id: "lead-2", heuristic_url: "https://repeat.uy" },
+        { id: "lead-3", heuristic_url: "https://existing.com.uy" },
+        { id: "lead-4", heuristic_url: "https://existing.uy" },
+        { id: "lead-5", heuristic_url: "https://solo.com.uy" },
+        { id: "lead-6", heuristic_url: "notaurl" },
+      ],
+      error: null,
+    });
+    const leadsEq = vi.fn(() => ({ not: leadsNot }));
+    const leadsSelect = vi.fn(() => ({ eq: leadsEq }));
+
+    const from = vi.fn((table: string) => {
+      if (table === "leads") return { select: leadsSelect };
+      if (table === "system_lists") return { select: existingSelect, insert };
+      throw new Error(`unexpected table ${table}`);
+    });
+
+    vi.mocked(getSupabase).mockReturnValue({ from } as never);
+
+    const inserted = await detectAndSeedHeuristicDomains(2);
+
+    expect(inserted).toBe(1);
+    expect(from).toHaveBeenCalledWith("leads");
+    expect(leadsSelect).toHaveBeenCalledWith("id, heuristic_url:digital_footprint->heuristic_discovery->selected->website->>url");
+    expect(leadsEq).toHaveBeenCalledWith("passed_filter", true);
+    expect(leadsNot).toHaveBeenCalledWith("digital_footprint->heuristic_discovery->selected->website->>url", "is", null);
+
+    expect(from).toHaveBeenCalledWith("system_lists");
+    expect(existingSelect).toHaveBeenCalledWith("value");
+    expect(existingEq).toHaveBeenCalledWith("list_name", "blocked_heuristic_domains");
+
+    expect(insert).toHaveBeenCalledWith([
+      expect.objectContaining({
+        list_name: "blocked_heuristic_domains",
+        value: "repeat.uy",
         source: "auto_detected",
         confidence: 0.2,
       }),
