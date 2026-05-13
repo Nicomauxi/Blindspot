@@ -52,6 +52,11 @@ interface HeuristicDiscoveryOptions {
   additionalWebsiteUrls?: string[];
   extraStopWords?: ReadonlySet<string>;
   listsCtx?: HeuristicListsCtx;
+  skipChannels?: {
+    facebook?: boolean;
+    instagram?: boolean;
+    whatsapp?: boolean;
+  };
 }
 
 const DEFAULT_DEPS: HeuristicDeps = { fetchHtml };
@@ -685,12 +690,18 @@ export async function discoverHeuristicSources(
 
   const schemaFacebookRefs = selectedSchemaRefs.facebook ?? [];
   const schemaInstagramRefs = selectedSchemaRefs.instagram ?? [];
+  if (options.skipChannels?.facebook) {
+    getLogger().debug({ leadId: lead.id, channel: "facebook", reason: "confirmed" }, "skipping heuristic channel");
+  }
+  if (options.skipChannels?.instagram) {
+    getLogger().debug({ leadId: lead.id, channel: "instagram", reason: "confirmed" }, "skipping heuristic channel");
+  }
   const facebookUrls =
-    mode === "full"
+    (!options.skipChannels?.facebook && mode === "full")
       ? dedupe([...buildSocialCandidateUrls(lead, "facebook", config, options.listsCtx), ...schemaFacebookRefs])
       : [];
   const instagramUrls =
-    mode === "full"
+    (!options.skipChannels?.instagram && mode === "full")
       ? dedupe([...buildSocialCandidateUrls(lead, "instagram", config, options.listsCtx), ...schemaInstagramRefs])
       : [];
   const facebook = await Promise.all(
@@ -717,8 +728,13 @@ export async function discoverHeuristicSources(
       )
     )
   );
+  if (options.skipChannels?.whatsapp) {
+    getLogger().debug({ leadId: lead.id, channel: "whatsapp", reason: "confirmed" }, "skipping heuristic channel");
+  }
   const whatsappCandidate =
-    mode === "full" ? deriveWhatsappCandidate(lead, config.mobile_prefixes_uy) : null;
+    (!options.skipChannels?.whatsapp && mode === "full")
+      ? deriveWhatsappCandidate(lead, config.mobile_prefixes_uy)
+      : null;
   const whatsapp = whatsappCandidate ? [whatsappCandidate] : [];
 
   return {

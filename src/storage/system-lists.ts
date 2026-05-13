@@ -495,6 +495,100 @@ export async function detectAndSeedEmailProviders(minLeadCount = 2): Promise<num
   }
 }
 
+// ============================================================
+// Retroactive email cleanup
+// After new blocked_email_domains are seeded, fix leads that
+// already hold emails from those domains. Idempotent.
+// ============================================================
+
+export async function retroactiveEmailCleanup(): Promise<number> {
+  const db  = getSupabase();
+  const log = getLogger();
+
+  try {
+    const { data: listRows, error: listError } = await db
+      .from("system_lists")
+      .select("list_name, value")
+      .in("list_name", ["blocked_email_domains", "free_email_domains"])
+      .eq("enabled", true);
+
+    if (listError) {
+      log.warn({ err: listError.message }, "retroactiveEmailCleanup — domain list query failed, skipping");
+      return 0;
+    }
+
+    const blockedDomains = new Set<string>();
+    const freeDomains    = new Set<string>();
+    for (const row of (listRows ?? []) as Array<{ list_name: string; value: string }>) {
+      if (row.list_name === "blocked_email_domains") blockedDomains.add(row.value.toLowerCase());
+      else if (row.list_name === "free_email_domains") freeDomains.add(row.value.toLowerCase());
+    }
+
+    // Free-email domains (gmail, hotmail…) belong to the business owner — never clean them
+    const domainsToClean = new Set([...blockedDomains].filter(d => !freeDomains.has(d)));
+    if (domainsToClean.size === 0) return 0;
+
+    const { data: leads, error: leadsError } = await db
+      .from("leads")
+      .select("id, tags, digital_footprint")
+      .eq("passed_filter", true)
+      .not("digital_footprint->contact_emails", "is", null);
+
+    if (leadsError) {
+      log.warn({ err: leadsError.message }, "retroactiveEmailCleanup — leads query failed, skipping");
+      return 0;
+    }
+
+    let affected = 0;
+
+    for (const lead of (leads ?? []) as Array<{ id: string; tags: string[]; digital_footprint: Record<string, unknown> | null }>) {
+      const fp = lead.digital_footprint;
+      if (!fp) continue;
+
+      const contactEmails = fp["contact_emails"];
+      if (!Array.isArray(contactEmails) || contactEmails.length === 0) continue;
+
+      const filteredEmails = (contactEmails as string[]).filter(e => {
+        const domain = extractEmailDomain(e);
+        return domain === null || !domainsToClean.has(domain);
+      });
+
+      if (filteredEmails.length === contactEmails.length) continue;
+
+      const updatedFp = { ...fp, contact_emails: filteredEmails };
+      const tagSet    = new Set(lead.tags ?? []);
+
+      if (filteredEmails.length === 0) {
+        tagSet.delete("email-found");
+        tagSet.add("email-missing");
+      } else {
+        tagSet.delete("email-missing");
+      }
+
+      const { error: updateError } = await db
+        .from("leads")
+        .update({ digital_footprint: updatedFp, tags: [...tagSet] })
+        .eq("id", lead.id);
+
+      if (updateError) {
+        log.warn({ err: updateError.message, leadId: lead.id }, "retroactiveEmailCleanup — update failed for lead");
+        continue;
+      }
+
+      affected++;
+    }
+
+    if (affected > 0) {
+      log.info({ count: affected }, "retroactiveEmailCleanup — leads updated");
+    }
+    return affected;
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log.warn({ err: msg }, "retroactiveEmailCleanup — threw, skipping");
+    return 0;
+  }
+}
+
 export async function detectAndSeedHeuristicDomains(minLeadCount = 2): Promise<number> {
   const db = getSupabase();
 

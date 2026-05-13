@@ -21,6 +21,10 @@ import {
   isHeuristicStale,
 } from "./heuristic-discovery.js";
 import {
+  detectConfirmedChannels,
+  type EnrichmentChannels,
+} from "./channel-detection.js";
+import {
   discoverSocialSearch,
   isSocialSearchStale,
 } from "./social-search.js";
@@ -306,13 +310,54 @@ function shouldRunSocialSearch(
   return tags.has("no-website") && !tags.has("whatsapp-derived") && !lead.whatsapp;
 }
 
+type SkipChannels = { facebook?: boolean; instagram?: boolean; whatsapp?: boolean };
+
+function buildHeuristicMode(
+  channels: EnrichmentChannels | null,
+  isSocialWebsite: boolean
+): { mode: HeuristicDiscoveryMode; skipChannels: SkipChannels } | null {
+  if (channels === null) {
+    return { mode: isSocialWebsite ? "website-only" : "full", skipChannels: {} };
+  }
+
+  const needsWebsite = channels.website.decision !== "confirmed";
+
+  // When the lead's current website is a social URL we only look for a real website,
+  // same as the original "website-only" mode — social channel probing is not applicable.
+  if (isSocialWebsite) {
+    if (!needsWebsite) return null;
+    return { mode: "website-only", skipChannels: {} };
+  }
+
+  const needsFacebook  = channels.facebook.decision  !== "confirmed";
+  const needsInstagram = channels.instagram.decision !== "confirmed";
+  const needsWhatsapp  = channels.whatsapp.decision  !== "confirmed";
+
+  if (!needsWebsite && !needsFacebook && !needsInstagram && !needsWhatsapp) {
+    return null;
+  }
+
+  const needsSocial = needsFacebook || needsInstagram || needsWhatsapp;
+  const mode: HeuristicDiscoveryMode = needsSocial ? "full" : "website-only";
+
+  return {
+    mode,
+    skipChannels: {
+      facebook:  !needsFacebook,
+      instagram: !needsInstagram,
+      whatsapp:  !needsWhatsapp,
+    },
+  };
+}
+
 async function resolveHeuristic(
   lead: Lead,
   mode: HeuristicDiscoveryMode,
   opts: EnrichLeadOptions,
   deps: EnrichmentDeps,
   additionalWebsiteUrls: string[] = [],
-  ctx?: EnrichmentCtx
+  ctx?: EnrichmentCtx,
+  skipChannels: SkipChannels = {}
 ): Promise<HeuristicDiscovery> {
   const previous = getHeuristic(lead.digital_footprint);
   const wasStale = isHeuristicStale(previous);
@@ -335,6 +380,7 @@ async function resolveHeuristic(
       additionalWebsiteUrls,
       ...(opts.extraStopWords !== undefined ? { extraStopWords: opts.extraStopWords } : {}),
       ...(ctx?.heuristicListsCtx !== undefined ? { listsCtx: ctx.heuristicListsCtx } : {}),
+      ...(Object.values(skipChannels).some(Boolean) ? { skipChannels } : {}),
     }
   );
 }
@@ -403,15 +449,22 @@ export async function enrichLead(
   }
 
   // 1. Resolve directory + heuristic sources before the normal enrichment flow.
+  const channels = opts.withHeuristic === true ? detectConfirmedChannels(lead) : null;
   if ((!originalWebsite || isSocialWebsite) && opts.withHeuristic === true) {
     directoryDiscovery = await resolveDirectory(lead, opts, deps);
     const directoryWebsiteUrls = directoryDiscovery.best_website
       ? [directoryDiscovery.best_website]
       : [];
-    const mode: HeuristicDiscoveryMode = isSocialWebsite ? "website-only" : "full";
-    heuristicDiscovery = await resolveHeuristic(lead, mode, opts, deps, directoryWebsiteUrls, ctx);
-    if (heuristicDiscovery.selected.website) {
-      effectiveWebsite = heuristicDiscovery.selected.website.url;
+    const heuristicConfig = buildHeuristicMode(channels, isSocialWebsite);
+    if (heuristicConfig !== null) {
+      heuristicDiscovery = await resolveHeuristic(
+        lead, heuristicConfig.mode, opts, deps, directoryWebsiteUrls, ctx, heuristicConfig.skipChannels
+      );
+      if (heuristicDiscovery.selected.website) {
+        effectiveWebsite = heuristicDiscovery.selected.website.url;
+      }
+    } else {
+      getLogger().debug({ leadId: lead.id }, "all channels confirmed, skipping heuristic");
     }
   }
 
