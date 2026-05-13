@@ -126,6 +126,7 @@ export function applyProfileFilter(
         reasons.push("has-real-website");
       }
     }
+    // "any": all website types accepted — no rejection added
 
     log.debug({
       event: "filter.decision",

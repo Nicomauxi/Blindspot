@@ -94,9 +94,9 @@ describe("getDiscoveryConfig", () => {
     expect(config.profiles["c"]?.max_reviews).toBe(100);
   });
 
-  it("loads profile d with web_requirement social_or_missing", () => {
+  it("loads profile d with web_requirement any", () => {
     const config = getDiscoveryConfig();
-    expect(config.profiles["d"]?.web_requirement).toBe("social_or_missing");
+    expect(config.profiles["d"]?.web_requirement).toBe("any");
   });
 });
 
