@@ -1,9 +1,17 @@
 import type { Lead } from "../../shared/types.js";
 import { getScoringConfig } from "./config.js";
-import { evaluateRule } from "./evaluator.js";
+import { evaluateRule, resolveField } from "./evaluator.js";
 import { applyMutualExclusions } from "./exclusions.js";
 import { scoreSystemsGap } from "./systems-gap.js";
 import type { EvaluatedRule, ScoreResult, ScoringRule } from "./types.js";
+
+function scaleHeuristicWeight(baseWeight: number, lead: Lead): number {
+  const score = resolveField(lead, "digital_footprint.heuristic_discovery.selected.website.score");
+  if (typeof score !== "number") return Math.round(baseWeight * 0.3);
+  if (score < 0.5) return Math.round(baseWeight * 0.3);
+  if (score < 0.7) return Math.round(baseWeight * 0.6);
+  return baseWeight;
+}
 
 function scoreDimension(
   rules: ScoringRule[],
@@ -16,7 +24,12 @@ function scoreDimension(
   for (const rule of rules) {
     const { matched: hit, value } = evaluateRule(rule, lead);
     if (hit) {
-      matched.push({ name: rule.name, weight: rule.weight, matched_value: value });
+      const weight = rule.name === "website_heuristic"
+        ? scaleHeuristicWeight(rule.weight, lead)
+        : rule.weight;
+      if (weight !== 0) {
+        matched.push({ name: rule.name, weight, matched_value: value });
+      }
     }
   }
 

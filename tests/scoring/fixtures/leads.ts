@@ -1,4 +1,4 @@
-import type { Lead } from "../../../src/shared/types.js";
+import type { HeuristicSignal, Lead } from "../../../src/shared/types.js";
 
 function base(overrides: Partial<Lead> = {}): Lead {
   return {
@@ -96,6 +96,26 @@ export const with_website_heuristic_and_no_website = base({
   place_id: "fixture-website-heuristic-and-no-website",
   name: "Website Heuristic And No Website",
   tags: ["no-website", "website-heuristic"],
+  digital_footprint: {
+    heuristic_discovery: {
+      ran_at: "2024-01-01T00:00:00Z",
+      mode: "website-only" as const,
+      stale: false,
+      candidates: { website: [], facebook: [], instagram: [], whatsapp: [] },
+      selected: {
+        website: {
+          kind: "website" as const,
+          url: "https://example.com.uy",
+          score: 0.8,
+          signals: ["http-ok", "name-match"] as HeuristicSignal[],
+          status: "probed" as const,
+        },
+        facebook: null,
+        instagram: null,
+        whatsapp: null,
+      },
+    },
+  } as unknown as Lead["digital_footprint"],
 });
 
 export const with_social_heuristics = base({
