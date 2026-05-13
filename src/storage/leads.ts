@@ -23,6 +23,10 @@ const DUPLICATE_BLOCKED_EMAIL_DOMAINS = new Set([
 ]);
 const isRejectedTag = (tag: string): boolean => tag.startsWith("rejected:");
 
+function dedupeTags(tags: string[]): string[] {
+  return Array.from(new Set(tags));
+}
+
 function socialSearchConfirmsFacebook(search: SocialSearch): boolean {
   if (search.source === "duckduckgo") {
     return search.facebook.best_url !== null;
@@ -289,7 +293,7 @@ export async function upsertLeads(
         // rejected → passed: clean rejected tags, add normal tags
         const cleanedTags = existingTags.filter((t) => !isRejectedTag(t));
         tagUpdate = {
-          tags: [...cleanedTags, ...tagsFn(candidate)],
+          tags: dedupeTags([...cleanedTags, ...tagsFn(candidate)]),
           passed_filter: true,
           rejection_reasons: [],
         };
@@ -298,7 +302,7 @@ export async function upsertLeads(
         const cleanedTags = existingTags.filter((t) => !isRejectedTag(t));
         const newRejectedTags = rejection_reasons.map((r) => `rejected:${r}`);
         tagUpdate = {
-          tags: [...cleanedTags, ...newRejectedTags],
+          tags: dedupeTags([...cleanedTags, ...newRejectedTags]),
           passed_filter: false,
           rejection_reasons,
         };
@@ -317,9 +321,11 @@ export async function upsertLeads(
       }
       updated.push(data as Lead);
     } else {
-      const tags = passed
-        ? tagsFn(candidate)
-        : rejection_reasons.map((r) => `rejected:${r}`);
+      const tags = dedupeTags(
+        passed
+          ? tagsFn(candidate)
+          : rejection_reasons.map((r) => `rejected:${r}`)
+      );
 
       const { data, error } = await db
         .from("leads")
@@ -470,12 +476,13 @@ export async function updateLeadEnrichment(
       !mergedTags.includes("whatsapp-confirmed")) {
     mergedTags.push("whatsapp-derived");
   }
+  const finalTags = dedupeTags(mergedTags);
 
   const updateQuery = db
     .from("leads")
     .update({
       digital_footprint: mergedFootprint,
-      tags: mergedTags,
+      tags: finalTags,
       whatsapp: mergedWhatsapp,
     })
     .eq("id", leadId);
@@ -535,12 +542,13 @@ export async function updateLeadSocialSearch(
       !mergedTags.includes("whatsapp-confirmed")) {
     mergedTags.push("whatsapp-derived");
   }
+  const finalTags = dedupeTags(mergedTags);
 
   const { error } = await db
     .from("leads")
     .update({
       digital_footprint: footprint,
-      tags: mergedTags,
+      tags: finalTags,
       whatsapp: mergedWhatsapp,
     })
     .eq("id", leadId);
@@ -548,12 +556,27 @@ export async function updateLeadSocialSearch(
 }
 
 export async function loadAllLeads(): Promise<Lead[]> {
-  const { data, error } = await getSupabase()
-    .from("leads")
-    .select("*")
-    .order("name");
-  if (error) throw new Error(`Failed to load all leads: ${error.message}`);
-  return (data ?? []) as Lead[];
+  const db = getSupabase();
+  const pageSize = 1000;
+  const leads: Lead[] = [];
+
+  for (let from = 0; ; from += pageSize) {
+    const to = from + pageSize - 1;
+    const { data, error } = await db
+      .from("leads")
+      .select("*")
+      .order("name")
+      .range(from, to);
+
+    if (error) throw new Error(`Failed to load all leads: ${error.message}`);
+
+    const batch = (data ?? []) as Lead[];
+    leads.push(...batch);
+
+    if (batch.length < pageSize) break;
+  }
+
+  return leads;
 }
 
 export async function updateLeadScore(leadId: string, result: ScoreResult): Promise<void> {
