@@ -10,6 +10,7 @@ import { leadsListCommand } from "./commands/leads-list.js";
 import { vocabularyCommand } from "./commands/vocabulary.js";
 import { socialEnrichCommand } from "./commands/social-enrich.js";
 import { runCommand } from "./commands/run.js";
+import { maintenanceCommand } from "./commands/maintenance.js";
 
 const program = new Command();
 
@@ -211,6 +212,7 @@ vocabCmd
   });
 
 program.addCommand(runCommand);
+program.addCommand(maintenanceCommand);
 
 try {
   getScoringConfig();
