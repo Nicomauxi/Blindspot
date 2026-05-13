@@ -316,6 +316,15 @@ export interface Run {
 export interface Lead {
   id: string;
   place_id: string;
+  source: DiscoverySource;
+  external_id: string | null;
+  source_confidence: number | null;
+  source_data: Record<string, unknown> | null;
+  data_confidence_score: number | null;
+  contact_reliability_score: number | null;
+  canonical_fields: Record<string, unknown> | null;
+  corroborating_sources: CorroboratingSource[];
+  lead_company_data: LeadCompanyData | null;
   niche: string | null;
   name: string;
   address: string | null;
@@ -380,6 +389,17 @@ export interface RunSummary {
   filtered: number;
   createdNew: number;
   alreadyExisted: number;
+}
+
+export interface LeadCompanyData {
+  rut?: string;
+  razon_social?: string;
+  nombre_comercial?: string;
+  ciiu?: string;
+  tamano_empresa?: string;
+  registro_mintur?: string;
+  habilitacion_imm?: string;
+  fecha_fundacion?: string;
 }
 
 // ─── Multi-source architecture ────────────────────────────────────────────────
