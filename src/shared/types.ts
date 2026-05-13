@@ -381,3 +381,57 @@ export interface RunSummary {
   createdNew: number;
   alreadyExisted: number;
 }
+
+// ─── Multi-source architecture ────────────────────────────────────────────────
+
+export type DiscoverySource =
+  | "google_places"
+  | "mintur"
+  | "pedidosya"
+  | "imm_habilitaciones"
+  | "yelu"
+  | "osm"
+  | "infonegocios"
+  | "dgi";
+
+export interface DiscoveryQuery {
+  niche: string;
+  location: string;
+  maxResults?: number;
+}
+
+export interface DiscoveryCandidate {
+  source: DiscoverySource;
+  external_id: string;
+  source_confidence: number;
+  name: string;
+  address: string | null;
+  phone: string | null;
+  website: string | null;
+  email: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  niche: string | null;
+  raw: Record<string, unknown>;
+}
+
+export interface IDiscoveryProvider {
+  readonly source: DiscoverySource;
+  readonly sourceConfidence: number;
+  discover(query: DiscoveryQuery): Promise<DiscoveryCandidate[]>;
+}
+
+export interface CorroboratingSource {
+  source: DiscoverySource;
+  external_id?: string;
+  seen_at: string;
+  confidence: number;
+}
+
+export interface FieldEvidence {
+  value: string;
+  sources: CorroboratingSource[];
+  first_seen: string;
+  last_seen: string;
+  confidence: number;
+}
