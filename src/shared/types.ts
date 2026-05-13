@@ -1,6 +1,6 @@
 export type LeadState = "discovered" | "contacted" | "qualified" | "disqualified";
 export type RunStatus = "running" | "completed" | "failed";
-export type DiscoveryProfile = "a" | "b";
+export type DiscoveryProfile = "a" | "b" | "c" | "d";
 
 export type WebRequirement = "social_or_missing" | "missing_only" | "any";
 export type RejectionReason =
