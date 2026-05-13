@@ -18,6 +18,7 @@ import {
   detectAndSeedEmailProviders,
   detectAndSeedHeuristicDomains,
   loadAllRuntime,
+  retroactiveEmailCleanup,
 } from "../../storage/system-lists.js";
 import type { AllRuntime } from "../../storage/system-lists.js";
 import type { EnrichmentRunStats } from "../../shared/types.js";
@@ -317,6 +318,10 @@ export async function enrichCommand(rawArgs: RawEnrichArgs): Promise<void> {
         const seeded = await detectAndSeedEmailProviders();
         if (seeded > 0) {
           log.info({ count: seeded }, "email provider domains auto-detected after enrichment");
+        }
+        const cleaned = await retroactiveEmailCleanup();
+        if (cleaned > 0) {
+          log.info({ count: cleaned }, "retroactiveEmailCleanup — stale emails removed from leads");
         }
         if (typeof detectAndSeedHeuristicDomains === "function") {
           const newHeuristicBlocked = await detectAndSeedHeuristicDomains();
