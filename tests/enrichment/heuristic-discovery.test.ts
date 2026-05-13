@@ -388,6 +388,72 @@ heuristic_discovery:
     expect(result.selected.website).toBeNull();
   });
 
+  it("penalizes website candidates that redirect to a different apex domain", async () => {
+    const result = await discoverHeuristicSources(
+      makeLead({ name: "El Pato", address: "Montevideo", phone: null }),
+      "website-only",
+      {
+        fetchHtml: async () => ({
+          status: 200,
+          finalUrl: "https://elpatomexicanfood.com",
+          html: "<html><title>El Pato Montevideo</title></html>",
+          headers: {},
+          fetchedAt: "2026-01-01T00:00:00.000Z",
+        }),
+      },
+      { additionalWebsiteUrls: ["https://elpato.com"] }
+    );
+
+    const candidate = result.candidates.website.find((entry) => entry.url === "https://elpato.com");
+    expect(candidate?.signals).toEqual(["http-ok", "redirect-mismatch"]);
+    expect(candidate?.score).toBe(0.27);
+    expect(result.selected.website).toBeNull();
+  });
+
+  it("does not penalize same-apex redirects across subdomains", async () => {
+    const result = await discoverHeuristicSources(
+      makeLead({ name: "Urban mood gym", address: "Montevideo", phone: null }),
+      "website-only",
+      {
+        fetchHtml: async () => ({
+          status: 200,
+          finalUrl: "https://www.mood.uy",
+          html: "<html><title>Urban mood gym Montevideo</title></html>",
+          headers: {},
+          fetchedAt: "2026-01-01T00:00:00.000Z",
+        }),
+      },
+      { additionalWebsiteUrls: ["https://mood.com.uy"] }
+    );
+
+    const candidate = result.candidates.website.find((entry) => entry.url === "https://mood.com.uy");
+    expect(candidate?.signals).toEqual(["http-ok", "name-match", "city-match"]);
+    expect(candidate?.score).toBe(0.9);
+    expect(result.selected.website?.url).toBe("https://mood.com.uy");
+  });
+
+  it("does not penalize www redirects on the same apex domain", async () => {
+    const result = await discoverHeuristicSources(
+      makeLead({ name: "Lander Studio", address: "Montevideo", phone: null }),
+      "website-only",
+      {
+        fetchHtml: async () => ({
+          status: 200,
+          finalUrl: "https://www.lander.com.uy",
+          html: "<html><title>Lander Studio Montevideo</title></html>",
+          headers: {},
+          fetchedAt: "2026-01-01T00:00:00.000Z",
+        }),
+      },
+      { additionalWebsiteUrls: ["https://lander.com.uy"] }
+    );
+
+    const candidate = result.candidates.website.find((entry) => entry.url === "https://lander.com.uy");
+    expect(candidate?.signals).toEqual(["http-ok", "name-match", "city-match"]);
+    expect(candidate?.score).toBe(0.9);
+    expect(result.selected.website?.url).toBe("https://lander.com.uy");
+  });
+
   it("keeps multi-word website candidates on the higher website threshold", async () => {
     const result = await discoverHeuristicSources(
       makeLead({ name: "Urban Mood Gym", address: "Montevideo, Uruguay", phone: null }),

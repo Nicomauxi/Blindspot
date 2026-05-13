@@ -201,6 +201,37 @@ function cityFromAddress(address: string | null): string | null {
   return parts.length > 0 ? parts[parts.length - 1] ?? null : null;
 }
 
+function extractApexDomain(url: string): string | null {
+  try {
+    const hostname = new URL(url).hostname.toLowerCase().replace(/^www\./, "");
+    const parts = hostname.split(".");
+    const ccTld = parts.at(-1);
+    const secondLevel = parts.at(-2);
+    const registrable = parts.at(-3);
+    if (
+      parts.length >= 3 &&
+      ccTld?.length === 2 &&
+      secondLevel !== undefined &&
+      registrable !== undefined
+    ) {
+      if (["com", "net", "org", "edu", "gub", "mil"].includes(secondLevel)) {
+        return `${registrable}.${ccTld}`;
+      }
+      return `${registrable}.${secondLevel}.${ccTld}`;
+    }
+    return parts.length >= 2 ? parts.slice(-2).join(".") : hostname;
+  } catch {
+    return null;
+  }
+}
+
+function hasRedirectMismatch(probedUrl: string, finalUrl: string | null): boolean {
+  if (!finalUrl || finalUrl === probedUrl) return false;
+  const probedApex = extractApexDomain(probedUrl);
+  const finalApex = extractApexDomain(finalUrl);
+  return probedApex !== null && finalApex !== null && probedApex !== finalApex;
+}
+
 function htmlTextMatches(html: string, value: string): boolean {
   const folded = asciiFold(html).toLowerCase();
   return folded.includes(asciiFold(value).toLowerCase());
@@ -423,6 +454,16 @@ async function probeWebsiteCandidate(
   if (city && fetched.html && htmlTextMatches(fetched.html, city)) {
     signals.push("city-match");
     score += 0.2;
+  }
+
+  if (hasRedirectMismatch(url, fetched.finalUrl)) {
+    const filteredSignals = signals.filter(
+      (signal) => signal !== "name-match" && signal !== "city-match"
+    );
+    filteredSignals.push("redirect-mismatch");
+    signals.length = 0;
+    signals.push(...filteredSignals);
+    score *= 0.3;
   }
 
   return {
