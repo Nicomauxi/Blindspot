@@ -77,6 +77,7 @@ export type HeuristicSignal =
   | "name-match"
   | "name_in_schema"
   | "city-match"
+  | "redirect-mismatch"
   | "slug_match"
   | "name_in_bio"
   | "phone_match"
