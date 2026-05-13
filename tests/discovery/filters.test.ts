@@ -200,6 +200,33 @@ describe("Profile B — saturated no-web filter", () => {
   });
 });
 
+// ---- Profile D tests -------------------------------------------------------
+
+describe("Profile D — profesional con web débil (web_requirement: any)", () => {
+  const profileConfigD: ProfileConfig = {
+    min_rating: 4.0,
+    min_reviews: 20,
+    max_reviews: null,
+    web_requirement: "any",
+  };
+
+  it("passes a candidate with a real website (web_requirement any does not reject has-real-website)", () => {
+    // candidateWithRealWeb: rating 4.4, reviews 30, real website
+    const result = applyProfileFilter([candidateWithRealWeb], profileConfigD, SOCIAL_DOMAINS);
+    expect(result.passed).toHaveLength(1);
+    expect(result.passed[0]?.placeId).toBe("place_007");
+    const hasWebReason = result.rejected.some((r) => r.reasons.includes("has-real-website"));
+    expect(hasWebReason).toBe(false);
+  });
+
+  it("passes a candidate with no website (web_requirement any also accepts missing web)", () => {
+    // candidateWithNoWeb: rating 4.5, reviews 28, no website
+    const result = applyProfileFilter([candidateWithNoWeb], profileConfigD, SOCIAL_DOMAINS);
+    expect(result.passed).toHaveLength(1);
+    expect(result.passed[0]?.placeId).toBe("place_002");
+  });
+});
+
 // ---- tagCandidate tests ---------------------------------------------------
 
 describe("tagCandidate", () => {
