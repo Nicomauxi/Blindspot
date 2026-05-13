@@ -22,7 +22,7 @@ const DETAILS_COST_PER_REQUEST = 0.025;
 const DiscoverArgsSchema = z.object({
   niche: z.string().min(1, "niche cannot be empty"),
   location: z.string().min(1, "location cannot be empty"),
-  profile: z.enum(["a", "b"]),
+  profile: z.enum(["a", "b", "c", "d"]),
   maxResults: z.coerce.number().int().min(1).max(200).default(50),
   overrides: z.array(z.string()).default([]),
   trace: z.boolean().default(false),

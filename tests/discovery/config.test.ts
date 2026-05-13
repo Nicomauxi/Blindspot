@@ -87,6 +87,17 @@ describe("getDiscoveryConfig", () => {
     expect(first.profiles["b"]).toBeDefined();
     expect(first.social_domains.length).toBeGreaterThan(0);
   });
+
+  it("loads profile c with correct min_reviews and max_reviews", () => {
+    const config = getDiscoveryConfig();
+    expect(config.profiles["c"]?.min_reviews).toBe(30);
+    expect(config.profiles["c"]?.max_reviews).toBe(100);
+  });
+
+  it("loads profile d with web_requirement social_or_missing", () => {
+    const config = getDiscoveryConfig();
+    expect(config.profiles["d"]?.web_requirement).toBe("social_or_missing");
+  });
 });
 
 describe("getProfileConfig", () => {
