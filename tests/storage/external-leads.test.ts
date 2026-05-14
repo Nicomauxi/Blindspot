@@ -56,7 +56,7 @@ describe("insertExternalLead", () => {
     expect(result).toEqual(returnedLead);
     expect(upsertTable.upsert).toHaveBeenCalledWith(
       expect.objectContaining({ place_id: "mintur:42", source: "mintur", external_id: "42" }),
-      expect.objectContaining({ onConflict: "source,external_id" })
+      expect.objectContaining({ onConflict: "place_id" })
     );
   });
 

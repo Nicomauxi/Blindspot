@@ -33,7 +33,7 @@ export async function insertExternalLead(
         rejection_reasons: [],
         tags: [],
       },
-      { onConflict: "source,external_id", ignoreDuplicates: false }
+      { onConflict: "place_id", ignoreDuplicates: false }
     )
     .select()
     .single();

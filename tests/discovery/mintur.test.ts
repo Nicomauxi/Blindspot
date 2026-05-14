@@ -42,7 +42,7 @@ function makeRecord(overrides: Partial<MINTURRecord> = {}): MINTURRecord {
     Localidad: "MONTEVIDEO",
     Web: "https://hotel-ejemplo.com.uy",
     Telefono: "29001234",
-    Email: "info@hotel-ejemplo.com.uy",
+    EMail: "info@hotel-ejemplo.com.uy",
     ...overrides,
   };
 }
@@ -98,25 +98,25 @@ describe("shouldDiscard", () => {
 
   it("descarta si Email, Telefono y Web están todos vacíos", () => {
     expect(
-      shouldDiscard(makeRecord({ Email: "", Telefono: "", Web: "" }))
+      shouldDiscard(makeRecord({ EMail:"", Telefono: "", Web: "" }))
     ).toBe(true);
   });
 
   it("no descarta si solo tiene Email (Telefono y Web vacíos)", () => {
     expect(
-      shouldDiscard(makeRecord({ Telefono: "", Web: "", Email: "a@b.com" }))
+      shouldDiscard(makeRecord({ Telefono: "", Web: "", EMail:"a@b.com" }))
     ).toBe(false);
   });
 
   it("no descarta si solo tiene Telefono", () => {
     expect(
-      shouldDiscard(makeRecord({ Email: "", Web: "", Telefono: "29001234" }))
+      shouldDiscard(makeRecord({ EMail:"", Web: "", Telefono: "29001234" }))
     ).toBe(false);
   });
 
   it("no descarta si solo tiene Web", () => {
     expect(
-      shouldDiscard(makeRecord({ Email: "", Telefono: "", Web: "https://x.com" }))
+      shouldDiscard(makeRecord({ EMail:"", Telefono: "", Web: "https://x.com" }))
     ).toBe(false);
   });
 });
@@ -133,7 +133,7 @@ describe("mapRecord", () => {
       Departamento: "MALDONADO",
       Web: "https://restaurant.uy",
       Telefono: "42000000",
-      Email: "test@restaurant.uy",
+      EMail:"test@restaurant.uy",
     });
     const candidate = mapRecord(record);
 
@@ -162,7 +162,7 @@ describe("mapRecord", () => {
   });
 
   it("email es null cuando Email está vacío", () => {
-    const candidate = mapRecord(makeRecord({ Email: "" }));
+    const candidate = mapRecord(makeRecord({ EMail:"" }));
     expect(candidate.email).toBeNull();
   });
 
@@ -281,7 +281,7 @@ describe("MINTURProvider.discover", () => {
   it("descarta records sin Email + Telefono + Web", async () => {
     const records = [
       makeRecord({ _id: 1 }),
-      makeRecord({ _id: 2, Email: "", Telefono: "", Web: "" }),
+      makeRecord({ _id: 2, EMail:"", Telefono: "", Web: "" }),
     ];
 
     mockFetch
