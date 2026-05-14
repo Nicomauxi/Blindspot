@@ -13,6 +13,7 @@
 
 | Fase | Descripción | Investigación | Prioridad |
 |------|-------------|---------------|-----------|
+| 7b | Pipeline source-agnostic — `enrich --source <source>` y `enrich --all` para procesar leads de cualquier fuente sin run ID | — | **Alta — bloquea OSM, Yelu, IMM** |
 | 8 | OSMProvider via Overpass API — gratuito, GPS nativo, cubre interior del país | [osm.md](research/osm.md) | Media |
 | 9 | YeluProvider — refactor desde directory-discovery.ts existente | pendiente | Media |
 | 10 | PedidosYaProvider — confirma negocio operativo, datos de menú y horarios | pendiente | Media |

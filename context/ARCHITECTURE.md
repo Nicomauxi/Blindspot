@@ -24,8 +24,13 @@
 ## Pipeline
 
 ```
-discover → enrich (--with-heuristic) → score → social-enrich → re-score
+discover-* → enrich → score → social-enrich → re-score
 ```
+
+**Principio:** el pipeline es agnóstico a la fuente. Cualquier lead en la DB — sin importar si
+vino de Google Places, MINTUR, OSM u otra fuente — debe poder pasar por `enrich`, `score`,
+`social-enrich` y `report`. Los comandos usan `--run <uuid>` para Google Places y
+`--source <source>` / `--all` para fuentes externas.
 
 ### Comandos CLI disponibles
 
@@ -33,6 +38,8 @@ discover → enrich (--with-heuristic) → score → social-enrich → re-score
 blindspot discover-google-places --niche <text> --location <text> --profile <a|b|c|d> [--max-results N]
 blindspot discover-mintur   --location <text> [--niche <text>] [--limit N] [--dry-run]
 blindspot enrich            --run <uuid> [--force-refresh] [--with-heuristic]
+                            --source <source> [--force-refresh] [--with-heuristic]  ← pendiente
+                            --all [--force-refresh] [--with-heuristic]              ← pendiente
 blindspot score             [--run <uuid> | --all]
 blindspot social-enrich     [--run <uuid> | --all] [--limit N] [--force]
 blindspot report            --run <uuid> [--format csv|html|md|all]

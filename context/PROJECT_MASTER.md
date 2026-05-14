@@ -211,8 +211,8 @@ docker exec supabase_db_gap-radar psql -U postgres -d postgres -c "..."
 
 > Reescribir completamente al cerrar cada sesión. Solo el snapshot necesario para arrancar la siguiente — sin narrativa histórica (eso vive en git log).
 
-**Tests:** 659 passing | **Typecheck:** limpio | **DB:** invariantes 0
+**Tests:** 668 passing | **Typecheck:** limpio | **DB:** 2027 leads MINTUR limpios (0 S/D)
 
 **Unstaged:** limpio
 
-**Próxima acción:** Fase 8 — OSMProvider via Overpass API. Antes: correr `discover-mintur` en producción para validar enrichment cross-source con empresas reales.
+**Próxima acción:** Fase 7b — `enrich --source <source>` y `enrich --all` (pipeline source-agnostic). Bloquea OSM, Yelu y todas las fuentes futuras.
