@@ -33,32 +33,41 @@ interface CKANResponse {
 // rejectUnauthorized: false — catalogodatos.gub.uy tiene TLS intermitentemente frágil
 const tlsAgent = new Agent({ connect: { rejectUnauthorized: false } });
 
+// Sentinel values MINTUR uses for missing data
+const SENTINEL_VALUES = new Set(["S/D", "NO DECLARA", "PENDIENTE", "S/N"]);
+
+export function isBlank(value: string | null | undefined): boolean {
+  if (!value) return true;
+  const trimmed = value.trim().toUpperCase();
+  return trimmed.length === 0 || SENTINEL_VALUES.has(trimmed);
+}
+
 export function parsePhone(telefono: string): string | null {
-  if (!telefono?.trim()) return null;
+  if (isBlank(telefono)) return null;
   const tokens = telefono.split(/\s*[-,|]\s*/);
-  const first = tokens.find((t) => t.trim().length > 0);
+  const first = tokens.find((t) => !isBlank(t));
   return first?.trim() ?? null;
 }
 
 export function shouldDiscard(record: MINTURRecord): boolean {
-  if (!record.Operador?.trim()) return true;
-  if (!record.EMail && !record.Telefono && !record.Web) return true;
-  return false;
+  if (isBlank(record.Operador)) return true;
+  const hasContact = !isBlank(record.EMail) || !isBlank(record.Telefono) || !isBlank(record.Web);
+  return !hasContact;
 }
 
 export function mapRecord(record: MINTURRecord): DiscoveryCandidate {
   const address = [record.Direccion, record.Localidad, record.Departamento]
-    .filter(Boolean)
+    .filter((v) => !isBlank(v))
     .join(", ");
   return {
     source: SOURCE,
     external_id: String(record._id),
     source_confidence: SOURCE_CONFIDENCE,
     name: record.Operador,
-    address,
+    address: address || null,
     phone: parsePhone(record.Telefono),
-    website: record.Web || null,
-    email: record.EMail || null,
+    website: isBlank(record.Web) ? null : record.Web,
+    email: isBlank(record.EMail) ? null : record.EMail,
     latitude: null,
     longitude: null,
     niche: "other",
