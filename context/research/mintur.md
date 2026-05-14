@@ -7,7 +7,7 @@
 | Campo | Valor |
 |-------|-------|
 | Endpoint | `https://catalogodatos.gub.uy/api/3/action/datastore_search` |
-| Resource ID | `eb614f27-36d8-4a34-8bbf-ed5c40473df0` |
+| Resource ID | `65df8141-f444-49bb-a66a-51c1c3b387df` (backup: `884b79e9-503f-4f86-93ca-41009e57f891`) |
 | Autenticación | Ninguna |
 | Actualización | Diaria |
 | Licencia | Datos Abiertos Uruguay — Decreto 54/017. Uso comercial OK con nota de origen. |
@@ -22,7 +22,8 @@
 | `Localidad` | string | Ciudad o zona dentro del departamento |
 | `Web` | string | Puede estar vacío |
 | `Telefono` | string | Texto libre; múltiples números separados por ` - ` (ej: `"47725996 - 097226790"`) |
-| `Email` | string | Email corporativo. Puede estar vacío |
+| `EMail` | string | Email corporativo. Puede estar vacío |
+| `Latitud` / `Longitud` | string | GPS: `-10000.0` es sentinel de "sin dato". Precisión 0.1°≈11 km cuando presente → tratar como null. |
 | `_id` | integer | Auto-increment CKAN — no es RUT ni identificador oficial |
 
 **Ausentes:**

@@ -9,7 +9,7 @@ import type {
 const SOURCE: DiscoverySource = "mintur";
 const SOURCE_CONFIDENCE = 0.8;
 const BASE_URL = "https://catalogodatos.gub.uy/api/3/action/datastore_search";
-const RESOURCE_ID = "eb614f27-36d8-4a34-8bbf-ed5c40473df0";
+const RESOURCE_ID = "65df8141-f444-49bb-a66a-51c1c3b387df";
 const PAGE_SIZE = 500;
 
 export interface MINTURRecord {
@@ -20,7 +20,7 @@ export interface MINTURRecord {
   Localidad: string;
   Web: string;
   Telefono: string;
-  Email: string;
+  EMail: string;
 }
 
 interface CKANResponse {
@@ -42,7 +42,7 @@ export function parsePhone(telefono: string): string | null {
 
 export function shouldDiscard(record: MINTURRecord): boolean {
   if (!record.Operador?.trim()) return true;
-  if (!record.Email && !record.Telefono && !record.Web) return true;
+  if (!record.EMail && !record.Telefono && !record.Web) return true;
   return false;
 }
 
@@ -58,7 +58,7 @@ export function mapRecord(record: MINTURRecord): DiscoveryCandidate {
     address,
     phone: parsePhone(record.Telefono),
     website: record.Web || null,
-    email: record.Email || null,
+    email: record.EMail || null,
     latitude: null,
     longitude: null,
     niche: "other",
