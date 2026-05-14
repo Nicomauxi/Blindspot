@@ -1,5 +1,6 @@
 import * as cheerio from "cheerio";
 import { getLogger } from "../../../shared/logger.js";
+import { getHeuristicConfig } from "../heuristic-discovery.js";
 
 export interface WhatsappSignal {
   present: boolean;
@@ -9,7 +10,6 @@ export interface WhatsappSignal {
 
 const WA_ME_NUMBER = /(?:wa\.me\/|api\.whatsapp\.com\/send\?[^"']*phone=)[+]?(\d{6,15})/i;
 const PHONE_DIGITS = /(\d{6,15})/;
-const UY_MOBILE_PREFIXES = new Set(["91", "92", "93", "94", "95", "96", "97", "98", "99"]);
 
 export function normalizeUruguayMobile(raw: string): string | null {
   const digits = raw.replace(/\D/g, "");
@@ -24,7 +24,7 @@ export function normalizeUruguayMobile(raw: string): string | null {
   }
 
   if (!local || local.length !== 8) return null;
-  if (!UY_MOBILE_PREFIXES.has(local.slice(0, 2))) return null;
+  if (!getHeuristicConfig().mobile_prefixes_uy.includes(local.slice(0, 2))) return null;
   return `+598${local}`;
 }
 

@@ -2,13 +2,12 @@ import { getSupabase } from "../shared/supabase.js";
 import type { DigitalFootprint, DigitalFootprintEnriched, Lead, LeadUpsert, SocialSearch } from "../shared/types.js";
 import type { ScoreResult } from "../modules/scoring/types.js";
 import { normalizeUruguayMobile } from "../modules/enrichment/parsers/whatsapp.js";
+import { MAX_CONTACT_EMAILS } from "../modules/enrichment/index.js";
 
 export interface UpsertResult {
   inserted: Lead[];
   updated: Lead[];
 }
-
-const MAX_CONTACT_EMAILS = 3;
 const DUPLICATE_TAG = "possible-duplicate";
 const DUPLICATE_SECONDARY_TAG = "duplicate-secondary";
 const DUPLICATE_BLOCKED_EMAIL_DOMAINS = new Set([
