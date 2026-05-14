@@ -11,6 +11,7 @@ import { vocabularyCommand } from "./commands/vocabulary.js";
 import { socialEnrichCommand } from "./commands/social-enrich.js";
 import { runCommand } from "./commands/run.js";
 import { maintenanceCommand } from "./commands/maintenance.js";
+import { discoverExternalCommand } from "./commands/discover-external.js";
 
 const program = new Command();
 
@@ -22,7 +23,7 @@ program
   .version("1.0.0");
 
 program
-  .command("discover")
+  .command("discover-google-places")
   .description(
     "Search Google Places for leads matching a niche+location, filter by profile, persist results"
   )
@@ -209,6 +210,28 @@ vocabCmd
   .requiredOption("--niche <name>", "Niche to display")
   .action(async (opts: { niche: string }) => {
     await vocabularyCommand({ subcommand: "show", niche: opts.niche });
+  });
+
+program
+  .command("discover-mintur")
+  .description("Fetch leads from MINTUR dataset and persist to DB")
+  .requiredOption("--location <string>", "Location filter (e.g. 'Montevideo', 'Colonia')")
+  .option("--niche <string>", "Niche hint (MINTUR ignores this, all leads are other)", "other")
+  .option("--limit <number>", "Max candidates to process (useful for smoke tests)")
+  .option("--dry-run", "Simulate without writing to DB", false)
+  .action(async (opts: {
+    location: string;
+    niche: string;
+    limit?: string;
+    dryRun: boolean;
+  }) => {
+    await discoverExternalCommand({
+      source: "mintur",
+      location: opts.location,
+      niche: opts.niche,
+      ...(opts.limit !== undefined ? { limit: Number(opts.limit) } : {}),
+      dryRun: opts.dryRun,
+    });
   });
 
 program.addCommand(runCommand);

@@ -48,7 +48,7 @@ const HTML_CACHE_MS = 7 * 24 * 60 * 60 * 1_000;
 const WHOIS_CACHE_MS = 30 * 24 * 60 * 60 * 1_000;
 const PHONE_MOBILE_HEURISTIC = /^\+?\d{10,}$/;
 const SOCIAL_SEARCH_THRESHOLD = 0.4;
-const MAX_CONTACT_EMAILS = 3;
+export const MAX_CONTACT_EMAILS = 3;
 
 export interface EnrichLeadOptions {
   forceRefresh: boolean;
