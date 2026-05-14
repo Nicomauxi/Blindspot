@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { MINTURRecord } from "../../src/modules/discovery/providers/mintur.js";
 import {
+  isBlank,
   parsePhone,
   shouldDiscard,
   mapRecord,
@@ -53,6 +54,34 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
+// ─── isBlank ───────────────────────────────────────────────────────────────────
+
+describe("isBlank", () => {
+  it("retorna true para null/undefined", () => {
+    expect(isBlank(null)).toBe(true);
+    expect(isBlank(undefined)).toBe(true);
+  });
+
+  it("retorna true para string vacío o whitespace", () => {
+    expect(isBlank("")).toBe(true);
+    expect(isBlank("   ")).toBe(true);
+  });
+
+  it("retorna true para sentinel values MINTUR", () => {
+    expect(isBlank("S/D")).toBe(true);
+    expect(isBlank("s/d")).toBe(true);
+    expect(isBlank("NO DECLARA")).toBe(true);
+    expect(isBlank("PENDIENTE")).toBe(true);
+    expect(isBlank("S/N")).toBe(true);
+  });
+
+  it("retorna false para valores reales", () => {
+    expect(isBlank("Hotel Ejemplo")).toBe(false);
+    expect(isBlank("info@hotel.com.uy")).toBe(false);
+    expect(isBlank("29001234")).toBe(false);
+  });
+});
+
 // ─── parsePhone ────────────────────────────────────────────────────────────────
 
 describe("parsePhone", () => {
@@ -96,9 +125,23 @@ describe("shouldDiscard", () => {
     expect(shouldDiscard(makeRecord({ Operador: "   " }))).toBe(true);
   });
 
+  it("descarta si Operador es sentinel 'S/D'", () => {
+    expect(shouldDiscard(makeRecord({ Operador: "S/D" }))).toBe(true);
+  });
+
+  it("descarta si Operador es sentinel 'NO DECLARA'", () => {
+    expect(shouldDiscard(makeRecord({ Operador: "NO DECLARA" }))).toBe(true);
+  });
+
   it("descarta si Email, Telefono y Web están todos vacíos", () => {
     expect(
       shouldDiscard(makeRecord({ EMail:"", Telefono: "", Web: "" }))
+    ).toBe(true);
+  });
+
+  it("descarta si Email, Telefono y Web son todos sentinel 'S/D'", () => {
+    expect(
+      shouldDiscard(makeRecord({ EMail:"S/D", Telefono: "S/D", Web: "S/D" }))
     ).toBe(true);
   });
 
@@ -164,6 +207,16 @@ describe("mapRecord", () => {
   it("email es null cuando Email está vacío", () => {
     const candidate = mapRecord(makeRecord({ EMail:"" }));
     expect(candidate.email).toBeNull();
+  });
+
+  it("phone es null cuando Telefono es sentinel 'S/D'", () => {
+    const candidate = mapRecord(makeRecord({ Telefono: "S/D" }));
+    expect(candidate.phone).toBeNull();
+  });
+
+  it("website es null cuando Web es sentinel 'S/D'", () => {
+    const candidate = mapRecord(makeRecord({ Web: "S/D" }));
+    expect(candidate.website).toBeNull();
   });
 
   it("parsea teléfonos múltiples tomando solo el primero", () => {

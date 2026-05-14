@@ -213,6 +213,6 @@ docker exec supabase_db_gap-radar psql -U postgres -d postgres -c "..."
 
 **Tests:** 659 passing | **Typecheck:** limpio | **DB:** invariantes 0
 
-**Unstaged:** `src/modules/enrichment/index.ts`, `src/modules/enrichment/parsers/whatsapp.ts`, `src/storage/leads.ts`, `src/modules/discovery/providers/mintur.ts`, `tests/discovery/mintur.test.ts`, `src/storage/external-leads.ts`, `src/cli/commands/discover-external.ts`, `tests/storage/external-leads.test.ts`, `context/ARCHITECTURE.md`, `context/FUTURE.md`, `context/PROJECT_MASTER.md`
+**Unstaged:** limpio
 
-**Próxima acción:** Fase 8 — OSMProvider via Overpass API
+**Próxima acción:** Fase 8 — OSMProvider via Overpass API. Antes: correr `discover-mintur` en producción para validar enrichment cross-source con empresas reales.

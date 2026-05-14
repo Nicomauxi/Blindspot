@@ -33,6 +33,21 @@
 
 ---
 
+## Reconocimiento de franquicias
+
+Detectar si un negocio pertenece a una cadena o franquicia para filtrarlos o clasificarlos
+diferente — las franquicias tienen equipos de marketing propios y son mal prospecto para
+agencias digitales independientes.
+
+| Item | Descripción | Prioridad |
+|------|-------------|-----------|
+| Lista de franquicias conocidas | Lista en DB (system_lists) con nombres canónicos: McDonald's, Subway, Abitab, Redpagos, Farmashop, Tienda Inglesa, etc. Matching por nombre normalizado (levenshtein ≤ 2) | Alta |
+| Tag `franchise-detected` | Agregar al lead cuando matchea la lista. Usado en filtros y reportes | Alta |
+| Heurístico por múltiples ubicaciones | Si el mismo nombre aparece en 3+ localidades distintas → probable cadena, aunque no esté en la lista | Media |
+| Filtro en CLI y reportes | `--exclude-franchises` en discover y report. La UI futura lo hereda | Media |
+
+---
+
 ## Captura de señales nuevas
 
 Señales que el producto necesita para clasificar oportunidades más allá de presencia digital:
