@@ -71,6 +71,8 @@ export interface SubScores {
   primary_offer: PrimaryOffer;
 }
 
+export type UrgencySignal = "high" | "medium" | "low";
+
 export interface ScoreBreakdown {
   computed_at: string;
   config_version: number;
@@ -79,6 +81,7 @@ export interface ScoreBreakdown {
   systems_gap: { total: number; rules: EvaluatedRule[] };
   prospect: { formula: string; total: number };
   sub_scores: SubScores;
+  urgency_signal?: UrgencySignal;
 }
 
 export type BuyerTypeSubScoreKey =
