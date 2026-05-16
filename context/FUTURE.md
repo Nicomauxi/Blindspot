@@ -146,28 +146,42 @@ curl http://localhost:3001/api/leads?contact_tier=A,B&prospect_score_gte=40&limi
 
 ## Automatización de pipeline
 
-### Fase 23 — Pipeline completo automatizado con cron
+### Fase 23 — Pipeline completo automatizado con cron + Pipeline Manager API
 
-**Por qué:** hoy cada paso (refresh, discovery, enrich, score) se lanza manualmente. La automatización debe seguir el orden correcto: **primero refrescar lo existente, luego descubrir nuevo, luego enriquecer descubierto, luego re-scorear todo**. Ver `ARCHITECTURE_FUTURE.md § Pipeline de automatización completo`.
+**Por qué:** hoy cada paso (refresh, discovery, enrich, score) se lanza manualmente. La automatización debe seguir el orden correcto: **primero refrescar lo existente, luego descubrir nuevo, luego enriquecer descubierto, luego re-scorear todo**. La configuración debe ser editable desde el frontend (Pipeline Manager) sin tocar el servidor. Ver `ARCHITECTURE_FUTURE.md § Pipeline de automatización completo`.
 
-**Implementación:**
-1. Nuevo comando `blindspot pipeline --run-all [--cpu-budget balanced] [--refresh-only] [--discovery-only]`
-2. Tabla `pipeline_runs` en DB (ver diseño en ARCHITECTURE_FUTURE.md)
-3. Config `config/pipeline.yaml` con cron schedule, cpu_budget, fases habilitadas
-4. Usar `node-cron` o equivalente para schedule interno, o cron del sistema operativo
-5. Al terminar: generar resumen con nuevos hot leads, score changes, invariantes
+**Implementación — CLI (blindspot):**
+1. Comando `blindspot pipeline --run-all [--cpu-budget balanced] [--dry-run] [--phases refresh,score]`
+2. Tabla `pipeline_runs` — historial con `phase_results` detallados por fuente y `log_lines`
+3. Tabla `pipeline_config` — configuración persistida en DB, editable desde UI
+4. `node-cron` para schedule interno — se reconfigura en memoria cuando UI actualiza la config
+5. Al terminar: verificar invariantes, guardar en `pipeline_runs.invariant_details`
+
+**Implementación — API (para el Pipeline Manager del frontend):**
+1. `GET/PUT/PATCH /api/pipeline/config` — leer y escribir pipeline_config
+2. `POST /api/pipeline/run` — disparar ejecución con overrides opcionales → `{ run_id }`
+3. `POST /api/pipeline/run/dry` → plan de qué haría sin ejecutar
+4. `POST /api/pipeline/abort` — abortar run activo limpiamente
+5. `GET /api/pipeline/runs/active` — run activo con progress en tiempo real
+6. `GET /api/pipeline/runs/:id/log?since=<ts>` — nuevas líneas de log (polling cada 3s desde UI)
 
 **Fases del pipeline en orden:**
 ```
 1. Refresh stale enrichments (por source, prioridad tiers A+B primero)
-2. Score de re-enriquecidos
-3. Discovery queue (discovery_jobs pendientes)
-4. Enrich nuevos descubiertos
-5. Score de nuevos
-6. Report + invariant check
+2. Discovery queue (discovery_jobs pendientes)
+3. Enrich nuevos descubiertos
+4. Score de todos los actualizados + buyer types
+5. Invariant check + report
 ```
 
-**Archivos:** nuevo `src/cli/commands/pipeline.ts`, nueva tabla `pipeline_runs`, `config/pipeline.yaml`
+**Parámetros configurables desde UI:**
+- `cron_expression`: cuándo corre automáticamente
+- `cpu_budget`: conservative/balanced/aggressive (determina concurrencia)
+- `timeout_per_lead_sec`, `max_retries`: tolerancia a errores
+- Por fase: habilitado/deshabilitado, fuentes incluidas, with_heuristic, max_jobs
+- `enabled`: on/off del cron completo sin perder la config
+
+**Archivos:** `src/cli/commands/pipeline.ts` (nuevo), `src/api/routes/pipeline.ts` (nuevo), `src/api/pipeline/scheduler.ts` (nuevo), tablas `pipeline_runs` + `pipeline_config`
 
 ---
 

@@ -2071,7 +2071,58 @@ PIPELINE COMPLETO (cron configurable, ej: domingo 02:00)
   └───────────────────────────────────────────────────────────────────┘
 ```
 
-### Tabla `pipeline_runs` (nueva)
+### Tabla `pipeline_config` (nueva — configuración persistida)
+
+Config editable desde la UI. Una sola fila. El servidor la lee al arrancar y cada vez que el frontend la actualiza.
+
+```sql
+CREATE TABLE pipeline_config (
+  id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  updated_at      timestamptz DEFAULT now(),
+  updated_by      text DEFAULT 'system',  -- 'system' | 'ui' | 'cli'
+
+  -- Schedule
+  enabled         boolean DEFAULT true,
+  cron_expression text DEFAULT '0 2 * * 0',   -- domingo 02:00 UYU
+
+  -- CPU Budget global
+  cpu_budget      text DEFAULT 'balanced',     -- 'conservative'|'balanced'|'aggressive'
+  concurrency_override integer,                -- null = calculado por cpu_budget
+
+  -- Timeouts
+  timeout_per_lead_sec integer DEFAULT 120,
+  max_retries          integer DEFAULT 2,
+
+  -- Fases habilitadas y sus parámetros
+  phase_config    jsonb DEFAULT '{
+    "refresh": {
+      "enabled": true,
+      "sources": ["google_places","mintur","yelu","osm"],
+      "priority_tiers_first": true
+    },
+    "discovery": {
+      "enabled": true,
+      "max_jobs_per_run": 5,
+      "respect_priority": true
+    },
+    "enrich_new": {
+      "enabled": true,
+      "with_heuristic": false,
+      "concurrency": 5
+    },
+    "score": {
+      "enabled": true,
+      "recalculate_buyer_types": true
+    }
+  }',
+
+  -- Notificaciones
+  notify_ui_badge boolean DEFAULT true,
+  notify_email    text                          -- null = deshabilitado
+);
+```
+
+### Tabla `pipeline_runs` (nueva — historial)
 
 ```sql
 CREATE TABLE pipeline_runs (
@@ -2080,64 +2131,97 @@ CREATE TABLE pipeline_runs (
   started_at      timestamptz,
   completed_at    timestamptz,
   trigger         text DEFAULT 'manual',  -- 'manual' | 'cron' | 'ui'
-  cpu_budget      text,                   -- 'conservative' | 'balanced' | 'aggressive'
+  config_snapshot jsonb,                  -- snapshot de pipeline_config al momento del run
+  overrides       jsonb,                  -- overrides aplicados (si fue manual con overrides)
   status          text DEFAULT 'queued',  -- 'queued'|'running'|'completed'|'failed'|'partial'
 
-  -- Configuración de fases (cuáles correr)
-  run_refresh     boolean DEFAULT true,
-  run_discovery   boolean DEFAULT true,
-  run_enrich_new  boolean DEFAULT true,
-  run_score       boolean DEFAULT true,
-
-  -- Resultados por fase
+  -- Resultados por fase (se va poblando mientras corre)
   phase_results   jsonb DEFAULT '{}',
   -- {
-  --   refresh:   { leads_processed, duration_ms, errors },
-  --   discovery: { jobs_run, leads_found, leads_new, leads_corroborated },
-  --   enrich:    { leads_processed, duration_ms },
-  --   score:     { leads_scored, new_hot, score_changes }
+  --   refresh: {
+  --     by_source: { google_places: { leads: 45, duration_ms: 1380000 }, ... },
+  --     total_leads: 127, duration_ms: 5880000
+  --   },
+  --   discovery: {
+  --     jobs: [{ source, location, niche, leads_new, leads_corroborated }],
+  --     total_new: 14, total_corroborated: 8
+  --   },
+  --   enrich:  { leads_processed: 14, duration_ms: 1080000 },
+  --   score:   { leads_scored: 3141, new_hot: 3, score_changes_up: 28, score_changes_down: 12 }
   -- }
 
+  -- Estado en tiempo real
+  current_phase   integer,                -- 1..4, null si no está corriendo
+  current_job     jsonb,                  -- { source, location, niche, progress, leads_found }
+  log_lines       jsonb DEFAULT '[]',     -- array de { ts, message } — últimas 200 líneas
+
   -- Invariantes post-run
-  invariants_ok   boolean,
-  invariant_details jsonb,
+  invariants_ok      boolean,
+  invariant_details  jsonb,
 
   error_message   text
 );
+
+CREATE INDEX pipeline_runs_status     ON pipeline_runs(status);
+CREATE INDEX pipeline_runs_created_at ON pipeline_runs(created_at DESC);
 ```
 
-### Configuración del cron
+### API de pipeline (backend)
 
-```yaml
-# config/pipeline.yaml
-automation:
-  enabled: true
-  cron: "0 2 * * 0"       # domingo 02:00 UYU
-  cpu_budget: "conservative"  # no interrumpir trabajo humano nocturno
+```typescript
+// src/api/routes/pipeline.ts
 
-  phases:
-    refresh:
-      enabled: true
-      priority_tiers: ["A", "B"]  # refrescar primero los leads más valiosos
-    discovery:
-      enabled: true
-      max_jobs_per_run: 5         # no más de 5 discovery jobs por cron
-    enrich_new:
-      enabled: true
-      with_heuristic: false       # heurístico solo en runs manuales (lento)
-    score:
-      enabled: true
+GET  /api/pipeline/config         → PipelineConfig desde tabla pipeline_config
+PUT  /api/pipeline/config         → guardar config, reconfigurar cron en memoria
+PATCH /api/pipeline/config        → actualización parcial
 
-  notifications:
-    ui_badge: true
-    # email: false  (futuro)
+POST /api/pipeline/run
+     body: { overrides?: Partial<PhaseConfig & { cpu_budget, phases }> }
+     → inserta pipeline_runs row (status='queued'), dispara ejecución en background
+     → responde { run_id } inmediatamente
+
+POST /api/pipeline/run/dry
+     body: { overrides? }
+     → calcula qué haría: cuántos leads refreshearía, qué jobs discovery correría
+     → responde { plan: { refresh_count, discovery_jobs, enrich_estimate, duration_estimate } }
+
+POST /api/pipeline/abort          → marca run activo como 'aborting', espera al lead actual
+POST /api/pipeline/pause-phase
+     body: { phase: 1|2|3|4 }    → pausa la fase, continúa con la siguiente al retomar
+
+GET  /api/pipeline/runs?status=completed,failed&limit=20&cursor=<id>
+GET  /api/pipeline/runs/active    → run con status='running', null si no hay
+GET  /api/pipeline/runs/:id       → run completo con phase_results
+GET  /api/pipeline/runs/:id/log?since=<iso> → log_lines nuevas desde timestamp
+```
+
+### Configuración del cron en el servidor
+
+El cron se configura en memoria al arrancar el servidor API. Si `pipeline_config.enabled=true`, registra el job con la expresión cron guardada. Cuando el frontend actualiza la config vía `PUT /api/pipeline/config`, el servidor recalcula y reregistra el cron job en memoria sin reiniciar.
+
+```typescript
+// src/api/pipeline/scheduler.ts
+import { schedule } from 'node-cron'
+
+let currentCronJob: ScheduledTask | null = null
+
+export function reconfigureCron(config: PipelineConfig): void {
+  currentCronJob?.stop()
+  if (!config.enabled) return
+  currentCronJob = schedule(config.cron_expression, () => {
+    triggerPipelineRun({ trigger: 'cron', config })
+  })
+}
 ```
 
 ### CLI para el pipeline completo
 
 ```bash
-# Run manual completo
+# Run manual completo (usa config guardada en DB)
 blindspot pipeline --run-all [--cpu-budget balanced] [--dry-run]
+
+# Con overrides
+blindspot pipeline --run-all --phases refresh,score --source yelu
 
 # Solo refresh de fuentes stale
 blindspot pipeline --refresh-only [--source yelu]

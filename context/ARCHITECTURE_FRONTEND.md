@@ -107,6 +107,54 @@ GET /api/stats/outreach → { contacted, responded, closed_won, conversion_rate,
 GET /api/stats/pipeline → { last_run, next_run, phase_results }
 ```
 
+### Pipeline
+
+```
+GET  /api/pipeline/config
+     → PipelineConfig completa (schedule, fases, cpu_budget, notificaciones)
+
+PUT  /api/pipeline/config
+     body: PipelineConfig completa
+     → guarda config en DB (tabla pipeline_config), reconfigura el cron en el servidor
+
+PATCH /api/pipeline/config
+     body: campos parciales de PipelineConfig
+     → actualización parcial
+
+POST /api/pipeline/run
+     body: { overrides?: Partial<PipelineConfig> }
+     → dispara ejecución inmediata, responde con { run_id }
+     → el servidor inicia el pipeline en background
+
+POST /api/pipeline/run/dry
+     body: { overrides?: Partial<PipelineConfig> }
+     → simula la ejecución: qué leads refresheará, qué jobs correrá, estimado de tiempo
+     → NO ejecuta nada, responde con { plan: PipelinePlan }
+
+POST /api/pipeline/abort
+     → aborta el run activo (si lo hay), espera a que el lead actual termine limpiamente
+
+POST /api/pipeline/pause-phase
+     body: { phase: 1 | 2 | 3 | 4 }
+     → pausa la fase indicada, continúa con la siguiente
+
+GET  /api/pipeline/runs
+     ?status=completed,failed,partial
+     &limit=20&cursor=<id>
+     → PipelineRun[] con stats resumidos
+
+GET  /api/pipeline/runs/active
+     → PipelineRun activo con phase_results parciales + job actual
+     → null si no hay run corriendo
+
+GET  /api/pipeline/runs/:id
+     → PipelineRun completo con phase_results detallados por fuente
+
+GET  /api/pipeline/runs/:id/log
+     ?since=<iso_timestamp>
+     → líneas de log nuevas desde `since` (para polling del monitor en tiempo real)
+```
+
 ---
 
 ## Tipo `LeadCard` — dato central de la UI
@@ -388,6 +436,175 @@ Vista agregada para identificar oportunidades de campaña, no leads individuales
 
 ---
 
+### Pantalla 6 — Pipeline Manager
+
+Control total sobre cuándo y cómo se ejecutan las pipelines en el servidor. El usuario configura el schedule, los parámetros de cada fase y puede disparar ejecuciones manuales con overrides.
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│ PIPELINE MANAGER                              [▶ Ejecutar ahora]        │
+├──────────────────────────────────────┬──────────────────────────────────┤
+│  SCHEDULE                            │  ESTADO DEL SERVIDOR             │
+│  ─────────────────────────────────   │  ──────────────────────────────  │
+│  ● Habilitado  ○ Deshabilitado        │  Último run:   hace 3 días       │
+│                                      │  Próximo run:  dom 25 May 02:00  │
+│  Expresión cron:                     │  Estado:       ✅ completado      │
+│  [0  ] [2  ] [*  ] [*  ] [0  ]       │                                  │
+│   min   hora  día   mes   dow         │  Stats último run:               │
+│  "Domingos a las 02:00 UYU"           │    Re-enriquecidos:    127       │
+│                                      │    Nuevos descubiertos: 14       │
+│  Próximas 3 ejecuciones:             │    Nuevos hot leads:     3       │
+│  Dom 25 May 2026  02:00              │    Invariantes:         ✅        │
+│  Dom 01 Jun 2026  02:00              │                                  │
+│  Dom 08 Jun 2026  02:00              │  [Ver detalles del run →]        │
+├──────────────────────────────────────┴──────────────────────────────────┤
+│  FASES Y PARÁMETROS                                                      │
+│  ─────────────────────────────────────────────────────────────────────  │
+│                                                                          │
+│  ☑ Fase 1 — Refresh enrichment                                          │
+│    Prioridad de refresh:  ● Tiers A+B primero  ○ Todas las fuentes igual│
+│    Fuentes activas:  ☑ Google Places  ☑ MINTUR  ☑ Yelu  ☑ OSM          │
+│                                                                          │
+│  ☑ Fase 2 — Discovery (cola de jobs pendientes)                         │
+│    Máx. jobs por run: [5   ]    Respetar prioridad: ● Sí  ○ No         │
+│                                                                          │
+│  ☑ Fase 3 — Enrich nuevos descubiertos                                  │
+│    Modo heurístico:  ○ Sí (lento, más datos)  ● No (rápido)            │
+│    Concurrencia:     [5   ] workers                                     │
+│                                                                          │
+│  ☑ Fase 4 — Score (todos los actualizados)                              │
+│    Recalcular buyer types:  ● Sí  ○ No                                  │
+│                                                                          │
+├──────────────────────────────────────────────────────────────────────────┤
+│  PARÁMETROS GLOBALES                                                     │
+│  ─────────────────────────────────────────────────────────────────────  │
+│                                                                          │
+│  CPU Budget:                                                             │
+│  ○ Conservador (~5 workers · 20% CPU · para horario laboral)            │
+│  ● Balanceado  (~10 workers · 50% CPU · recomendado para cron nocturno) │
+│  ○ Agresivo    (~20 workers · 80% CPU · solo si el servidor es dedicado)│
+│                                                                          │
+│  Timeout por lead:  [120 ] segundos    Reintentos:  [2  ]              │
+│                                                                          │
+│  Notificaciones al terminar:                                             │
+│  ☑ Badge en UI (contador de nuevos hot leads)                           │
+│  ☐ Email  [no configurado]                                               │
+│                                                                          │
+│                                         [Guardar configuración]         │
+├──────────────────────────────────────────────────────────────────────────┤
+│  EJECUCIÓN MANUAL                                                        │
+│  ─────────────────────────────────────────────────────────────────────  │
+│                                                                          │
+│  Modo:  ● Usar config guardada  ○ Override temporal                     │
+│                                                                          │
+│  [Override temporal]   CPU Budget: [Balanceado ▼]                       │
+│  Fases:  ☑ Refresh  ☑ Discovery  ☑ Enrich  ☑ Score                    │
+│  Scope:  ● Todas las fuentes  ○ Solo: [google_places ▼]                │
+│                                                                          │
+│  [▶ Ejecutar ahora]         [▶ Dry run — ver qué haría sin ejecutar]   │
+│                                                                          │
+├──────────────────────────────────────────────────────────────────────────┤
+│  HISTORIAL DE EJECUCIONES                                                │
+│  ─────────────────────────────────────────────────────────────────────  │
+│                                                                          │
+│  18 May 2026  02:01  cron    ✅  4h 12m  Re-enrich:127 Disc:14 Hot:+3  │
+│  11 May 2026  02:00  cron    ✅  3h 55m  Re-enrich: 89 Disc: 8 Hot:+1  │
+│  08 May 2026  14:32  manual  ✅  1h 23m  Solo refresh · source=yelu     │
+│  04 May 2026  02:01  cron    ⚠️  2h 41m  Partial — Fase 3 timeout      │
+│                                                                          │
+│                                            [Ver más historial →]        │
+└──────────────────────────────────────────────────────────────────────────┘
+```
+
+**Comportamiento:**
+- Guardar config → `PUT /api/pipeline/config` — persiste en DB (`pipeline_config` table)
+- Ejecutar ahora → `POST /api/pipeline/run` con optional overrides → abre monitor de ejecución
+- Dry run → `POST /api/pipeline/run/dry` → muestra resumen de qué haría (sin ejecutar)
+- Historial → `GET /api/pipeline/runs` paginado
+
+---
+
+### Pantalla 6b — Monitor de Ejecución Activa
+
+Aparece automáticamente cuando hay un pipeline corriendo. También accesible desde el historial.
+
+```
+┌──────────────────────────────────────────────────────────────────────────┐
+│  PIPELINE EN EJECUCIÓN — iniciado hace 23 min              [Abortar ✕]  │
+├──────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│  ✅ Fase 1 — Refresh enrichment                  completado · 1h 23m    │
+│     google_places: 45 · mintur: 32 · yelu: 28 · osm: 22               │
+│                                                                          │
+│  ⏳ Fase 2 — Discovery                           corriendo · 3/5 jobs   │
+│     ████████████░░░░░░░  60%                                            │
+│     Job actual: Yelu · Salto · restaurant · 134/200 leads              │
+│     12 nuevos · 4 corroborados hasta ahora                             │
+│                                                                          │
+│  ⏸  Fase 3 — Enrich nuevos                       esperando Fase 2      │
+│  ⏸  Fase 4 — Score                               esperando Fase 3      │
+│                                                                          │
+│  [Pausar Fase 2]   [Saltear Fase 2 y continuar]                        │
+│                                                                          │
+│  Log en tiempo real:                                                    │
+│  [14:23:41] Yelu Salto restaurant: lead "La Vieja Cocina" insertado    │
+│  [14:23:44] Yelu Salto restaurant: lead "El Rancho" corroborado (OSM)  │
+│  [14:23:47] Yelu Salto restaurant: 134/200 procesados                  │
+│                                                     [▼ Scroll al final] │
+└──────────────────────────────────────────────────────────────────────────┘
+```
+
+**Comportamiento:**
+- Polling cada 3s a `GET /api/pipeline/runs/active` mientras hay un run activo
+- Abortar → `POST /api/pipeline/abort` con confirmación
+- Pausar fase → `POST /api/pipeline/pause-phase` (pausa el job actual, completa el lead en proceso)
+- Log en tiempo real: polling a `GET /api/pipeline/runs/:id/log?since=<timestamp>` cada 3s
+
+---
+
+### Pantalla 6c — Detalle de Ejecución
+
+Desde el historial, al hacer "Ver detalles" en un run completado.
+
+```
+┌──────────────────────────────────────────────────────────────────────────┐
+│ ← Volver    Pipeline Run — 18 May 2026 · 02:01  (cron)                 │
+│             ✅ Completado en 4h 12min                                   │
+├──────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│  FASE 1 — Refresh enrichment          1h 38min                          │
+│  ────────────────────────────────────────────────────────────────────   │
+│  google_places    45 leads    23 min                                    │
+│  mintur           32 leads    28 min                                    │
+│  yelu             28 leads    41 min (más lento — scraping)             │
+│  osm              22 leads     6 min                                    │
+│                                                                          │
+│  FASE 2 — Discovery                   22min · 5 jobs                   │
+│  ────────────────────────────────────────────────────────────────────   │
+│  Yelu · Salto · restaurant      12 nuevos  3 corroborados              │
+│  OSM  · Rivera · gym             0 nuevos  0 corroborados              │
+│  GP   · Rocha · restaurant       2 nuevos  1 corroborado               │
+│  Yelu · Maldonado · hairdresser  0 nuevos  0 corroborados              │
+│  OSM  · Salto · car_dealer       0 nuevos  2 corroborados              │
+│                                                                          │
+│  FASE 3 — Enrich nuevos               18min · 14 leads                 │
+│                                                                          │
+│  FASE 4 — Score                       14min · 3.141 leads re-scoreados  │
+│  Nuevos hot leads (≥55):  3                                             │
+│  Score subió > 15pts:    28    Score bajó > 15pts:  12                 │
+│                                                                          │
+│  INVARIANTES POST-RUN                                                   │
+│  passed_not_enriched:  0  ✅                                            │
+│  tags_contradictorios: 0  ✅                                            │
+│  passed_sin_score:     0  ✅                                            │
+│  contact_tier_X_hot:   0  ✅                                            │
+│                                                                          │
+│  [Ver leads nuevos →]   [Ver cambios de score →]                        │
+└──────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
 ## Modal — Registro de Outreach
 
 Se abre desde Lead Explorer o Lead Detail al hacer "Marcar contactado".
@@ -475,16 +692,18 @@ Se abre desde Lead Explorer o Lead Detail al hacer "Marcar contactado".
 
 No construir todo de una vez. Prerequisito base: API server activo en `blindspot`.
 
-| Etapa | Qué construir | Prerequisito en backend |
-|-------|--------------|------------------------|
-| 1 | Vista de lista básica (Lead Explorer sin filtros avanzados) | API `/api/leads` + `contact_tier` en score_breakdown |
-| 2 | Filtros por tier + oferta + urgencia | Scoring v2 completo (Fase 22) |
+| Etapa | Pantalla / Feature | Prerequisito en backend |
+|-------|-------------------|------------------------|
+| 1 | Lead Explorer básico (lista sin filtros avanzados) | API `/api/leads` + `contact_tier` en score_breakdown |
+| 2 | Filtros por tier + oferta + urgencia + score | Scoring v2 completo (Fase 22) |
 | 3 | Lead Detail completo con sub-scores y señales | `inferred_state` como columna propia |
 | 4 | Modal de registro de outreach (contacted/won/lost) | Tabla `lead_outreach` + API `/api/outreach` |
-| 5 | Generación de ofertas IA | LLMProvider configurado (Gemini/Ollama) |
-| 6 | Segment Explorer (agregaciones y stats) | `GET /api/stats/overview` + PostGIS para clusters |
-| 7 | Discovery Control Center + progress en tiempo real | `discovery_jobs` + API `/api/discovery` |
-| 8 | Cuantificación PedidosYa + datos fiscales | commission_estimate + CIIU en lead_company_data |
+| 5 | **Pipeline Manager** — config + ejecución manual + historial | Fase 23 API + tabla `pipeline_config` + `pipeline_runs` |
+| 6 | **Monitor de ejecución activa** (progress en tiempo real) | `GET /api/pipeline/runs/active` + log endpoint |
+| 7 | Generación de ofertas IA | LLMProvider configurado (Gemini/Ollama) |
+| 8 | Segment Explorer (agregaciones y stats) | `GET /api/stats/overview` + PostGIS para clusters |
+| 9 | Discovery Control Center (gestión de cola) | `discovery_jobs` + API `/api/discovery/suggestions` |
+| 10 | Cuantificación PedidosYa + datos fiscales | commission_estimate + CIIU en lead_company_data |
 
 ---
 
@@ -537,15 +756,20 @@ app/
   layout.tsx              — navbar, sidebar de filtros persistente
   page.tsx                → /   — redirect a /leads
   leads/
-    page.tsx              → /leads   — Lead Explorer
+    page.tsx              → /leads         — Lead Explorer
     [id]/
-      page.tsx            → /leads/:id   — Lead Detail
+      page.tsx            → /leads/:id     — Lead Detail
   outreach/
-    page.tsx              → /outreach   — Outreach Tracker
+    page.tsx              → /outreach      — Outreach Tracker
   segments/
-    page.tsx              → /segments   — Segment Explorer
+    page.tsx              → /segments      — Segment Explorer
   discovery/
-    page.tsx              → /discovery  — Discovery Control Center
+    page.tsx              → /discovery     — Discovery Control Center (cola de jobs)
+  pipeline/
+    page.tsx              → /pipeline      — Pipeline Manager (config + ejecución + historial)
+    runs/
+      [id]/
+        page.tsx          → /pipeline/runs/:id — Detalle de ejecución
   api/
     (no aplica — la API vive en el proyecto blindspot)
 ```
