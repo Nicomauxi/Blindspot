@@ -262,12 +262,14 @@ docker exec supabase_db_gap-radar psql -U postgres -d postgres -c "..."
 ### Próximas acciones — en este orden
 
 1. **Commit checkpoint** de toda la documentación de planificación y auditoría
-2. **Fase 22-pre** (~30 min) — `scoring_version smallint` en leads y lead_buyer_scores
-3. **Fase 22** — Scoring v2 completo (Phase 20 absorbida — incluye contact_tier + pitch_hook)
+2. **Fase 22-pre** (~30 min) — `scoring_version smallint` + `contact_ready boolean` en leads y lead_buyer_scores
+3. **Fase 22** — Scoring v2 completo (Fase 20 absorbida — incluye contact_tier + pitch_hook + contact_ready)
 4. **Fase 6** — Cross-source deduplication activo + reconciliación retroactiva
 5. **Fase 15** — Email quality + clasificación tipo teléfono
-6. **Fase inferred_state** — Migrar a columna propia (antes de cualquier endpoint UI)
+6. **Fase 47** — `inferred_state` → columna propia (antes de cualquier endpoint UI)
 7. **Fase 21** — PostGIS (30 min infra, cloud via Dashboard → Extensions, no SQL)
-8. **Fase API-0** — Tabla users + roles
+8. **Fase API-0** — Tabla users + roles + `contacted_by` en leads
 9. **Fase API** — Servidor Fastify (CORS, JWT, endpoints, lead_dashboard VIEW, paginación)
-10. **UI** — Next.js (ver ARCHITECTURE_FRONTEND.md)
+10. **Fase 48** — Infraestructura producción (HTTPS + pm2) — antes de dar acceso a CMs
+11. **Fase 49** — DB backup automatizado
+12. **UI** — Next.js (ver ARCHITECTURE_FRONTEND.md)

@@ -621,16 +621,16 @@ Las fases del FUTURE.md, reordenadas según impacto en el objetivo comercial:
 
 | Prioridad | Fase | Descripción | Desbloquea |
 |-----------|------|-------------|-----------|
-| **1** | Fix scoring formula | `source_quality_bonus` en fórmula, `contactability_multiplier` multifactor | Scores reales para 3.000+ leads externos |
-| **2** | Fase 6 — cross-source dedup activo | Llamar `findCrossSourceMatch` al insertar | Modelo de evidencias activo, `data_confidence` real |
-| **3** | `contact_tier` + `pitch_hook` en score_breakdown | Derivar y persistir en scoring/index.ts | UI puede filtrar por contactabilidad y pitch |
-| **4** | Fase 15 — email quality | Parser personal/generic/role + MX check | `contact_reliability_score` real, no estimado |
-| **5** | `inferred_state` → columna propia | Migración + actualizar accesos | Queries e índices eficientes en UI |
-| **6** | Fase 13 — PedidosYa escape | `commission_estimate` en buyer_type delivery_propio | Pitch cuantificado (ahorro en comisiones) |
-| **7** | Fase 11 — IMM Habilitaciones | CSV Montevideo → teléfonos para MINTUR | Desbloquea 1.600 leads MINTUR hoy inaccionables |
-| **8** | Fase 18 — cruce MINTUR × IMM | Join por nombre+dirección | 1.600 leads MINTUR pasan de tier X a tier C |
-| **9** | `contact_ready` field | Derivar en scoring, persistir | Filtro de ventas honesto |
-| **10** | UI web — primera versión | Lista de leads filtrable por tier + pitch | Producto usable |
+| **1** | **Fase 22** — Scoring v2 completo | `gap_depth + commercial_breadth + business_quality_pts × accessibility_factor × timing_factor`. Incluye `contact_tier`, `pitch_hook`, `contact_ready` | Scores reales para 3.000+ leads externos |
+| **2** | **Fase 6** — Cross-source dedup activo | Llamar `findCrossSourceMatch` al insertar | Modelo de evidencias activo, `data_confidence` real |
+| **3** | **Fase 15** — Email quality + tipo teléfono | Parser personal/generic/role + MX check + mobile-phone tag | `contact_reliability_score` real, no estimado |
+| **4** | **Fase 47** — `inferred_state` → columna propia | Migración + actualizar accesos | Queries e índices eficientes en UI |
+| **5** | **Fase 21** — PostGIS | GPS indexable | Competitive density, mapa de leads, urgency geográfica |
+| **6** | **Fase API-0** — Tabla `users` | Schema + roles JWT | Base de la API autenticada |
+| **7** | **Fase API** — Servidor Fastify | Todos los endpoints REST | Frontend puede consumir datos reales |
+| **8** | **Fase 13** — PedidosYa escape | `commission_estimate` en buyer_type delivery_propio | Pitch cuantificado (ahorro en comisiones) |
+| **9** | **Fase 11+18** — IMM Habilitaciones + MINTUR×IMM | CSV Montevideo → teléfonos para MINTUR | Desbloquea 1.600 leads MINTUR hoy inaccionables |
+| **10** | **UI** — Next.js `ui/` | Lead Explorer, Lead Detail, Outreach Tracker | Producto usable para CMs |
 
 ---
 
@@ -1095,15 +1095,14 @@ CREATE INDEX lead_outreach_status    ON lead_outreach(status);
 CREATE INDEX lead_outreach_campaign  ON lead_outreach(campaign_id) WHERE campaign_id IS NOT NULL;
 ```
 
-### API de la pipeline (PostgREST)
+### API de outreach (Fastify `api/`)
 
 ```
-GET  /rest/v1/lead_outreach?status=eq.pending&order=created_at.desc
-POST /rest/v1/lead_outreach          — crear registro al generar oferta
-PATCH /rest/v1/lead_outreach?id=eq.X — actualizar status, notas, outcome
+GET  /api/v1/outreach?status=pending&order=created_at.desc
+POST /api/v1/outreach                    — crear registro al generar oferta
+PATCH /api/v1/outreach/:id               — actualizar status, notas, outcome
 
--- Función RPC para generar oferta (en Supabase Edge Function o Next.js API route)
-POST /api/generate-offer
+POST /api/v1/outreach/generate-offer
   body: { lead_id: string, offer_type?: string, channel?: string }
   → OfferPackage generado
 ```
@@ -1471,33 +1470,44 @@ blindspot score --all
     │
     ▼
 
-  reviewCountMultiplier(lead): 0.75–1.4×
-  ratingBonus(lead): +5 si rating ≥ 4.3
+  // Fórmula v2 — ver §Diseño objetivo — fórmula de scoring comercial (v2) para detalle completo
+  gap_depth = min(60, max(sub_scores) + source_quality_bonus)
+  commercial_breadth = (sorted_subs[1] >= 30 ? 8 : 0) + (sorted_subs[2] >= 30 ? 4 : 0)
+  business_quality_pts = ratingPts + reviewPts + dataConfidencePts + corroborationPts   cap=15
     │
     ▼
 
-  prospect_score = min(100,
-    floor((max(sub_scores) + source_quality_bonus) × contactabilityMult × reviewMult)
-    + ratingBonus
+  accessibility_factor(contact_tier, contact_reliability_score): 0.30–1.40
+  timing_factor(urgency, new_business, competitive_pressure, franchise_penalty): 0.85–1.20
+    │
+    ▼
+
+  commercial_score = min(100,
+    floor((gap_depth + commercial_breadth + business_quality_pts)
+          × accessibility_factor × timing_factor)
+    + urgency_bonus   // high=+5, medium=+2
   )
     │
     ▼
 
   computeUrgencySignal(lead): 'high'|'medium'|'low'
-  computePitchHook(primary_offer, inferred_state, niche): string  [NUEVO]
+  computePitchHook(primary_offer, inferred_state, niche): string
   computeAllBuyerScores(lead): BuyerTypeScore[]
+  contact_ready = ['A','B','C'].includes(contact_tier) && score >= 30 && !franchise
     │
     ▼
 
   score_breakdown: {
     sub_scores, primary_offer,
-    source_quality_bonus,           ← nuevo
-    contact_tier,                   ← nuevo
-    pitch_hook,                     ← nuevo
+    source_quality_bonus,
+    contact_tier,
+    pitch_hook,
     urgency_signal,
-    contactability_multiplier,
-    review_multiplier,
-    rating_bonus,
+    commercial_breadth,
+    business_quality_pts,
+    accessibility_factor,
+    timing_factor,
+    urgency_bonus,
     inferred_state_summary          ← resumen de los booleanos que afectaron el score
   }
 
@@ -1978,12 +1988,13 @@ Al cambiar la fórmula de scoring, los scores históricos quedan obsoletos sin f
 
 ```sql
 ALTER TABLE lead_buyer_scores ADD COLUMN scoring_version smallint NOT NULL DEFAULT 1;
-ALTER TABLE leads ADD COLUMN prospect_score_version smallint NOT NULL DEFAULT 1;
+ALTER TABLE leads          ADD COLUMN scoring_version smallint NOT NULL DEFAULT 1;
 ```
 
 **Comportamiento:**
 - Al correr `score --all` con v2: `scoring_version = 2` en todos los registros actualizados
 - La API retorna `X-Scoring-Version: 2` en headers
+- Invariante post-run: `SELECT COUNT(*) FROM leads WHERE scoring_version < 2` debe ser 0
 - Invariante post-run: `SELECT COUNT(*) FROM lead_buyer_scores WHERE scoring_version < 2` debe ser 0
 
 ---
@@ -2335,107 +2346,17 @@ Vista agregada para identificar oportunidades de campaña, no leads individuales
 
 ---
 
-### API contract (PostgREST sobre Supabase)
+### API contract y UI
 
-La UI no necesita API propia en primera versión. PostgREST expone las tablas directamente con filtros.
+> **El contrato de API y el diseño completo de la UI están en `context/ARCHITECTURE_FRONTEND.md`.**
+> La UI consume la API REST de `api/` (Fastify, puerto 3001) — nunca accede a la DB directamente.
+> Esta sección existía como diseño previo con PostgREST directo, que fue reemplazado por la arquitectura de `api/` Fastify.
+>
+> Ver `ARCHITECTURE_FRONTEND.md` para: pantallas completas, contrato de endpoints, `LeadCard` interface, componentes reutilizables, orden de construcción.
 
-**View `lead_dashboard`** (VIEW normal — no MATERIALIZED para 2-5 usuarios): desnormaliza todos los campos del LeadCard para evitar joins en cada request.
+El contrato mínimo de datos que el backend debe exponer para la UI (sin joins) está definido en `§ Contrato de datos para la UI` más arriba en este archivo.
 
-```sql
-CREATE VIEW lead_dashboard AS
-SELECT
-  l.id,
-  l.name,
-  l.address,
-  l.niche,
-  l.source,
-  jsonb_array_length(l.corroborating_sources) AS sources_count,
-
-  -- Contacto
-  l.score_breakdown->>'contact_tier'           AS contact_tier,
-  l.canonical_fields->'email'->>'value'        AS contact_email,
-  l.canonical_fields->'phone'->>'value'        AS contact_phone,
-  l.whatsapp                                   AS contact_whatsapp,
-
-  -- Score y oferta
-  l.prospect_score,
-  l.score_breakdown->>'primary_offer'           AS primary_offer,
-  l.score_breakdown->>'pitch_hook'             AS pitch_hook,
-  l.score_breakdown->>'urgency_signal'         AS urgency_signal,
-
-  -- Estado operativo (cuando inferred_state sea columna propia)
-  l.inferred_state->>'digitalization_level'    AS digitalization_level,
-  (l.inferred_state->'has_delivery'->>'value')::boolean   AS has_delivery,
-  (l.inferred_state->'has_pos'->>'value')::boolean        AS has_pos,
-  (l.inferred_state->'has_reservations'->>'value')::boolean AS has_reservations,
-
-  -- Confianza
-  l.data_confidence_score,
-  l.contact_reliability_score,
-
-  -- Meta
-  l.contacted_at,
-  l.created_at,
-
-  -- Top buyer type (join lateral)
-  lbs_top.buyer_type AS top_buyer_type,
-  lbs_top.score      AS top_buyer_score
-
-FROM leads l
-LEFT JOIN LATERAL (
-  SELECT buyer_type, score
-  FROM lead_buyer_scores
-  WHERE lead_id = l.id
-  ORDER BY score DESC
-  LIMIT 1
-) lbs_top ON true
-WHERE l.passed_filter = true
-  AND l.score_breakdown->>'contact_tier' != 'X';
-```
-
-Filtros vía PostgREST query params:
-```
-GET /rest/v1/lead_dashboard
-  ?contact_tier=in.(A,B,C)
-  &prospect_score=gte.40
-  &niche=eq.restaurant
-  &urgency_signal=eq.high
-  &contacted_at=is.null
-  &order=prospect_score.desc
-  &limit=50&offset=0
-```
-
----
-
-### Componentes UI reutilizables clave
-
-| Componente | Props | Función |
-|-----------|-------|---------|
-| `<ContactTierBadge tier="A" />` | tier: A/B/C/D/X | Badge con color y tooltip del canal |
-| `<ScoreBar score={74} />` | score: 0–100 | Barra con color gradient |
-| `<UrgencyBadge signal="high" />` | signal: high/medium/low | 🔴🟡⚪ |
-| `<PitchHook text="..." />` | text: string | Frase destacada, copiable con 1 click |
-| `<OperationalState state={...} />` | InferredState | Íconos ✅/❌ por dimensión |
-| `<BuyerTypeBar types={[...]} />` | BuyerTypeScore[] | Barras horizontales top 3 |
-| `<ContactActions lead={...} />` | Lead | Botones: copiar email, abrir WA, marcar contactado |
-| `<SourcesBadges sources={[...]} />` | string[] | Chips: GP / MINTUR / Yelu / OSM |
-
----
-
-### Orden de construcción de la UI
-
-No construir todo de una vez. Orden recomendado:
-
-| Etapa | Qué construir | Prerequisito en backend |
-|-------|--------------|------------------------|
-| 1 | Vista de lista básica (Lead Explorer sin filtros) | `lead_dashboard` view + contact_tier + pitch_hook en DB |
-| 2 | Filtros por tier + oferta + urgencia | Scoring v2 completo (Fase 19 + 20) |
-| 3 | Lead Detail completo | inferred_state como columna propia |
-| 4 | Feedback Tracker (contacted/won/lost + precio) | Tabla `lead_outreach` + formulario UI |
-| 5 | Generación de ofertas IA | LLMProvider configurado (Gemini/Ollama) |
-| 6 | Segment Explorer (agregaciones) | PostGIS activado + geo-clustering |
-| 7 | Discovery Control Center | `discovery_jobs` + cron pipeline |
-| 8 | Cuantificación PedidosYa + DGI data | commission_estimate + CIIU en lead_company_data |
+**View `lead_dashboard`** (VIEW normal — no MATERIALIZED para 2-5 usuarios): desnormaliza todos los campos del LeadCard para evitar joins en cada request del frontend. Definida en `§ View lead_dashboard` arriba.
 
 ---
 

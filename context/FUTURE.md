@@ -18,8 +18,9 @@
 **Implementación:**
 1. Migración: `ALTER TABLE leads ADD COLUMN scoring_version smallint NOT NULL DEFAULT 1;`
 2. Migración: `ALTER TABLE lead_buyer_scores ADD COLUMN scoring_version smallint NOT NULL DEFAULT 1;`
-3. Backfill ya cubierto por el `DEFAULT 1` — verificar: `SELECT COUNT(*) FROM leads WHERE scoring_version IS NULL;` debe ser 0.
-4. Al desplegar Scoring v2: el comando `score --all` setea `scoring_version = 2` en cada row actualizada.
+3. Migración: `ALTER TABLE leads ADD COLUMN contact_ready boolean;` — se setea en Fase 22 por el scoring engine
+4. Backfill ya cubierto por los `DEFAULT` — verificar: `SELECT COUNT(*) FROM leads WHERE scoring_version IS NULL;` debe ser 0.
+5. Al desplegar Scoring v2: el comando `score --all` setea `scoring_version = 2` y `contact_ready` en cada row actualizada.
 
 **Tipo `smallint` (no text):** permite comparación numérica (`WHERE scoring_version < 2`) y es más eficiente que texto. Valor 1 = v1, 2 = v2, etc.
 
@@ -68,6 +69,7 @@ commercial_score = min(100,
     - B: whatsapp confirmado (y no A) — C: phone (y no A ni B) — D: address — X: nada
 11. **`computePitchHook(primary_offer, inferred_state, niche): string`** — nuevo `scoring/pitch.ts`, mapa en `config/scoring.yaml → pitch_hooks`
 12. Persistir en `score_breakdown`: `contact_tier`, `pitch_hook`, `source_quality_bonus`, `inferred_state_summary`
+12b. **`contact_ready`**: calcular `['A','B','C'].includes(contactTier) && score >= 30 && !isFranchise` y persistir en `leads.contact_ready` en el mismo upsert. Requiere que la columna exista (migración en Fase 22-pre: `ALTER TABLE leads ADD COLUMN contact_ready boolean`).
 13. `scoring_version = 2` en cada row actualizada (leads + lead_buyer_scores)
 14. Thresholds nuevos en `config/scoring.yaml`: hot=55, pitcheable=40, pool=25
 15. Correr `score --all`
@@ -148,7 +150,7 @@ WHERE passed_filter = true GROUP BY 1 ORDER BY 1;
 
 ---
 
-### Fase — `inferred_state` → columna propia (DEUDA ALTA → ejecutar antes de UI, después de Fase 6)
+### Fase 47 — `inferred_state` → columna propia (DEUDA ALTA → ejecutar antes de UI, después de Fase 6)
 
 **Por qué:** la UI filtrará por `digitalization_level`, `has_delivery`, `has_pos`. Sin columna propia, cada query hace JSON parsing en tabla completa. Con columna propia se puede indexar. Hacerlo antes de escribir cualquier endpoint de filtrado. Ver `ARCHITECTURE_FUTURE.md § inferred_state como columna propia`.
 
@@ -232,6 +234,13 @@ SELECT COUNT(*) FROM leads WHERE digital_footprint->'inferred_state' IS NOT NULL
 **`lead_filter` null/empty behavior:** si `lead_filter IS NULL` → admin (ve todo). Si `lead_filter = '{}'` → CM sin restricciones (igual que admin, úsese solo para testing). Si `lead_filter = '{"primary_offer":[]}'` → CM sin leads visibles (configuración de error, validar en API antes de guardar).
 
 **Sin self-registration** — admin crea cuentas CM vía `POST /api/v1/users` o query directa.
+
+**Columna `contacted_by` en `leads`** (incluir en esta fase):
+```sql
+ALTER TABLE leads ADD COLUMN contacted_by uuid REFERENCES users(id);
+CREATE INDEX leads_contacted_by ON leads(contacted_by) WHERE contacted_by IS NOT NULL;
+```
+Se setea en `NULL` al crear el lead y se actualiza al primer registro en `lead_outreach` para ese lead. Es un shortcut para la UI de CM ("mis leads") — no reemplaza el historial completo de `lead_outreach`.
 
 ---
 
@@ -719,50 +728,53 @@ Ejecutar solo después de confirmar invariantes en 0.
 ## Pre-producción — antes de dar acceso a otros usuarios
 
 > Estos items deben estar resueltos antes de compartir la URL con cualquier CM.
+> Están formalizados como Fases 48 y 49 para poder rastrearlos y schedulearlos.
 
-| Item | Por qué | Cómo |
-|------|---------|------|
-| **HTTPS + reverse proxy Nginx** | Sin HTTPS, JWT viaja en claro | Nginx + Let's Encrypt (certbot) |
-| **Anti-detección scraping** | Yelu y PedidosYa pueden banear la IP con runs semanales desde la misma IP | User-agent rotation + delays aleatorios (200-800ms) + config en `config/discovery.yaml → scraping` |
-| **DB backup automatizado** | Un solo servidor, pérdida = pérdida total de leads | `pg_dump` en cron diario → comprimido → carpeta local + sync a Backblaze B2 o similar |
-| **Rate limiting en API** | Evitar hammering accidental | Fastify `@fastify/rate-limit`: 100 req/min por token, 10 req/min en `/auth/login` |
-| **pm2 para gestión de procesos** | Reinicio automático si core o api crashean | `pm2 start` para ambos procesos + `pm2 startup` |
+### Fase 48 — Infraestructura de producción (HTTPS + pm2 + rate limiting)
+
+**Por qué:** sin esto, JWT viaja en claro y los procesos no sobreviven reinicios. Bloqueante antes de dar acceso a CMs.
+
+**Implementación:**
+1. **Nginx reverse proxy:** configurar `proxy_pass http://localhost:3001` + SSL con Let's Encrypt (certbot `--nginx -d blindspot.tudominio.com`)
+2. **pm2:** `pm2 start pnpm --name api -- --filter api run start` + `pm2 start pnpm --name core -- --filter core run start` + `pm2 startup` + `pm2 save`
+3. **Rate limiting:** ya incluido en Fase API (`@fastify/rate-limit`: 100 req/min general, 10 req/min en `/auth/login`)
+4. **Anti-detección scraping Yelu/PedidosYa:** ya cubierto en ARCHITECTURE_FUTURE.md § Estrategia anti-detección + Fase 46 para Meta. El config de discovery.yaml → scraping debe estar completo antes de runs en producción.
+
+**Verificación:**
+```bash
+curl https://blindspot.tudominio.com/api/v1/health   # → status: ok, vía HTTPS
+pm2 status                                            # → api: online, core: online
+```
+
+---
+
+### Fase 49 — DB backup automatizado
+
+**Por qué:** un solo servidor, pérdida = pérdida total de todos los leads acumulados. El pipeline corre semanalmente y los datos tardan meses en acumularse.
+
+**Implementación:**
+1. Script `scripts/backup.sh`:
+   ```bash
+   #!/bin/bash
+   TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+   pg_dump -U postgres -d postgres | gzip > /backups/blindspot_${TIMESTAMP}.sql.gz
+   # Retener solo los últimos 7 días
+   find /backups -name "*.sql.gz" -mtime +7 -delete
+   ```
+2. Cron diario a las 03:00: `0 3 * * * /path/to/scripts/backup.sh`
+3. **Sync offsite (opcional):** `rclone copy /backups backblaze:blindspot-backups` (Backblaze B2: 10GB gratis)
+4. Verificar que el backup es restaurable: `gunzip -c backup.sql.gz | psql -U postgres -d blindspot_test`
+
+**Verificación:** `ls -lh /backups` → al menos un archivo .sql.gz del día anterior.
 
 ---
 
 ## Infraestructura y operaciones
 
-### Fase 31 — DIFERIDA (no aplica al modelo de un repo)
-
-~~Preparar `blindspot` (core) para modo long-running~~ — el core ya corre como proceso separado (`pnpm --filter core run start`) con `LISTEN pipeline_trigger` + poll fallback. No requiere una fase adicional.
-
-### Fase 32 — DIFERIDA (VIEW normal es suficiente para 2-5 usuarios)
-
-~~MATERIALIZED VIEW~~ — `lead_dashboard` como VIEW normal con índices correctos maneja sin problema la carga de 2-5 usuarios. Revisar si y cuando aparezca latencia real.
-
-### Fase 33 — DIFERIDA (sin consumidores externos)
-
-~~API versionado~~ — un solo equipo, un solo repo, sin consumidores externos de la API. No hay breaking changes que coordinar con terceros.
-
-### Fase 35 — SIMPLIFICADA
-
-~~Detección de cron missed runs~~ — pm2 reinicia el proceso si cae. El poll de `pipeline_runs WHERE status='pending'` cada 60s recupera runs que llegaron mientras el proceso estaba reiniciando. Suficiente para uso personal.
-
----
-
-### Fase 34 — Endpoint `/api/v1/health`
-
-**Por qué:** sin un health endpoint no hay forma de monitorear el servidor sin abrir la UI. Crítico antes de dar acceso a CMs.
-
-**Implementación en `api/src/routes/health.ts`:**
-```typescript
-// GET /api/v1/health — sin autenticación (público para monitors externos)
-// → { status, db: 'ok'|'error', pipeline_running, leads_count, hot_leads_count, version }
-```
-
-**Verificación:** `curl http://localhost:3001/api/v1/health` → JSON con `status: 'ok'`.
-
----
+> **Fases diferidas / ya resueltas sin fase:**
+> - Fase 31: ya implementado — core corre como proceso long-running con `LISTEN pipeline_trigger` + poll. No requiere fase adicional.
+> - Fase 33 (versionado API): ya implementado — todos los endpoints usan `/api/v1/` desde el inicio. No hay consumidores externos.
+> - Fase 35 (cron missed runs): cubierto por pm2 + poll `pipeline_runs WHERE status='pending'` cada 60s. Suficiente para uso personal.
 
 ### Fase 32 — `lead_dashboard` como MATERIALIZED VIEW + refresh automático
 
@@ -1015,7 +1027,7 @@ blindspot enrich --social --dry-run --verbose
 | **Schema: tags como `text[]` sin confidence** | El array `tags` no puede expresar confianza por tag ni historial. Si el sistema crece en complejidad de tags, considerar `lead_tags(lead_id, tag, confidence, source, tagged_at)`. No urgente mientras tags sean booleanos. | Bajo |
 | **`scoring_version` faltante** | `lead_buyer_scores` y `leads` no tienen campo `scoring_version`. Al cambiar la fórmula (v1→v2), no hay forma de identificar scores calculados con versión antigua. Agregar antes de desplegar Scoring v2. Ver `ARCHITECTURE_FUTURE.md § scoring_version`. | **Alto — prerrequisito de v2** |
 | **Scraping sin anti-detección** | Yelu y PedidosYa no tienen rate limit propio, rotación de user agents ni backoff exponencial. Riesgo de ban en producción con runs semanales desde la misma IP. Mover config a `config/discovery.yaml → scraping`. Ver `ARCHITECTURE_FUTURE.md § Estrategia anti-detección`. | **Alto para producción** |
-| **Cursor pagination inconsistente en la API** | `GET /api/leads` usa cursor-based. `GET /api/outreach` y `GET /api/pipeline/runs` no especifican mecanismo. Definir antes de que el frontend los consuma. | Medio |
+| **Cursor pagination — confirmar en implementación** | Fase API define cursor-based para `GET /leads`, `GET /outreach`, `GET /stats/outreach`, `GET /pipeline/runs`. CC debe verificar que todos implementen `{ data: T[], next_cursor: string\|null, total: number }`. | Bajo |
 | **Missed run detection no implementada** | El cron `node-cron` no persiste estado. Si el servidor se reinicia antes de un run programado, el run se pierde. Ver Fase 35 y `ARCHITECTURE_FUTURE.md § Detección de cron missed runs`. | **Alto para producción** |
 
 ---
