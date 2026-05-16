@@ -225,29 +225,65 @@ docker exec supabase_db_gap-radar psql -U postgres -d postgres -c "..."
 
 > Reescribir completamente al cerrar cada sesión. Solo el snapshot necesario para arrancar la siguiente — sin narrativa histórica (eso vive en git log).
 
-**Tests:** 850 passing, 7 skipped, 67 files | **Typecheck:** limpio
+**Tests:** 865 passing, 7 skipped, 68 files | **Typecheck:** limpio
 
-**Fases F + C + 9 + 10 + 11 + 12 completadas.**
+**Fases completadas: F, C, 9 (Yelu), 10 (PedidosYa), B (sub-scores), E (franquicias), 12 (buyer-type scoring), 14 (review count multiplicador).**
 
-### Estado de DB (snapshot 2026-05-16)
+### Pipeline en background (iniciado 21:18 del 2026-05-15 — corre overnight)
 
-| Fuente | Total | Passed | Notas |
-|--------|-------|--------|-------|
-| mintur | 2027 | 2027 | Enrich completo. |
-| yelu | 672+ | 672+ | Enrich probablemente completo. |
-| osm | 622+ | 622+ | Enrich probablemente completo. |
-| google_places | 1474 | 172 | Enrich completo. |
+PIDs activos: 1175901 (enrich yelu --with-heuristic) y 1175902 (enrich osm --with-heuristic).
 
-**lead_buyer_scores:** 3493 leads × 7 buyer_types = 24,451 filas. Calculadas con `score --buyer-types`.
+Cuando terminen → corren `score --all` + `infer-state --all` automáticamente.
+
+**Al arrancar la próxima sesión, verificar si terminó:**
+```bash
+ps aux | grep "node.*enrich" | grep -v grep
+```
+Si no hay procesos → el pipeline terminó. Entonces correr:
+```bash
+# Refrescar buyer scores con sub_scores post-heuristic y nuevos multiplicadores
+LOG_LEVEL=warn node --env-file=.env --import tsx/esm src/cli/index.ts score --buyer-types > /tmp/buyer-types-refresh.log 2>&1 &
+echo "PID: $!"
+```
+
+**Nota Fase 14:** los scores en DB reflejan la fórmula vieja. Después de que el pipeline termine, correr `score --all` (sin `--dry-run`) para refrescar con el multiplicador de review_count y el rating bonus.
+
+### Fase 16 — Urgency signals (próxima — prompt listo en `context/prompts/fase-16-urgency.md`)
+
+Agrega `urgency_signal: "high" | "medium" | "low"` dentro de `score_breakdown` JSONB.
+Archivos: `src/modules/scoring/urgency.ts` (nuevo), `types.ts`, `index.ts`, `tests/scoring/urgency.test.ts`.
+
+**Señales:**
+- `copyright_year <= 2020` → high
+- niche restaurant/hospedaje + address contiene zona turística → high
+- `created_at < 90 días` → medium
+- `review_count < 20 AND rating >= 4.0` → medium
+
+### Estado de DB (snapshot 2026-05-15 — scores pre-heuristic para yelu/osm)
+
+| Fuente | Total | Passed | Hot (≥50) | Notas |
+|--------|-------|--------|-----------|-------|
+| google_places | 1474 | 172 | 13 | Enrich + score completo |
+| mintur | 2027 | 2027 | 0 | Sin teléfono → sin contactabilidad |
+| osm | 622 | 622 | 46 | Score pre-heuristic (pipeline running) |
+| yelu | 672 | 672 | 8 | Score pre-heuristic (pipeline running) |
+
+**lead_buyer_scores:** 24,451 filas (3,493 leads × 7 tipos). Scores provisorios — refrescar con `score --buyer-types` cuando pipeline termine.
+
+**Invariantes (verificados 2026-05-15):**
+- `passed_not_enriched`: 0 ✅
+- `tags_contradictorios`: 0 ✅
+- `email_found_sin_data`: 0 ✅
+- `passed_sin_score`: 0 ✅
+- `sin_inferred_state`: 1785 — se resuelve cuando pipeline termine
 
 ### Próximas acciones — en este orden
 
-1. **Verificar invariantes:**
-   ```bash
-   docker exec supabase_db_gap-radar psql -U postgres -d postgres -c "SELECT COUNT(*) FILTER (WHERE passed_filter=true AND digital_footprint IS NULL) AS passed_not_enriched, COUNT(*) FILTER (WHERE 'no-website'=ANY(tags) AND 'website-heuristic'=ANY(tags) AND passed_filter=true) AS tags_contradictorios, COUNT(*) FILTER (WHERE passed_filter=true AND prospect_score IS NULL) AS passed_sin_score FROM leads;"
-   ```
-2. **Fase 13 — PedidosYa escape** (desbloqueada): ver FUTURE.md.
-3. **Yelu gym:** re-run si necesario:
-   ```bash
-   node --env-file=.env --import tsx/esm src/cli/index.ts discover-external --source yelu --niche gym --location montevideo --limit 50
-   ```
+1. **Enviar prompt Fase 16** a CC (`context/prompts/fase-16-urgency.md`).
+2. **Cuando pipeline 21:18 termine** (verificar con `ps aux | grep "node.*enrich"`):
+   - Correr `score --all` para aplicar multiplicadores Fase 14 a todos los leads
+   - Correr `score --buyer-types` para refrescar buyer scores
+   - Verificar invariantes + auditoría de datos
+   - Hacer commit checkpoint
+3. **Fase 13 — PedidosYa escape** (desbloqueada en FUTURE.md, depende de `delivery_propio` scores).
+4. **Fase 15 — Email quality** (parser nuevo, requiere re-enrich para ver resultados en DB).

@@ -14,7 +14,7 @@
 - **HTTP:** undici ^7
 - **DB:** Supabase PostgreSQL — Docker local (`supabase_db_gap-radar`) + cloud
 - **Scraping:** Playwright
-- **Tests:** Vitest — 850 passing, 7 skipped, 67 files
+- **Tests:** Vitest — 865 passing, 7 skipped, 68 files
 - **Dev:** tsx/esm
 - **Config:** YAML en `config/` — fuente de verdad para parámetros de discovery y scoring
 - **Repo:** https://github.com/Nicomauxi/Blindspot
@@ -122,7 +122,7 @@ src/
 │   │       └── whois.ts             — domain age via WHOIS
 │   │
 │   ├── scoring/
-│   │   ├── index.ts                 — prospect_score = max(sub_scores) × contactabilityMultiplier
+│   │   ├── index.ts                 — prospect_score = min(100, floor(max(sub_scores) × contactabilityMultiplier × reviewMultiplier) + ratingBonus)
 │   │   ├── sub-scores.ts            — calculateSubScores(lead, sgScore): SubScores
 │   │   │                              5 sub-scores: web_nuevo, rediseno, marketing, software, catalogo
 │   │   │                              primary_offer: oferta con mayor sub-score
@@ -130,6 +130,8 @@ src/
 │   │   │                              7 tipos: agencia_web, software_pos, marketing_social,
 │   │   │                              delivery_propio, reservas_online, catalogo_digital, whatsapp_business
 │   │   │                              Configurados en config/scoring.yaml → buyer_types
+│   │   ├── review-multiplier.ts     — getReviewCountMultiplier(lead, config): 0.75×–1.4× según review_count
+│   │   │                              getRatingBonus(lead, config): +5 si rating ≥ 4.3
 │   │   └── confidence.ts            — calculateDataConfidence(), calculateContactReliability()
 │   │
 │   └── social-enrich/
@@ -273,8 +275,19 @@ Listas activas:
 ## Scoring
 
 ```
-prospect_score = floor(max(sub_scores) * contactabilityMultiplier)
+prospect_score = min(100, floor(max(sub_scores) * contactabilityMultiplier * reviewCountMultiplier(lead)) + ratingBonus(lead))
 ```
+
+**reviewCountMultiplier** (`src/modules/scoring/review-multiplier.ts`):
+| review_count | Multiplicador |
+|---|---|
+| null (fuentes externas) | 1.0 — no penaliza |
+| 0–10 | 0.75 |
+| 11–50 | 1.0 |
+| 51–200 | 1.2 |
+| 201+ | 1.4 |
+
+**ratingBonus**: +5 si `lead.rating >= 4.3`, 0 si null o menor. El `min(100)` externo envuelve el bonus.
 
 ### Sub-scores por tipo de oferta (Fase B)
 
@@ -327,9 +340,10 @@ Nota: `neq` retorna `matched: false` cuando el campo es null (null-guard en lín
 
 ### contactabilityMultiplier
 
-`src/modules/scoring/index.ts` — función privada que aplica ×1.2 al `prospect_score` final
+`src/modules/scoring/index.ts` — función privada que aplica ×1.2 al `prospect_score`
 si el lead tiene al menos un email en `digital_footprint.contact_emails` o en
-`canonical_fields.email`. Cap en 100. Aplica a todos los sources.
+`canonical_fields.email`. Aplica a todos los sources. Se combina con `reviewCountMultiplier`
+antes del `min(100)` final.
 
 ### Regla external_source_quality
 

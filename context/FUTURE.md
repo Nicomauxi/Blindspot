@@ -115,41 +115,6 @@ Ver ARCHITECTURE.md — tabla `lead_buyer_scores`, 7 buyer types, CLI `score --b
 
 ---
 
-### Fase 14 — Review count como multiplicador de tamaño
-
-**Por qué:** un restaurante con 300 reviews factura más que uno con 8. El ticket de venta potencial es proporcional al volumen del negocio. Hoy los tratamos igual.
-
-**Fuente:** `raw->>'user_ratings_total'` en leads de `google_places`. No disponible en otras fuentes — se aplica solo cuando presente.
-
-**Multiplicador sobre `prospect_score` y buyer_type scores:**
-
-| review_count | Multiplicador |
-|---|---|
-| 0–10 | 0.75× (negocio muy pequeño o muy nuevo) |
-| 11–50 | 1.00× (baseline) |
-| 51–200 | 1.20× |
-| 200+ | 1.40× |
-
-**Rating bonus adicional:** si `rating >= 4.3` → +5 puntos al score final (buena reputación = más fácil de vender).
-
-**Config en `scoring.yaml`:**
-```yaml
-review_count_multiplier:
-  - max: 10   multiplier: 0.75
-  - max: 50   multiplier: 1.00
-  - max: 200  multiplier: 1.20
-  - max: null multiplier: 1.40
-rating_bonus:
-  threshold: 4.3
-  bonus: 5
-```
-
-**Archivos a modificar:** `src/modules/scoring/evaluator.ts`, `config/scoring.yaml`.
-
-**Depende de:** Fase 12 (para que buyer_type scores también hereden el multiplicador).
-
----
-
 ### Fase 15 — Clasificación de calidad de email
 
 **Por qué:** hoy detectamos emails pero no diferenciamos `info@dominio.com` (genérico, responde el que atiende) de `juan@dominio.com` (personal, decide el dueño). El email del dueño vale 3× para prospecting.
