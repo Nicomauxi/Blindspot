@@ -6,6 +6,7 @@ import { getReviewCountMultiplier, getRatingBonus } from "./review-multiplier.js
 import { calculateSubScores } from "./sub-scores.js";
 import { scoreSystemsGap } from "./systems-gap.js";
 import type { EvaluatedRule, ScoreResult, ScoringRule } from "./types.js";
+import { computeUrgencySignal } from "./urgency.js";
 
 function scaleHeuristicWeight(baseWeight: number, lead: Lead): number {
   const score = resolveField(lead, "digital_footprint.heuristic_discovery.selected.website.score");
@@ -83,6 +84,7 @@ export function scoreLead(lead: Lead): ScoreResult {
     100,
     Math.floor(maxSubScore * contactabilityMultiplier(lead) * reviewMultiplier) + ratingBonus,
   );
+  const urgencySignal = computeUrgencySignal(lead);
 
   return {
     business_quality_score: bqScore,
@@ -97,6 +99,7 @@ export function scoreLead(lead: Lead): ScoreResult {
       systems_gap: { total: sgScore, rules: sg.breakdown },
       prospect: { formula: config.prospect_formula, total: prospectScore },
       sub_scores: subScores,
+      urgency_signal: urgencySignal,
     },
     systems_gap_breakdown: { total: sgScore, rules: sg.breakdown },
   };
