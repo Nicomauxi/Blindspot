@@ -819,17 +819,9 @@ pm2 status                                            # → api: online, core: o
 
 ---
 
-### Fase 33 — API versionada `/api/v1/`
+### Fase 33 — ✅ Resuelta sin fase
 
-**Por qué:** sin versionado, cualquier breaking change en el contrato rompe el frontend cuando los dos repos evolucionan independientemente. Ver `ARCHITECTURE_FUTURE.md § Versionado de API`.
-
-**Implementación:**
-1. Todos los routes pasan de `/api/` a `/api/v1/`
-2. Redirección 301: `/api/*` → `/api/v1/*` para compatibilidad durante la transición
-3. Headers de respuesta: `X-API-Version: 1`, `X-Scoring-Version: <n>`
-4. Actualizar `config/api.yaml` con `api_version: 1`
-
-**Prerequisito:** antes de que el frontend empiece a consumir la API.
+Todos los endpoints usan `/api/v1/` desde el inicio de Fase API — no hay migración. Headers `X-API-Version` y `X-Scoring-Version` se incluyen en Fase API.
 
 ---
 
@@ -838,24 +830,17 @@ pm2 status                                            # → api: online, core: o
 **Por qué:** sin un health endpoint, no hay forma de monitorear el servidor sin abrir la UI completa. Crítico para producción. Ver `ARCHITECTURE_FUTURE.md § Endpoint /api/v1/health`.
 
 **Implementación:**
-1. `GET /api/v1/health` → `{ status, db, cron: { status, last_run_at, next_run_at, missed }, pipeline_running, leads_count, hot_leads_count, version }`
+1. `GET /api/v1/health` → `{ status, db, cron: { status, last_run_at, next_run_at }, pipeline_running, leads_count, hot_leads_count, version }`
 2. Sin autenticación — público para monitors externos
-3. Función `checkMissedRun()` en `src/api/pipeline/scheduler.ts` ejecutada en `onReady` hook de Fastify
+3. `cron.missed` no se implementa (Fase 35 resuelta por pm2 + poll de 60s)
 
-**Archivos:** `src/api/routes/health.ts` (nuevo)
+**Archivos:** `src/api/routes/health.ts` (nuevo). Puede implementarse dentro de Fase API.
 
 ---
 
-### Fase 35 — Detección de cron missed runs (startup recovery)
+### Fase 35 — ✅ Resuelta sin fase
 
-**Por qué:** si el servidor se reinicia cuando debía correr el cron semanal, el run se pierde silenciosamente. Ver `ARCHITECTURE_FUTURE.md § Detección de cron missed runs`.
-
-**Implementación:**
-1. Columna `scheduled_for timestamptz` en `pipeline_config` — próxima ejecución esperada
-2. Al guardar config (`PUT /api/v1/pipeline/config`) → recalcular y guardar `scheduled_for`
-3. `checkMissedRun()` en startup: si `scheduled_for < NOW() - 15min` Y `last_completed_at < scheduled_for` → disparar recovery run automático
-
-**Prerequisito:** Fase 34 (health endpoint expone `cron.missed: boolean`).
+Cubierto por pm2 (reinicio automático del proceso) + poll de `pipeline_runs WHERE status='pending'` cada 60s. Un run perdido se recupera en el siguiente poll. Suficiente para uso personal. No implementar `checkMissedRun()` separado.
 
 ---
 

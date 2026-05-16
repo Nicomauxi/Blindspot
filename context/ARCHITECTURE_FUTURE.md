@@ -83,7 +83,7 @@ PORT=3001            # puerto del servidor API
 │  Proceso long-running · Sin HTTP server                                  │
 │  • LISTEN pipeline_trigger (pg_notify) → ejecución inmediata            │
 │  • Poll pipeline_runs 'pending' cada 60s (fallback si NOTIFY se pierde) │
-│  • Poll discovery_jobs 'queued' cada 60s → ejecuta discovery            │
+│  • Poll discovery_jobs 'queued' cada 30s → ejecuta discovery            │
 │  • Lee pipeline_config → configura cron interno                          │
 │  • Discovery providers (Playwright, scraping, APIs)                      │
 │  • Enrichment (Playwright, parsers, heurístico)                          │
@@ -142,6 +142,7 @@ Si `lead_filter` es null (admin), el CM ve todos los leads.
 | GET /api/v1/leads (filtrado por lead_filter) | ✅ todos | ✅ su filtro |
 | GET /api/v1/leads/:id | ✅ | ✅ si pasa su filtro |
 | PATCH /api/v1/leads/:id/contact | ✅ | ✅ |
+| GET /api/v1/outreach | ✅ todos | ✅ solo propios |
 | POST /api/v1/outreach | ✅ | ✅ (user_id = suyo) |
 | PATCH /api/v1/outreach/:id | ✅ | ✅ solo propios |
 | POST /api/v1/outreach/generate-offer | ✅ | ✅ |
@@ -212,6 +213,8 @@ POST /api/v1/outreach/generate-offer  body: { lead_id, offer_type?, channel }
 GET  /api/v1/campaigns
 POST /api/v1/campaigns  body: { name, segment_filter }
 GET  /api/v1/campaigns/:id/stats
+-- NOTA: estos endpoints requieren tabla outreach_campaigns (Fase 43).
+-- En Fase API implementar como stubs que retornan 501 Not Implemented hasta Fase 43.
 
 GET  /api/v1/discovery/jobs?status=running,queued
 POST /api/v1/discovery/jobs  body: { source, location, niche, profile, max_results }
@@ -566,7 +569,7 @@ Cuando un lead tiene múltiples fuentes, `canonical_fields` debe ser el resultad
     accessibility_factor,
     timing_factor,
     urgency_bonus,
-    inferred_state_summary
+    inferred_state_summary  // { has_delivery, has_pos, has_reservations, has_ecommerce, digitalization_level }
   }
 ```
 
@@ -694,7 +697,7 @@ interface LeadCard {
 
   // Score y oferta
   prospect_score: number
-  primary_offer: string                 // 'web_nuevo' | 'rediseno' | 'marketing' | 'software' | 'catalogo'
+  primary_offer: string                 // 'web_nuevo' | 'rediseno' | 'marketing' | 'software' | 'catalogo' | 'contacto_directo' | 'none'
   pitch_hook: string                    // texto concreto del pitch
   urgency_signal: 'high' | 'medium' | 'low'
   buyer_type_scores: BuyerTypeScore[]   // top 3
@@ -1101,7 +1104,7 @@ CREATE TABLE lead_outreach (
   user_id       uuid REFERENCES users(id) NOT NULL,  -- siempre requerido — quién contactó
   created_at    timestamptz DEFAULT now(),
   updated_at    timestamptz DEFAULT now(),
-  campaign_id   uuid REFERENCES outreach_campaigns(id),  -- null = sin campaña
+  -- campaign_id se agrega en Fase 43 via ALTER TABLE (outreach_campaigns no existe en Fase 25)
   
   -- Oferta generada
   offer_type    text NOT NULL CHECK (offer_type IN (
@@ -1386,7 +1389,6 @@ blindspot discover-external --source <fuente> --location <ciudad> --niche <niche
           updateAllLeadsInMemory(newLead)
 
   Post-discovery:
-    → Commit checkpoint en git
     → Verificar invariantes (passed_not_enriched, tags_contradictorios)
 ```
 
@@ -1553,7 +1555,7 @@ blindspot score --all
     accessibility_factor,
     timing_factor,
     urgency_bonus,
-    inferred_state_summary          ← resumen de los booleanos que afectaron el score
+    inferred_state_summary          ← { has_delivery, has_pos, has_reservations, has_ecommerce, digitalization_level }
   }
 
   upsert lead_buyer_scores(lead_id, buyer_type, score, breakdown)
@@ -1917,7 +1919,8 @@ CREATE VIEW lead_dashboard AS
   FROM leads l
   LEFT JOIN LATERAL (...) lbs_top ON true
   WHERE l.passed_filter = true
-    AND l.score_breakdown->>'contact_tier' != 'X';
+    AND (l.score_breakdown IS NULL OR l.score_breakdown->>'contact_tier' != 'X');
+    -- NULL handling crítico: NULL != 'X' evalúa a NULL en SQL, ocultaría leads sin score_breakdown
 
 -- Índices en la tabla leads (no en la view) — son los que importan para performance:
 CREATE INDEX leads_contact_tier ON leads ((score_breakdown->>'contact_tier'));
@@ -2658,19 +2661,22 @@ El formulario es el mismo para todos los leads. No hay campos obligatorios más 
 ### Tabla `lead_outreach` — diseño final
 
 ```sql
+-- NOTA: campaign_id NO entra en el CREATE TABLE — se agrega en Fase 43 via ALTER TABLE
+-- (outreach_campaigns no existe en Fase 25; la FK fallaría en la creación)
 CREATE TABLE lead_outreach (
   id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   lead_id       uuid NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
   user_id       uuid NOT NULL REFERENCES users(id),  -- quién hizo el contacto
-  campaign_id   uuid REFERENCES outreach_campaigns(id),  -- null = sin campaña
   created_at    timestamptz DEFAULT now(),
   updated_at    timestamptz DEFAULT now(),
 
   -- Oferta generada (null si fue contacto manual sin oferta generada)
   offer_type    text,
   channel       text NOT NULL,     -- 'email' | 'whatsapp' | 'phone'
-  offer_text    text,              -- texto exacto enviado o generado
-  offer_source  text,              -- 'llm_gemini' | 'llm_ollama' | 'template' | 'manual'
+  offer_package jsonb,
+  -- { text: string, source_llm: string|null, generated_at: string }
+  -- nullable: permite registrar un contacto sin oferta generada formalmente
+  -- source_llm: 'gemini' | 'ollama' | null (= template o manual)
 
   -- Estado del pipeline
   status        text NOT NULL DEFAULT 'contacted',
@@ -2698,10 +2704,12 @@ CREATE TABLE lead_outreach (
 
 CREATE INDEX lead_outreach_lead_id    ON lead_outreach(lead_id);
 CREATE INDEX lead_outreach_user_id    ON lead_outreach(user_id);
-CREATE INDEX lead_outreach_campaign   ON lead_outreach(campaign_id) WHERE campaign_id IS NOT NULL;
 CREATE INDEX lead_outreach_status     ON lead_outreach(status);
 CREATE INDEX lead_outreach_outcome    ON lead_outreach(outcome) WHERE outcome IS NOT NULL;
 CREATE INDEX lead_outreach_closed_at  ON lead_outreach(closed_at) WHERE closed_at IS NOT NULL;
+
+-- Fase 43 agrega: ALTER TABLE lead_outreach ADD COLUMN campaign_id uuid REFERENCES outreach_campaigns(id);
+-- CREATE INDEX lead_outreach_campaign ON lead_outreach(campaign_id) WHERE campaign_id IS NOT NULL;
 ```
 
 ### Datos que habilita para el algoritmo (fase futura)
