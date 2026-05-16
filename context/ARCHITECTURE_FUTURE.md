@@ -1,12 +1,127 @@
 # Blindspot — Future Architecture
 
-> Este archivo define el diseño objetivo del sistema, no el estado actual.
+> Este archivo define el diseño objetivo del sistema backend (`blindspot`), no el estado actual.
 > No documenta código implementado — para eso existe `ARCHITECTURE.md`.
 > Su función es servir de norte compartido para que cada fase se construya
 > en dirección correcta y los datos recopilados se usen a su máximo potencial.
 >
+> **Para el diseño del frontend:** ver `ARCHITECTURE_FRONTEND.md` (proyecto separado `blindspot-ui`).
+>
 > Antes de implementar cualquier fase nueva: leer este archivo para verificar
 > que la implementación sea coherente con el diseño objetivo.
+
+---
+
+## Arquitectura de dos proyectos
+
+Este sistema está compuesto por dos proyectos separados:
+
+```
+┌─────────────────────────────────┐     REST API      ┌──────────────────────────┐
+│  blindspot  (este repo)         │ ◄───────────────► │  blindspot-ui            │
+│                                 │                   │                          │
+│  • Pipeline CLI                 │                   │  • Next.js 15            │
+│  • Scoring engine               │                   │  • Tailwind + shadcn/ui  │
+│  • Discovery providers          │                   │  • Zustand               │
+│  • Enrichment                   │                   │  • No acceso directo a DB│
+│  • API HTTP (Express/Fastify)   │                   │                          │
+│  • Cron / scheduler             │                   │  Diseño: ver             │
+│  • PostgreSQL (Supabase)        │                   │  ARCHITECTURE_FRONTEND.md│
+└─────────────────────────────────┘                   └──────────────────────────┘
+```
+
+**Este proyecto (`blindspot`)** es el backend completo: recopila datos, los enriquece, calcula scores, y expone los resultados vía API REST. También corre los procesos programados (cron). Vive en un servidor.
+
+**`blindspot-ui`** es un frontend puro: consume la API, no tiene acceso directo a la DB, no implementa lógica de scoring. Todo el diseño de pantallas, componentes y flujos UX está en `ARCHITECTURE_FRONTEND.md`.
+
+---
+
+## Diseño objetivo — API HTTP (capa nueva en este proyecto)
+
+La API vive en `src/api/` dentro de este repo. Se agrega al mismo proceso que el CLI, o como proceso separado en el mismo servidor.
+
+### Stack recomendado
+
+```typescript
+// Fastify — bajo overhead, TypeScript nativo, sin magia
+import Fastify from 'fastify'
+const app = Fastify({ logger: true })
+
+// Mismo acceso a DB que el CLI (comparten el módulo storage/)
+import { getLeads } from './storage/leads.js'
+```
+
+### Endpoints que expone este proyecto
+
+```
+GET  /api/leads
+     ?contact_tier=A,B,C
+     &prospect_score_gte=40
+     &niche=restaurant
+     &urgency_signal=high
+     &primary_offer=web_nuevo
+     &contacted=false
+     &source=google_places,mintur
+     &order=prospect_score:desc
+     &limit=50&cursor=<id>
+     → LeadCard[] paginado (cursor-based)
+
+GET  /api/leads/:id
+     → Lead completo con score_breakdown + buyer_type_scores + corroborating_sources
+
+PATCH /api/leads/:id/contact
+     body: { contacted_at, channel, notes }
+
+GET  /api/outreach?status=pending,responded
+POST /api/outreach  body: { lead_id, channel, offer_type?, offer_text?, offer_source? }
+PATCH /api/outreach/:id  body: { status, responded, outcome, ... }
+POST /api/outreach/generate-offer  body: { lead_id, offer_type?, channel }
+
+GET  /api/discovery/jobs?status=running,queued
+POST /api/discovery/jobs  body: { source, location, niche, profile, max_results, cpu_budget }
+PATCH /api/discovery/jobs/:id  body: { action: 'pause'|'resume'|'cancel' }
+GET  /api/discovery/suggestions
+GET  /api/discovery/coverage
+
+GET  /api/stats/overview
+GET  /api/stats/outreach
+GET  /api/stats/pipeline
+```
+
+### View `lead_dashboard` (materializada en DB)
+
+Desnormaliza todos los campos de `LeadCard` para evitar joins en cada request de la UI:
+
+```sql
+CREATE VIEW lead_dashboard AS
+SELECT
+  l.id, l.name, l.address, l.niche, l.source,
+  jsonb_array_length(l.corroborating_sources) AS sources_count,
+  l.score_breakdown->>'contact_tier'           AS contact_tier,
+  l.canonical_fields->'email'->>'value'        AS contact_email,
+  l.canonical_fields->'phone'->>'value'        AS contact_phone,
+  l.whatsapp                                   AS contact_whatsapp,
+  l.prospect_score,
+  l.score_breakdown->'sub_scores'->>'primary_offer'  AS primary_offer,
+  l.score_breakdown->>'pitch_hook'             AS pitch_hook,
+  l.score_breakdown->>'urgency_signal'         AS urgency_signal,
+  l.inferred_state->>'digitalization_level'    AS digitalization_level,
+  (l.inferred_state->'has_delivery'->>'value')::boolean   AS has_delivery,
+  (l.inferred_state->'has_pos'->>'value')::boolean        AS has_pos,
+  (l.inferred_state->'has_reservations'->>'value')::boolean AS has_reservations,
+  l.data_confidence_score,
+  l.contact_reliability_score,
+  l.contacted_at, l.created_at,
+  lbs_top.buyer_type AS top_buyer_type,
+  lbs_top.score      AS top_buyer_score
+FROM leads l
+LEFT JOIN LATERAL (
+  SELECT buyer_type, score FROM lead_buyer_scores
+  WHERE lead_id = l.id ORDER BY score DESC LIMIT 1
+) lbs_top ON true
+WHERE l.passed_filter = true
+  AND l.score_breakdown->>'contact_tier' != 'X';
+```
 
 ---
 
@@ -1395,20 +1510,19 @@ WHERE niche = $niche
 
 ## Diseño de UI
 
-### Stack y principios
-
-```
-Next.js 15 (App Router)   — SSR para carga inicial rápida, RSC para queries pesadas
-Supabase JS client        — PostgREST directo, no API propia en primera versión
-Tailwind CSS + shadcn/ui  — componentes headless, sin diseño custom desde cero
-Zustand                   — estado de filtros y selección (liviano, sin boilerplate)
-```
-
-**Principio de la UI:** el agente de ventas que usa esta herramienta tiene 2 minutos por lead. La UI debe responder la pregunta "¿llamo a este o no?" en menos de 5 segundos de lectura.
+> El diseño completo de la UI (pantallas, wireframes, componentes, templates de oferta, orden de construcción)
+> está en `context/ARCHITECTURE_FRONTEND.md` — proyecto separado `blindspot-ui`.
+>
+> Este archivo solo define lo que el backend debe exponer para que la UI funcione.
 
 ---
 
-### Pantallas
+### Pantallas, componentes y orden de construcción
+
+> Ver `context/ARCHITECTURE_FRONTEND.md` — diseño completo de todas las pantallas,
+> wireframes, componentes reutilizables, templates de oferta y orden de construcción.
+
+---
 
 #### Pantalla 1 — Lead Explorer (vista principal)
 

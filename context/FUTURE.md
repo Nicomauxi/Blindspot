@@ -108,6 +108,42 @@ SELECT ROUND(AVG(prospect_score),1) FROM leads WHERE 'franchise-detected' = ANY(
 
 ---
 
+## API HTTP y frontend
+
+> El sistema está compuesto por dos proyectos separados:
+> - `blindspot` (este repo) — backend pipeline + API HTTP + cron
+> - `blindspot-ui` (repo separado) — frontend Next.js que consume la API
+>
+> Ver `context/ARCHITECTURE_FUTURE.md § Arquitectura de dos proyectos` y
+> `context/ARCHITECTURE_FRONTEND.md` para el diseño completo del frontend.
+
+### Fase API — Servidor HTTP en este proyecto (prerequisito de la UI)
+
+**Por qué:** `blindspot-ui` necesita consumir datos vía REST API. Esta capa vive en este proyecto (`src/api/`) y comparte el mismo módulo de storage y scoring. No hay lógica de negocio en el frontend.
+
+**Prerequisitos:** Scoring v2 estable (Fase 22) + `contact_tier` y `pitch_hook` en score_breakdown.
+
+**Implementación:**
+1. `src/api/server.ts` — servidor Fastify con CORS configurado para `blindspot-ui`
+2. `src/api/routes/leads.ts` — `GET /api/leads` con filtros + cursor pagination + `GET /api/leads/:id`
+3. `src/api/routes/outreach.ts` — CRUD de `lead_outreach` + `POST /generate-offer`
+4. `src/api/routes/discovery.ts` — CRUD de `discovery_jobs` + `GET /suggestions`
+5. `src/api/routes/stats.ts` — `GET /api/stats/overview`
+6. Vista `lead_dashboard` en DB (desnormalización de LeadCard sin joins)
+7. `pnpm run api` — comando para iniciar el servidor API separado del CLI
+
+**Config:** `config/api.yaml` con port, cors_origin, rate_limit, auth_token (bearer simple para primera versión).
+
+**Archivos:** `src/api/` (directorio nuevo), `config/api.yaml` (nuevo)
+
+**Verificación:**
+```bash
+curl http://localhost:3001/api/leads?contact_tier=A,B&prospect_score_gte=40&limit=5
+# → array de LeadCard con todos los campos del contrato
+```
+
+---
+
 ## Automatización de pipeline
 
 ### Fase 23 — Pipeline completo automatizado con cron
@@ -509,19 +545,22 @@ Ejecutar solo después de confirmar invariantes en 0.
 
 ---
 
-## Visión largo plazo — UI web
+## Proyecto frontend — blindspot-ui (repo separado)
 
-Cuando el dataset sea suficientemente rico y multi-source:
+El frontend es un proyecto Next.js separado que consume la API REST de este proyecto.
+Todo el diseño de pantallas, componentes y UX está en `context/ARCHITECTURE_FRONTEND.md`.
 
-**UI de inteligencia comercial:**
-- Filtros por tipo de oferta: web, rediseño, marketing, software operativo, catálogos
-- Filtro por `digitalization_level` (none / basic / intermediate / advanced)
-- Vista de lead con `inferred_state` visible ("tiene delivery activo vía PedidosYa, confirmado")
-- Evidencias por campo ("email verificado en 3 fuentes")
-- Candidatos alternativos visibles (email viejo vs nuevo con su confidence)
-- Reportes exportables por segmento
-- Tracking de outreach integrado (contacted_at ya existe en DB)
-- Filtros por zona geográfica, niche, score mínimo
-- Segmento turístico MINTUR filtrable por `TipoOperador` cuando sea relevante
+**Prerequisitos para iniciar blindspot-ui:**
+- Fase API completada (API HTTP activa en este proyecto)
+- Scoring v2 estable (`contact_tier` + `pitch_hook` en score_breakdown)
+- Vista `lead_dashboard` creada en DB
 
-**No construir hasta que:** Fase B (sub-scores) y Fase F (inferred_state) estén completas, y haya al menos 3 fuentes activas produciendo datos.
+**Orden de construcción** (ver detalle en ARCHITECTURE_FRONTEND.md):
+1. Lead Explorer básico (lista con filtros)
+2. Lead Detail completo
+3. Modal de registro de outreach
+4. Generación de ofertas IA
+5. Segment Explorer
+6. Discovery Control Center
+
+**No construir hasta que:** Fase API esté completa y se pueda hacer `curl /api/leads` y recibir datos reales.
