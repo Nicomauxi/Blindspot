@@ -538,6 +538,219 @@ Ejecutar solo después de confirmar invariantes en 0.
 
 ---
 
+## Infraestructura y operaciones
+
+### Fase 31 — Aislamiento de procesos API/pipeline
+
+**Por qué:** el API server y el pipeline worker (Playwright + scoring masivo) comparten proceso. Un re-scoring de 3600 leads bloquea la event loop y la API deja de responder. Ver `ARCHITECTURE_FUTURE.md § Aislamiento de procesos`.
+
+**Implementación:**
+1. `src/workers/pipeline.ts` — extrae el pipeline a proceso hijo (`child_process.spawn`)
+2. `src/api/server.ts` — eliminar todos los imports de módulos de enrichment/Playwright
+3. Comunicación exclusiva vía tabla `pipeline_runs` en DB
+4. `pnpm run api` → solo API server; `pnpm run pipeline` → solo worker
+
+**Prerequisito:** Fase API completada.
+
+---
+
+### Fase 32 — `lead_dashboard` como MATERIALIZED VIEW + refresh automático
+
+**Por qué:** hoy es una VIEW normal que recalcula en cada query con LEFT JOIN. Con múltiples usuarios en la UI y actualizaciones frecuentes, la latencia va a ser impredecible. Ver `ARCHITECTURE_FUTURE.md § lead_dashboard MATERIALIZED VIEW`.
+
+**Implementación:**
+1. `DROP VIEW lead_dashboard; CREATE MATERIALIZED VIEW lead_dashboard AS ...`
+2. Índices: `contact_tier`, `prospect_score DESC`, `primary_offer`, `urgency_signal`, `contacted_at`
+3. `REFRESH MATERIALIZED VIEW CONCURRENTLY lead_dashboard` como último paso del pipeline run
+4. Campo `pipeline_runs.dashboard_stale: boolean` para forzar refresh en próximo ciclo si el run falla a medio camino
+
+**Verificación:** `EXPLAIN ANALYZE SELECT * FROM lead_dashboard WHERE contact_tier='A' LIMIT 50` debe mostrar Index Scan, no Seq Scan.
+
+---
+
+### Fase 33 — API versionada `/api/v1/`
+
+**Por qué:** sin versionado, cualquier breaking change en el contrato rompe el frontend cuando los dos repos evolucionan independientemente. Ver `ARCHITECTURE_FUTURE.md § Versionado de API`.
+
+**Implementación:**
+1. Todos los routes pasan de `/api/` a `/api/v1/`
+2. Redirección 301: `/api/*` → `/api/v1/*` para compatibilidad durante la transición
+3. Headers de respuesta: `X-API-Version: 1`, `X-Scoring-Version: <n>`
+4. Actualizar `config/api.yaml` con `api_version: 1`
+
+**Prerequisito:** antes de que el frontend empiece a consumir la API.
+
+---
+
+### Fase 34 — Endpoint `/api/v1/health` + observabilidad básica
+
+**Por qué:** sin un health endpoint, no hay forma de monitorear el servidor sin abrir la UI completa. Crítico para producción. Ver `ARCHITECTURE_FUTURE.md § Endpoint /api/v1/health`.
+
+**Implementación:**
+1. `GET /api/v1/health` → `{ status, db, cron: { status, last_run_at, next_run_at, missed }, pipeline_running, leads_count, hot_leads_count, version }`
+2. Sin autenticación — público para monitors externos
+3. Función `checkMissedRun()` en `src/api/pipeline/scheduler.ts` ejecutada en `onReady` hook de Fastify
+
+**Archivos:** `src/api/routes/health.ts` (nuevo)
+
+---
+
+### Fase 35 — Detección de cron missed runs (startup recovery)
+
+**Por qué:** si el servidor se reinicia cuando debía correr el cron semanal, el run se pierde silenciosamente. Ver `ARCHITECTURE_FUTURE.md § Detección de cron missed runs`.
+
+**Implementación:**
+1. Columna `scheduled_for timestamptz` en `pipeline_config` — próxima ejecución esperada
+2. Al guardar config (`PUT /api/v1/pipeline/config`) → recalcular y guardar `scheduled_for`
+3. `checkMissedRun()` en startup: si `scheduled_for < NOW() - 15min` Y `last_completed_at < scheduled_for` → disparar recovery run automático
+
+**Prerequisito:** Fase 34 (health endpoint expone `cron.missed: boolean`).
+
+---
+
+## Mejoras de scoring y segmentación (continuación)
+
+### Fase 36 — `days_in_pool` en timing_factor de scoring v2
+
+**Por qué:** leads recién descubiertos tienen ventaja competitiva — nadie los ha contactado. La fórmula v2 no captura esta señal. Ver `ARCHITECTURE_FUTURE.md § days_in_pool`.
+
+**Implementación:**
+1. Agregar `days_in_pool` config block en `config/scoring.yaml → commercial_score.timing`
+2. Calcular en `computeTimingFactor(lead)`: fresh < 7d → +0.05, stale > 90d → -0.05
+3. Persistir `score_breakdown.days_in_pool: number` para la UI
+
+**Prerequisito:** Fase 22 (Scoring v2 completo).
+
+---
+
+### Fase 37 — `canonical_source` — fuente de mayor confianza del lead
+
+**Por qué:** el campo `source` refleja la fuente de descubrimiento, no la más confiable. Un lead corroborado por Google Places debería mostrar GP como fuente canónica aunque haya sido descubierto en OSM. Ver `ARCHITECTURE_FUTURE.md § canonical_source`.
+
+**Implementación:**
+1. `ALTER TABLE leads ADD COLUMN canonical_source text`
+2. Calcular al reconciliar `canonical_fields`: fuente con mayor `source_confidence` entre primaria y corroborantes
+3. Actualizar `lead_dashboard` VIEW/MV para exponer `canonical_source`
+4. Backfill: `UPDATE leads SET canonical_source = source WHERE canonical_source IS NULL`
+
+---
+
+### Fase 38 — Deduplicación con coordenadas geográficas
+
+**Por qué:** `findCrossSourceMatch` usa solo similitud de nombre. Dos negocios con el mismo nombre en ciudades distintas se matchearían erróneamente al escalar a más ciudades. Ver `ARCHITECTURE_FUTURE.md § Deduplicación con coordenadas geográficas`.
+
+**Implementación:**
+1. Función `haversineDistance(a, b): number` en `src/modules/discovery/deduplication.ts` — distancia en metros
+2. `findCrossSourceMatch` v2: filtrar por niche exacto + radio Haversine < 500m (si ambos tienen GPS) antes del threshold de nombre
+3. Config en `config/discovery.yaml`: `deduplication.geo_radius_meters: 500`
+4. Tests para: mismo nombre ciudades distintas (no debe matchear), mismo nombre ±200m (sí debe matchear)
+
+**Prerequisito:** Fase 6 (cross-source dedup activo).
+
+---
+
+## Producto avanzado (post-UI)
+
+> Estas fases agregan valor diferencial pero requieren que la UI base esté operativa.
+
+### Fase 39 — Webhook de notificaciones externas
+
+**Por qué:** el equipo de ventas necesita ser notificado cuando el pipeline genera nuevos hot leads sin tener la UI abierta. Ver `ARCHITECTURE_FUTURE.md § Webhook de notificaciones externas`.
+
+**Implementación:**
+1. Campos en `pipeline_config`: `notify_webhook_url`, `notify_webhook_secret`, `notify_webhook_events[]`
+2. `src/api/pipeline/notifications.ts` → `notifyWebhook(run: PipelineRun): Promise<void>`
+3. Payload: `{ event, run_id, new_hot_leads, leads_enriched, invariants_ok, summary_url }`
+4. HMAC-SHA256 en header `X-Blindspot-Signature` para verificación del receptor
+5. Resultado en `pipeline_runs.webhook_status`: 'sent' | 'failed' | 'not_configured'
+6. UI: campo en Pipeline Manager para configurar URL + botón "Probar webhook"
+
+---
+
+### Fase 40 — Full-text search de leads
+
+**Por qué:** 2034 leads "other" con sub-niches no mapeados (veterinarias, farmacias, ópticas) son completamente invisibles sin búsqueda de texto. Ver `ARCHITECTURE_FUTURE.md § Full-text search`.
+
+**Implementación:**
+1. `ALTER TABLE leads ADD COLUMN search_vector tsvector GENERATED ALWAYS AS (...) STORED`
+2. Backfill: `UPDATE leads SET search_vector = ...` (trigger se encarga del futuro)
+3. `CREATE INDEX leads_fts ON leads USING gin(search_vector)`
+4. Endpoint: `GET /api/v1/leads?q=veterinaria` → `WHERE search_vector @@ plainto_tsquery('spanish', $q)`
+5. UI: barra de búsqueda en Lead Explorer (actualmente falta)
+
+**Verificación:**
+```bash
+curl /api/v1/leads?q=veterinaria&contact_tier=A,B
+# → debe retornar leads con "veterinaria" en nombre o dirección
+```
+
+---
+
+### Fase 41 — Detección de mismo propietario (`owner_group_id`)
+
+**Por qué:** muchos dueños de PyMEs en Uruguay tienen 2–3 negocios. Contactarlos por separado es redundante. Ver `ARCHITECTURE_FUTURE.md § Detección de mismo propietario`.
+
+**Implementación:**
+1. `ALTER TABLE leads ADD COLUMN owner_group_id uuid`
+2. `CREATE INDEX leads_owner_group ON leads(owner_group_id) WHERE owner_group_id IS NOT NULL`
+3. Proceso de detección: post-enrich, buscar leads con mismo phone o email canónico → asignar mismo `owner_group_id`
+4. API: `GET /api/v1/leads/:id/owner-group` → leads del mismo propietario
+5. UI: badge "N negocios del mismo propietario" en Lead Detail y Lead Explorer
+
+---
+
+### Fase 42 — Scoring estacional
+
+**Por qué:** el mismo lead vale más en ciertos momentos del año. Un gimnasio vale más como prospecto en enero. Ver `ARCHITECTURE_FUTURE.md § Scoring estacional`.
+
+**Implementación:**
+1. `seasonal_modifiers` config block en `config/scoring.yaml`
+2. Función `computeSeasonalNote(lead, config): string | null` en `src/modules/scoring/index.ts`
+3. Persistir `score_breakdown.seasonal_note` si aplica el mes actual
+4. UI: el sort secundario de Lead Explorer usa `seasonal_note` para subir leads relevantes
+
+**Prerequisito:** Fase 22 (Scoring v2 completo).
+
+---
+
+### Fase 43 — Campañas de outreach
+
+**Por qué:** sin una entidad "campaña", no hay forma de medir qué segmentos convierten. Ver `ARCHITECTURE_FUTURE.md § Campañas de outreach`.
+
+**Implementación:**
+1. Tabla `outreach_campaigns(id, name, segment_filter jsonb, status, created_at, closed_at, notes)`
+2. `ALTER TABLE lead_outreach ADD COLUMN campaign_id uuid REFERENCES outreach_campaigns(id)`
+3. API CRUD: `GET/POST /api/v1/campaigns`, `GET /api/v1/campaigns/:id/stats`
+4. UI: Outreach Tracker agrega selector de campaña activa + stats de conversión por campaña
+
+**Prerequisito:** Fase 25 (lead_outreach tracking completo).
+
+---
+
+### Fase 44 — Presupuesto Google Places en UI
+
+**Por qué:** el saldo de la API de Google existe solo en SECURITY.md como texto. La UI debe mostrar el consumo en tiempo real y alertar antes de agotar el crédito. Ver `ARCHITECTURE_FUTURE.md § Presupuesto Google Places`.
+
+**Implementación:**
+1. Campos en `pipeline_config`: `google_places_budget_total`, `google_places_budget_spent`, `google_places_alert_threshold`
+2. Worker: `google_places_budget_spent += 0.02 × requests_made` al finalizar cada run con GP
+3. UI: barra de presupuesto en Pipeline Manager → Estado del servidor
+4. Alerta: badge rojo si `budget_remaining < alert_threshold`; incluir en payload de webhook
+
+---
+
+### Fase 45 — Change detection en re-enrich
+
+**Por qué:** el sistema re-enriquece leads stale pero no detecta cambios. Un negocio que lanzó una web nueva debería moverse de `web_nuevo` a `rediseno` automáticamente. Ver `ARCHITECTURE_FUTURE.md § Change detection en re-enrich`.
+
+**Implementación:**
+1. Función `diffFootprint(prev, next): EnrichmentDiff` en `src/modules/enrichment/index.ts`
+2. Si diff tiene cambios críticos (website appeared, contact_tier cambió) → tag `state-changed-significant` + re-score automático
+3. Persistir `digital_footprint.last_change_diff: EnrichmentDiff`
+4. Monitor de ejecución muestra "N leads con cambios significativos" post-run
+
+---
+
 ## Deuda técnica
 
 | Item | Descripción | Impacto |
@@ -556,6 +769,10 @@ Ejecutar solo después de confirmar invariantes en 0.
 | **`contact_ready` field** | Derivar `contact_ready: boolean` en scoring y persistir en leads. Criterio: `contact_tier IN (A,B,C) AND prospect_score >= 30 AND NOT franchise-detected`. Reemplaza el uso de `passed_filter` como proxy de "accionable" para reportes de ventas. Ver `ARCHITECTURE_FUTURE.md § passed_filter semántico`. | Medio |
 | **Schema: score columns dispersas en `leads`** | `business_quality_score`, `digital_gap_score`, `systems_gap_score`, `data_confidence_score`, `contact_reliability_score` son scores internos del pipeline en columnas sueltas. Candidatos a consolidar en `lead_buyer_scores` como tipos internos (`pipeline_bq`, `pipeline_dg`) cuando se implemente Fase 12. Evaluar junto con Fase 12. | Bajo |
 | **Schema: tags como `text[]` sin confidence** | El array `tags` no puede expresar confianza por tag ni historial. Si el sistema crece en complejidad de tags, considerar `lead_tags(lead_id, tag, confidence, source, tagged_at)`. No urgente mientras tags sean booleanos. | Bajo |
+| **`scoring_version` faltante** | `lead_buyer_scores` y `leads` no tienen campo `scoring_version`. Al cambiar la fórmula (v1→v2), no hay forma de identificar scores calculados con versión antigua. Agregar antes de desplegar Scoring v2. Ver `ARCHITECTURE_FUTURE.md § scoring_version`. | **Alto — prerrequisito de v2** |
+| **Scraping sin anti-detección** | Yelu y PedidosYa no tienen rate limit propio, rotación de user agents ni backoff exponencial. Riesgo de ban en producción con runs semanales desde la misma IP. Mover config a `config/discovery.yaml → scraping`. Ver `ARCHITECTURE_FUTURE.md § Estrategia anti-detección`. | **Alto para producción** |
+| **Cursor pagination inconsistente en la API** | `GET /api/leads` usa cursor-based. `GET /api/outreach` y `GET /api/pipeline/runs` no especifican mecanismo. Definir antes de que el frontend los consuma. | Medio |
+| **Missed run detection no implementada** | El cron `node-cron` no persiste estado. Si el servidor se reinicia antes de un run programado, el run se pierde. Ver Fase 35 y `ARCHITECTURE_FUTURE.md § Detección de cron missed runs`. | **Alto para producción** |
 
 ---
 

@@ -265,6 +265,13 @@ interface LeadCard {
 - Default: tier A+B+C, score ≥ 40, no contactados
 - Export → CSV con los leads visibles actualmente
 
+**Búsqueda de texto libre (campo `q`):**
+- Barra de búsqueda en el header de la lista: `[Buscar por nombre, dirección o rubro...]`
+- Parámetro `?q=veterinaria` → FTS PostgreSQL sobre `search_vector` (Fase 40)
+- Se combina con todos los filtros activos → "veterinarias en Montevideo tier A"
+- Ordenamiento: `ts_rank` (relevancia) como criterio primario, `prospect_score` como secundario cuando `q` está activo
+- Badge "X leads encontrados para '{q}'" en el contador de resultados
+
 ---
 
 ### Pantalla 2 — Lead Detail
@@ -353,9 +360,35 @@ Vista agregada para identificar oportunidades de campaña, no leads individuales
 ```
 
 **Datos que consume:**
-- `GET /api/stats/overview` para los números de leads por oferta/niche/zona
-- `GET /api/leads?primary_offer=web_nuevo&contact_tier=A,B,C` para ver el segmento
+- `GET /api/v1/stats/overview` para los números de leads por oferta/niche/zona
+- `GET /api/v1/leads?primary_offer=web_nuevo&contact_tier=A,B,C` para ver el segmento
 - Hot clusters: requiere PostGIS activo en el backend (Fase 21)
+
+**Mapa geográfico de leads (PostGIS activo — Fase 21):**
+
+Con PostGIS y coordenadas disponibles, el Segment Explorer agrega una vista de mapa:
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│  MAPA DE LEADS                              [Lista] [Mapa ●]     │
+│                                                                   │
+│  [   Mapa de calor — Montevideo — 1.240 leads   ]                │
+│  ┌────────────────────────────────────────────────────────────┐  │
+│  │  🔴🔴🔴    Pocitos (8 sin web)                             │  │
+│  │  🔴🔴      Malvín  (5 sin web)                             │  │
+│  │  🟡        Centro  (3 sin web)                             │  │
+│  │  [mapa interactivo — Leaflet/MapLibre]                     │  │
+│  └────────────────────────────────────────────────────────────┘  │
+│                                                                   │
+│  Al hacer click en un cluster → filter Lead Explorer por zona    │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+**Endpoint requerido:** `GET /api/v1/leads?fields=id,lat,lng,prospect_score,contact_tier&passed_only=true`
+→ array liviano de coordenadas + score para renderizar el mapa sin cargar todo el LeadCard.
+
+**Librería:** MapLibre GL JS (MIT, sin API key) o Leaflet con tiles de OpenStreetMap.
+**Prerequisito:** PostGIS activado (Fase 21) y columna `gps` en `leads` con backfill de coordenadas.
 
 ---
 
@@ -380,8 +413,24 @@ Vista agregada para identificar oportunidades de campaña, no leads individuales
 │  Peluquería Estilo · contactado hace 3 días                       │
 │  Canal: WhatsApp · Notas: "interesado, pidió presupuesto"         │
 │  [Follow-up] [Cerrar como ganado] [Cerrar como perdido]           │
+│                                                                   │
+│  CAMPAÑAS ACTIVAS                               (Fase 43)         │
+│  ────────────────────────────────────────────────────────         │
+│  ● Restaurantes Pocitos mayo 2026                                 │
+│    12 contactados · 4 respondieron · 2 interesados                │
+│    Conversión: 17%   avg score: 67   [Ver] [Cerrar]               │
+│                                                                   │
+│  ○ Car dealers Interior — junio 2026                              │
+│    0 contactados (recién creada)    [Ver]                         │
+│                                                                   │
+│  [+ Nueva campaña]                                                │
 └──────────────────────────────────────────────────────────────────┘
 ```
+
+**Comportamiento de campañas:**
+- `POST /api/v1/campaigns` con `segment_filter` → crea campaña con leads del segmento actual
+- Al registrar outreach desde una campaña activa → `lead_outreach.campaign_id` se auto-asigna
+- Stats: `GET /api/v1/campaigns/:id/stats` → `{ conversion_rate, avg_score_contacted, ... }`
 
 ---
 
@@ -456,7 +505,11 @@ Control total sobre cuándo y cómo se ejecutan las pipelines en el servidor. El
 │  Próximas 3 ejecuciones:             │    Nuevos hot leads:     3       │
 │  Dom 25 May 2026  02:00              │    Invariantes:         ✅        │
 │  Dom 01 Jun 2026  02:00              │                                  │
-│  Dom 08 Jun 2026  02:00              │  [Ver detalles del run →]        │
+│  Dom 08 Jun 2026  02:00              │  Presupuesto Google Places:      │
+│                                      │  ████████████████░░  $194/200   │
+│                                      │  (Fase 44 — actualiza por run)  │
+│                                      │                                  │
+│                                      │  [Ver detalles del run →]        │
 ├──────────────────────────────────────┴──────────────────────────────────┤
 │  FASES Y PARÁMETROS                                                      │
 │  ─────────────────────────────────────────────────────────────────────  │
@@ -694,16 +747,18 @@ No construir todo de una vez. Prerequisito base: API server activo en `blindspot
 
 | Etapa | Pantalla / Feature | Prerequisito en backend |
 |-------|-------------------|------------------------|
-| 1 | Lead Explorer básico (lista sin filtros avanzados) | API `/api/leads` + `contact_tier` en score_breakdown |
+| 1 | Lead Explorer básico (lista sin filtros avanzados) | API `/api/v1/leads` + `contact_tier` en score_breakdown |
 | 2 | Filtros por tier + oferta + urgencia + score | Scoring v2 completo (Fase 22) |
 | 3 | Lead Detail completo con sub-scores y señales | `inferred_state` como columna propia |
-| 4 | Modal de registro de outreach (contacted/won/lost) | Tabla `lead_outreach` + API `/api/outreach` |
-| 5 | **Pipeline Manager** — config + ejecución manual + historial | Fase 23 API + tabla `pipeline_config` + `pipeline_runs` |
-| 6 | **Monitor de ejecución activa** (progress en tiempo real) | `GET /api/pipeline/runs/active` + log endpoint |
+| 4 | Modal de registro de outreach (contacted/won/lost) | Tabla `lead_outreach` + API `/api/v1/outreach` |
+| 5 | **Pipeline Manager** — config + ejecución manual + historial + budget tracker | Fase 23 + Fase 44 (budget tracker) |
+| 6 | **Monitor de ejecución activa** (progress en tiempo real) | `GET /api/v1/pipeline/runs/active` + log endpoint |
 | 7 | Generación de ofertas IA | LLMProvider configurado (Gemini/Ollama) |
-| 8 | Segment Explorer (agregaciones y stats) | `GET /api/stats/overview` + PostGIS para clusters |
-| 9 | Discovery Control Center (gestión de cola) | `discovery_jobs` + API `/api/discovery/suggestions` |
-| 10 | Cuantificación PedidosYa + datos fiscales | commission_estimate + CIIU en lead_company_data |
+| 8 | Segment Explorer + mapa geográfico | `GET /api/v1/stats/overview` + PostGIS (Fase 21) |
+| 9 | Discovery Control Center (gestión de cola) | `discovery_jobs` + API `/api/v1/discovery/suggestions` |
+| 10 | **Full-text search** en Lead Explorer | `search_vector` FTS (Fase 40) |
+| 11 | **Campañas de outreach** en Outreach Tracker | Tabla `outreach_campaigns` (Fase 43) |
+| 12 | Cuantificación PedidosYa + datos fiscales | commission_estimate + CIIU en lead_company_data |
 
 ---
 
@@ -782,8 +837,12 @@ app/
 |----------|-------|
 | No acceso directo a DB | Toda lógica de negocio vive en blindspot. El frontend es pure presentation. |
 | URL params para filtros | Estado de filtros compartible, funciona con back del browser, recargable. |
-| Cursor-based pagination | Los leads se actualizan constantemente — offset-based pierde items entre páginas. |
-| Polling para discovery jobs | SSE o WebSockets son overkill para jobs que duran minutos. Polling cada 2s es suficiente. |
+| Cursor-based pagination (todos los endpoints) | Los leads se actualizan constantemente — offset-based pierde items entre páginas. Aplica también a outreach y pipeline/runs. |
+| Polling para discovery jobs y pipeline monitor | SSE o WebSockets son overkill para jobs que duran minutos. Polling cada 2–3s es suficiente. |
 | shadcn/ui headless | Sin decisiones de estilo forzadas. Tailwind para customización. |
-| No Redux/React Query | Zustand para filtros + fetch nativo con SWR para las queries a la API. |
+| No Redux/React Query | Zustand para filtros + SWR para queries a la API. |
 | SSR solo en carga inicial | La lista de leads cambia con filtros del usuario → CSR después de la carga inicial. |
+| API `/api/v1/` desde el inicio | Permite introducir `/api/v2/` para breaking changes sin romper el frontend en producción. |
+| FTS con `plainto_tsquery` en backend | La búsqueda de texto ocurre en PostgreSQL — el frontend solo manda `?q=`. Sin Elasticsearch, sin infraestructura adicional. |
+| Mapa con MapLibre GL JS (no Google Maps) | MIT license, sin API key, tiles de OpenStreetMap. Solo activo cuando PostGIS está disponible (Fase 21). |
+| Campañas vinculadas a outreach (no a leads) | Un lead puede pertenecer a múltiples campañas en distintos momentos. El vínculo está en `lead_outreach.campaign_id`, no en `leads`. |

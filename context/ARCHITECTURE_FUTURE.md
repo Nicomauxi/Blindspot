@@ -1508,6 +1508,443 @@ WHERE niche = $niche
 
 ---
 
+## Diseño objetivo — infraestructura y operaciones
+
+### Aislamiento de procesos: API vs pipeline
+
+El pipeline (Playwright + scoring masivo) es CPU-bound. La API necesita baja latencia. Compartir un solo proceso Node.js significa que un re-scoring de 3600 leads puede bloquear la event loop y la API deja de responder durante minutos.
+
+**Diseño objetivo:**
+
+```
+Proceso 1: API server (Fastify)
+  → Low latency, solo lectura + writes pequeños (outreach, pipeline config)
+  → Puerto 3001, siempre disponible
+
+Proceso 2: Pipeline worker
+  → CPU-bound: discovery, enrich (Playwright), scoring masivo
+  → Lanzado bajo demanda (POST /api/v1/pipeline/run → spawn)
+  → Comunica progreso vía tabla pipeline_runs en DB (no IPC directo)
+  → Termina cuando el pipeline termina
+
+Comunicación entre procesos: exclusivamente vía DB
+  → API lee pipeline_runs para estado y log
+  → Worker escribe pipeline_runs.log_lines, phase_results, progress
+  → Sin shared memory ni sockets entre procesos
+```
+
+**Implementación:**
+- `src/api/server.ts` — proceso API puro, sin imports de Playwright
+- `src/workers/pipeline.ts` — worker invocado con `child_process.spawn`
+- `pnpm run api` → inicia solo el servidor API
+- `pnpm run pipeline` → inicia el worker standalone (para cron o manual)
+
+**Regla de boundary:** ningún módulo de enrichment (Playwright) puede ser importado en el proceso API. El boundary es estricto.
+
+---
+
+### `lead_dashboard` — MATERIALIZED VIEW con refresh controlado
+
+La vista `lead_dashboard` debe ser una MATERIALIZED VIEW, no una VIEW normal, para garantizar latencia predecible bajo múltiples usuarios simultáneos.
+
+```sql
+CREATE MATERIALIZED VIEW lead_dashboard AS
+  SELECT ...   -- mismo SQL que la VIEW actual
+  FROM leads l
+  LEFT JOIN LATERAL (...) lbs_top ON true
+  WHERE l.passed_filter = true
+    AND l.score_breakdown->>'contact_tier' != 'X';
+
+CREATE UNIQUE INDEX lead_dashboard_id     ON lead_dashboard(id);
+CREATE INDEX lead_dashboard_tier          ON lead_dashboard(contact_tier);
+CREATE INDEX lead_dashboard_score         ON lead_dashboard(prospect_score DESC);
+CREATE INDEX lead_dashboard_offer         ON lead_dashboard(primary_offer);
+CREATE INDEX lead_dashboard_urgency       ON lead_dashboard(urgency_signal);
+CREATE INDEX lead_dashboard_contacted     ON lead_dashboard(contacted_at);
+```
+
+**Refresh strategy:**
+- Después de cada pipeline run: `REFRESH MATERIALIZED VIEW CONCURRENTLY lead_dashboard` como último paso antes de `pipeline_runs.completed_at`
+- Después de `PATCH /api/v1/leads/:id/contact`: marca `pipeline_runs.dashboard_stale = true`, refresca en el próximo ciclo
+- `CONCURRENTLY` garantiza que la vista sigue accesible durante el refresh (sin lock de lectura)
+
+---
+
+### Versionado de API — `/api/v1/`
+
+Todos los endpoints bajo `/api/v1/` desde el inicio. Permite introducir `/api/v2/` para breaking changes sin romper el frontend que usa v1.
+
+```
+CORRECTO:   GET /api/v1/leads
+INCORRECTO: GET /api/leads
+```
+
+El servidor redirige `/api/leads` → `/api/v1/leads` con 301 para transición inicial, pero el frontend siempre usa `/api/v1/`.
+
+**Headers de versión en cada respuesta:**
+```
+X-API-Version: 1
+X-Scoring-Version: 2   // versión del algoritmo activo
+```
+
+---
+
+### Endpoint `/api/v1/health` — observabilidad básica
+
+```typescript
+GET /api/v1/health
+→ {
+    status: 'ok' | 'degraded' | 'error',
+    db: 'ok' | 'error',
+    cron: {
+      status: 'scheduled' | 'running' | 'missed' | 'disabled',
+      last_run_at: string | null,
+      next_run_at: string | null,
+      missed: boolean   // true si el cron debía haber corrido y no corrió (±15 min margen)
+    },
+    pipeline_running: boolean,
+    leads_count: number,
+    hot_leads_count: number,
+    version: string     // git SHA o package.json version
+  }
+```
+
+Sin autenticación. Compatible con uptimerobot, healthchecks.io o cualquier monitor externo.
+
+---
+
+### Detección de cron missed runs
+
+`node-cron` es in-memory. Si el servidor se reinicia en el momento en que debía correr el pipeline, el run se pierde silenciosamente. Para un cron semanal, eso es una semana sin datos frescos.
+
+**Diseño:**
+
+```sql
+-- Columna en pipeline_config:
+scheduled_for timestamptz   -- próxima ejecución esperada, calculada al guardar config
+```
+
+```typescript
+// En startup del servidor (onReady hook de Fastify):
+async function checkMissedRun(config: PipelineConfig) {
+  if (!config.enabled || !config.scheduled_for) return
+  const overdue = differenceInMinutes(new Date(), config.scheduled_for) > 15
+  const notRun = !config.last_completed_at || config.last_completed_at < config.scheduled_for
+  if (overdue && notRun) {
+    logger.warn('Missed pipeline run detected — triggering recovery')
+    await triggerPipelineRun({ triggered_by: 'startup-recovery' })
+  }
+}
+```
+
+---
+
+### Estrategia anti-detección en scraping
+
+Para runs automáticos en producción, la misma IP hace el mismo scraping periódicamente. Sin gestión activa, el riesgo de bloqueo crece con el tiempo.
+
+**Config en `config/discovery.yaml`:**
+
+```yaml
+scraping:
+  yelu:
+    rate_limit_ms: 1000        # 1 req/s máximo
+    retry_attempts: 3
+    retry_backoff_ms: 2000     # exponential: 2s, 4s, 8s
+    user_agents:
+      - "Mozilla/5.0 (X11; Linux x86_64; rv:124.0) Gecko/20100101 Firefox/124.0"
+      - "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36..."
+  pedidosya:
+    rate_limit_ms: 2000
+    retry_attempts: 2
+    on_block: stop              # 'stop' | 'skip' | 'retry_24h'
+  overpass:
+    rate_limit_ms: 60000        # Fair Use: 1 req/min para queries grandes
+    retry_attempts: 2
+```
+
+---
+
+## Diseño objetivo — calidad de datos y detección
+
+### `canonical_source` — fuente de mayor confianza
+
+El campo `source` refleja la fuente de descubrimiento, no necesariamente la más confiable. Un lead que empezó en OSM (0.60) y fue corroborado por Google Places (0.90) sigue con `source = 'osm'`.
+
+**Nuevo campo `canonical_source`:**
+
+```sql
+ALTER TABLE leads ADD COLUMN canonical_source text;
+```
+
+Calculado al reconciliar `canonical_fields`: es la fuente con mayor `source_confidence` entre la fuente primaria y todas las corroborantes.
+
+La UI muestra `canonical_source` como "Fuente principal" y lista `corroborating_sources` como "También encontrado en".
+
+---
+
+### Deduplicación con coordenadas geográficas
+
+`findCrossSourceMatch` usa solo similitud de nombre. Dos negocios con el mismo nombre en ciudades distintas se matchearían erróneamente cuando la cobertura se expanda.
+
+**Diseño de `findCrossSourceMatch` v2:**
+
+```typescript
+function findCrossSourceMatch(
+  candidate: DiscoveryCandidate,
+  leads: Lead[],
+  options: {
+    nameThreshold?: number       // default 0.85
+    geoRadiusMeters?: number     // default 500 — solo si ambos tienen GPS
+    requireNicheMatch?: boolean  // default true
+  }
+): Lead | null
+```
+
+**Lógica:**
+1. Filtrar por niche exacto (si `requireNicheMatch=true`)
+2. Si el candidato tiene `lat/lng`: filtrar por distancia Haversine < `geoRadiusMeters` — O(n) sin PostGIS
+3. Buscar mejor similitud de nombre sobre el conjunto filtrado
+4. Retornar match si similarity ≥ `nameThreshold`
+
+Sin GPS: fall back al threshold de nombre solo (comportamiento actual). Con GPS: match es nombre+geo, drásticamente menos falsos positivos.
+
+---
+
+### Change detection en re-enrich
+
+El sistema re-enriquece leads stale pero no detecta si algo cambió. Si un negocio lanzó una web nueva, debería moverse de `web_nuevo` a `rediseno` sin intervención manual.
+
+**Campos críticos que triggean re-score automático:**
+- `has_website` false → true
+- `contact_email` apareció (contact_tier sube de C a A)
+- `contact_tier` cambió
+- `inferred_state.has_delivery` apareció (pitch_hook cambia)
+
+**Implementación:**
+
+```typescript
+interface EnrichmentDiff {
+  lead_id: string
+  changed_at: string
+  changes: Array<{
+    field: string
+    from: unknown
+    to: unknown
+    significance: 'critical' | 'high' | 'low'
+  }>
+}
+```
+
+Persiste en `digital_footprint.last_change_diff`. Si hay cambios críticos → tag `state-changed-significant` + re-score automático en el mismo run. El monitor de ejecución muestra "N leads con cambios significativos" post-run.
+
+---
+
+### Detección de mismo propietario (`owner_group`)
+
+En Uruguay, muchas PyMEs tienen el mismo dueño con 2–3 negocios distintos. Contactarlos por separado es redundante y puede generar fricción.
+
+**Señales de mismo propietario:**
+- Mismo número de teléfono en 2+ leads
+- Mismo email en 2+ leads
+- Mismo RUT (cuando disponible vía MINTUR/DGI)
+
+**Schema:**
+
+```sql
+ALTER TABLE leads ADD COLUMN owner_group_id uuid;
+CREATE INDEX leads_owner_group ON leads(owner_group_id) WHERE owner_group_id IS NOT NULL;
+```
+
+Detección: corre post-enrich. Si dos leads tienen el mismo phone o email canónico → asignar el mismo `owner_group_id` (o crear nuevo UUID si no existe).
+
+**UI:** badge "2 negocios del mismo propietario" en Lead Explorer, con link al otro lead. El agente puede preparar un pitch conjunto.
+
+---
+
+### `scoring_version` en `lead_buyer_scores` y `leads`
+
+Al cambiar la fórmula de scoring, los scores históricos quedan obsoletos sin forma de identificarlos.
+
+```sql
+ALTER TABLE lead_buyer_scores ADD COLUMN scoring_version smallint NOT NULL DEFAULT 1;
+ALTER TABLE leads ADD COLUMN prospect_score_version smallint NOT NULL DEFAULT 1;
+```
+
+**Comportamiento:**
+- Al correr `score --all` con v2: `scoring_version = 2` en todos los registros actualizados
+- La API retorna `X-Scoring-Version: 2` en headers
+- Invariante post-run: `SELECT COUNT(*) FROM lead_buyer_scores WHERE scoring_version < 2` debe ser 0
+
+---
+
+### `days_in_pool` — recency como señal de timing
+
+Un lead recién descubierto tiene ventaja competitiva: nadie lo ha contactado todavía. Esta señal no existe en la fórmula actual.
+
+**Adición al `timing_factor` de scoring v2 en `config/scoring.yaml`:**
+
+```yaml
+commercial_score:
+  timing:
+    # ... campos existentes ...
+    days_in_pool:
+      fresh_threshold_days: 7
+      fresh_bonus: 0.05          # leads < 7 días en pool → +5% timing_factor
+      stale_threshold_days: 90
+      stale_penalty: -0.05       # leads > 90 días sin contactar → -5%
+```
+
+Persiste en `score_breakdown.days_in_pool` para que la UI lo pueda mostrar ("Nuevo — hace 3 días").
+
+---
+
+## Diseño objetivo — producto y engagement
+
+### Webhook de notificaciones externas
+
+Cuando el pipeline termina con nuevos hot leads, el equipo de ventas debería ser notificado sin tener la UI abierta.
+
+**Config en `pipeline_config`:**
+
+```sql
+notify_webhook_url    text,          -- URL del receptor (Slack, Make.com, Zapier, n8n)
+notify_webhook_secret text,          -- HMAC-SHA256 para verificación
+notify_webhook_events text[]         -- ['run_completed', 'hot_leads_found', 'invariant_failed']
+```
+
+**Payload al terminar un run:**
+
+```json
+POST {notify_webhook_url}
+Header: X-Blindspot-Signature: sha256={hmac}
+
+{
+  "event": "run_completed",
+  "run_id": "uuid",
+  "completed_at": "2026-05-18T06:01:00Z",
+  "duration_minutes": 252,
+  "new_hot_leads": 3,
+  "leads_enriched": 127,
+  "invariants_ok": true,
+  "summary_url": "http://localhost:3001/api/v1/pipeline/runs/{run_id}"
+}
+```
+
+Implementación: `src/api/pipeline/notifications.ts` → `notifyWebhook(run)`. Llamada como último paso en `completePipelineRun()`. Resultado persiste en `pipeline_runs.webhook_status`.
+
+---
+
+### Full-text search de leads
+
+Con 2034 leads "other" y sub-niches no mapeados, el usuario no tiene forma de buscar por texto.
+
+**Schema:**
+
+```sql
+ALTER TABLE leads ADD COLUMN search_vector tsvector
+  GENERATED ALWAYS AS (
+    to_tsvector('spanish',
+      COALESCE(name,'') || ' ' || COALESCE(address,'') || ' ' || COALESCE(niche,''))
+  ) STORED;
+
+CREATE INDEX leads_fts ON leads USING gin(search_vector);
+```
+
+**Endpoint:**
+
+```
+GET /api/v1/leads?q=veterinaria&contact_tier=A,B
+→ WHERE search_vector @@ plainto_tsquery('spanish', $q)
+→ ORDER BY ts_rank(search_vector, query) DESC, prospect_score DESC
+```
+
+El parámetro `q` se combina con todos los filtros existentes. Compatible con cursor pagination.
+
+---
+
+### Scoring estacional
+
+Uruguay tiene patrones de receptividad predecibles por niche y mes.
+
+**Config en `config/scoring.yaml`:**
+
+```yaml
+seasonal_modifiers:
+  - months: [1, 1]
+    niche: gym
+    urgency_note: "enero-resoluciones"    # pico de altas de gimnasio en enero
+    urgency_boost: 0.10                   # no cambia prospect_score, sí el sort en UI
+  - months: [11, 3]
+    zones: ["punta del este", "rocha", "colonia del sacramento"]
+    urgency_note: "temporada-turistica"
+    urgency_boost: 0.15
+  - months: [11, 12]
+    niche: restaurant
+    urgency_note: "temporada-alta-pedidos" # más pedidos → más comisión PedidosYa
+    urgency_boost: 0.10
+```
+
+El modificador estacional NO altera `prospect_score`. Añade `score_breakdown.seasonal_note` para el agente y afecta el sort secundario de la UI (leads con seasonal boost aparecen antes en el mismo tier).
+
+---
+
+### Campañas de outreach
+
+El modelo natural del agente es por campaña: "esta semana llamo a todos los restaurantes de Pocitos tier B". Sin entidad "campaña", no hay forma de medir qué segmentos convierten.
+
+**Tabla `outreach_campaigns`:**
+
+```sql
+CREATE TABLE outreach_campaigns (
+  id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  name            text NOT NULL,          -- "Restaurantes Pocitos mayo 2026"
+  created_at      timestamptz DEFAULT now(),
+  closed_at       timestamptz,
+  segment_filter  jsonb NOT NULL,         -- {contact_tier: ['B'], niche: ['restaurant'], ...}
+  status          text DEFAULT 'active',  -- 'active' | 'paused' | 'closed'
+  notes           text
+);
+
+ALTER TABLE lead_outreach ADD COLUMN campaign_id uuid REFERENCES outreach_campaigns(id);
+```
+
+**Stats por campaña:**
+
+```
+GET /api/v1/campaigns/:id/stats
+→ {
+    total_in_segment: number,
+    contacted: number,
+    responded: number,
+    closed_won: number,
+    conversion_rate: number,    // closed_won / contacted
+    avg_score_contacted: number
+  }
+```
+
+Permite comparar "¿qué segmento convierte mejor?" y construir el feedback loop real del sistema.
+
+---
+
+### Presupuesto Google Places — trazabilidad en UI
+
+El saldo de Google Places existe solo en SECURITY.md como texto. La UI debe mostrar el consumo en tiempo real.
+
+**Campos en `pipeline_config`:**
+
+```sql
+google_places_budget_total     numeric(8,2) DEFAULT 200.00,
+google_places_budget_spent     numeric(8,2) DEFAULT 5.16,
+google_places_alert_threshold  numeric(8,2) DEFAULT 20.00
+```
+
+**Actualización automática:** el worker incrementa `google_places_budget_spent += 0.02 × requests_made` al finalizar cada run con `source=google_places`.
+
+El Pipeline Manager muestra barra de presupuesto y emite alerta (badge rojo) si `budget_remaining < alert_threshold`. También incluye en el payload del webhook cuando `budget_remaining < alert_threshold`.
+
+---
+
 ## Diseño de UI
 
 > El diseño completo de la UI (pantallas, wireframes, componentes, templates de oferta, orden de construcción)
