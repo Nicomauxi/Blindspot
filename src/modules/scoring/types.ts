@@ -1,6 +1,6 @@
 export interface FieldCondition {
   field: string;
-  op: "eq" | "gte" | "lte" | "between";
+  op: "eq" | "neq" | "gte" | "lte" | "between";
   value: number | string | boolean | [number, number];
 }
 
@@ -32,13 +32,31 @@ export interface ScoringConfig {
   digital_gap: Dimension;
   mutual_exclusions: MutualExclusions;
   cap: number;
-  prospect_formula: "business_quality * digital_gap / 100";
+  prospect_formula: string;
+  buyer_types?: BuyerTypesConfig;
 }
 
 export interface EvaluatedRule {
   name: string;
   weight: number;
   matched_value: unknown;
+}
+
+export type PrimaryOffer =
+  | "web_nuevo"
+  | "rediseno"
+  | "marketing"
+  | "software"
+  | "catalogo"
+  | "none";
+
+export interface SubScores {
+  web_nuevo: number;
+  rediseno: number;
+  marketing: number;
+  software: number;
+  catalogo: number;
+  primary_offer: PrimaryOffer;
 }
 
 export interface ScoreBreakdown {
@@ -48,6 +66,35 @@ export interface ScoreBreakdown {
   digital_gap: { total: number; rules: EvaluatedRule[] };
   systems_gap: { total: number; rules: EvaluatedRule[] };
   prospect: { formula: string; total: number };
+  sub_scores: SubScores;
+}
+
+export type BuyerTypeSubScoreKey =
+  | "web_nuevo"
+  | "rediseno"
+  | "marketing"
+  | "software"
+  | "catalogo";
+
+export interface BuyerTypeConfig {
+  formula: Record<string, number>;
+  inferred_required?: Record<string, boolean>;
+  niche_required?: string[];
+  tag_required?: string;
+  inferred_bonuses?: Record<string, number>;
+  inferred_penalties?: Record<string, number>;
+}
+
+export type BuyerTypesConfig = Record<string, BuyerTypeConfig>;
+
+export interface BuyerTypeScore {
+  buyer_type: string;
+  score: number;
+  breakdown: {
+    base: number;
+    adjustments: number;
+    applied_modifiers: string[];
+  };
 }
 
 export interface ScoreResult {

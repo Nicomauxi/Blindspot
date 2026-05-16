@@ -31,6 +31,9 @@ business_quality:
     - name: has_recent_reviews
       condition: { field: google_data.has_recent_reviews, op: eq, value: true }
       weight: 10
+    - name: external_source_quality
+      condition: { field: source, op: neq, value: google_places }
+      weight: 70
 
 # digital_gap: 0-100. Qué tan ausente está el negocio digitalmente.
 digital_gap:
@@ -129,4 +132,75 @@ mutual_exclusions:
 cap: 100
 
 # Fórmula de prospect_score
-prospect_formula: "business_quality * digital_gap / 100"
+prospect_formula: "max(sub_scores) * contactabilityMultiplier"
+
+buyer_types:
+  agencia_web:
+    formula:
+      web_nuevo: 0.50
+      rediseno:  0.30
+      marketing: 0.20
+
+  software_pos:
+    formula:
+      software: 0.50
+      catalogo:  0.20
+    inferred_bonuses:
+      has_delivery: 20
+    inferred_penalties:
+      has_pos: -50
+
+  marketing_social:
+    formula:
+      marketing: 0.55
+      rediseno:  0.25
+      web_nuevo: 0.20
+
+  delivery_propio:
+    inferred_required:
+      has_delivery: true
+    formula:
+      software: 0.40
+      catalogo: 0.30
+    inferred_bonuses:
+      has_delivery: 30
+    inferred_penalties:
+      has_pos: -60
+
+  reservas_online:
+    niche_required:
+      - gym
+      - hairdresser
+      - restaurant
+    inferred_required:
+      has_reservations: false
+    formula:
+      software: 0.60
+      catalogo: 0.20
+    inferred_bonuses:
+      has_delivery: 10
+    inferred_penalties:
+      has_reservations: -100
+
+  catalogo_digital:
+    niche_required:
+      - restaurant
+      - retail
+    inferred_required:
+      has_online_catalog: false
+    formula:
+      catalogo:  0.55
+      web_nuevo: 0.25
+      marketing: 0.20
+    inferred_penalties:
+      has_online_catalog: -100
+
+  whatsapp_business:
+    tag_required: whatsapp-confirmed
+    formula:
+      software:  0.40
+      marketing: 0.35
+      catalogo:  0.25
+    inferred_penalties:
+      has_pos: -30
+      has_ecommerce: -40

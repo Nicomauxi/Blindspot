@@ -1,8 +1,10 @@
 import { getSupabase } from "../shared/supabase.js";
+import { getLogger } from "../shared/logger.js";
 import type { DigitalFootprint, DigitalFootprintEnriched, Lead, LeadUpsert, SocialSearch } from "../shared/types.js";
-import type { ScoreResult } from "../modules/scoring/types.js";
+import type { BuyerTypeScore, ScoreResult } from "../modules/scoring/types.js";
 import { normalizeUruguayMobile } from "../modules/enrichment/parsers/whatsapp.js";
 import { MAX_CONTACT_EMAILS } from "../modules/enrichment/index.js";
+import { isFranchise, normalizeName } from "../modules/discovery/deduplication.js";
 
 export interface UpsertResult {
   inserted: Lead[];
@@ -10,7 +12,8 @@ export interface UpsertResult {
 }
 const DUPLICATE_TAG = "possible-duplicate";
 const DUPLICATE_SECONDARY_TAG = "duplicate-secondary";
-const DUPLICATE_BLOCKED_EMAIL_DOMAINS = new Set([
+const FRANCHISE_TAG = "franchise-detected";
+const FALLBACK_BLOCKED_EMAIL_DOMAINS = new Set([
   "thinkit.com.uy",
   "smartserv.com.uy",
   "hosting.com.uy",
@@ -102,17 +105,23 @@ function normalizeIdentityUrl(value: string | null | undefined): string | null {
   }
 }
 
-function duplicateEmails(lead: Lead): string[] {
+function duplicateEmails(
+  lead: Lead,
+  blockedEmailDomains: ReadonlySet<string> = FALLBACK_BLOCKED_EMAIL_DOMAINS
+): string[] {
   const emails = lead.digital_footprint?.contact_emails ?? [];
   return emails
     .map((email) => email.trim().toLowerCase())
     .filter((email) => {
       const domain = email.split("@")[1] ?? "";
-      return email.length > 0 && !DUPLICATE_BLOCKED_EMAIL_DOMAINS.has(domain);
+      return email.length > 0 && !blockedEmailDomains.has(domain);
     });
 }
 
-function duplicateIdentityKeys(lead: Lead): string[] {
+function duplicateIdentityKeys(
+  lead: Lead,
+  blockedEmailDomains: ReadonlySet<string> = FALLBACK_BLOCKED_EMAIL_DOMAINS
+): string[] {
   const keys: string[] = [];
   const whatsapp = normalizeIdentityPhone(lead.whatsapp);
   if (whatsapp) keys.push(`wa:${whatsapp}`);
@@ -120,13 +129,16 @@ function duplicateIdentityKeys(lead: Lead): string[] {
   if (phone) keys.push(`phone:${phone}`);
   const web = normalizeIdentityUrl(lead.digital_footprint?.heuristic_discovery?.selected.website?.url);
   if (web) keys.push(`web:${web}`);
-  for (const email of duplicateEmails(lead)) {
+  for (const email of duplicateEmails(lead, blockedEmailDomains)) {
     keys.push(`email:${email}`);
   }
   return Array.from(new Set(keys));
 }
 
-export function detectDuplicates(leads: Lead[]): Map<string, Lead[]> {
+export function detectDuplicates(
+  leads: Lead[],
+  blockedEmailDomains: ReadonlySet<string> = FALLBACK_BLOCKED_EMAIL_DOMAINS
+): Map<string, Lead[]> {
   const parent = new Map<string, string>();
   const byId = new Map(leads.map((lead) => [lead.id, lead]));
   const keyOwner = new Map<string, string>();
@@ -147,7 +159,7 @@ export function detectDuplicates(leads: Lead[]): Map<string, Lead[]> {
 
   for (const lead of leads) {
     parent.set(lead.id, lead.id);
-    for (const key of duplicateIdentityKeys(lead)) {
+    for (const key of duplicateIdentityKeys(lead, blockedEmailDomains)) {
       const owner = keyOwner.get(key);
       if (owner) union(owner, lead.id);
       else keyOwner.set(key, lead.id);
@@ -194,6 +206,43 @@ export async function tagDuplicates(leads: Lead[]): Promise<void> {
         .update({ tags })
         .eq("id", lead.id);
       if (error) throw new Error(`Failed to tag duplicate lead ${lead.id}: ${error.message}`);
+    }
+  }
+}
+
+export async function tagFranchises(
+  leads: Lead[],
+  franchiseNames: ReadonlySet<string>
+): Promise<void> {
+  if (leads.length === 0) return;
+
+  const addressesByName = new Map<string, Set<string>>();
+  for (const lead of leads) {
+    const norm = normalizeName(lead.name);
+    const addrs = addressesByName.get(norm) ?? new Set<string>();
+    addrs.add((lead.address ?? "").trim().toLowerCase());
+    addressesByName.set(norm, addrs);
+  }
+
+  const db = getSupabase();
+
+  for (const lead of leads) {
+    if (lead.tags.includes(FRANCHISE_TAG)) continue;
+
+    const byList      = isFranchise(lead.name, franchiseNames);
+    const norm        = normalizeName(lead.name);
+    const byHeuristic = (addressesByName.get(norm)?.size ?? 0) >= 3;
+
+    if (!byList && !byHeuristic) continue;
+
+    const tags = [...lead.tags, FRANCHISE_TAG];
+    const { error } = await db
+      .from("leads")
+      .update({ tags })
+      .eq("id", lead.id);
+
+    if (error) {
+      getLogger().warn({ leadId: lead.id, err: error.message }, "tagFranchises — update failed");
     }
   }
 }
@@ -554,6 +603,18 @@ export async function updateLeadSocialSearch(
   if (error) throw new Error(`Failed to update social search for lead ${leadId}: ${error.message}`);
 }
 
+export async function patchLeadInferredState(
+  leadId: string,
+  footprint: DigitalFootprint
+): Promise<void> {
+  const db = getSupabase();
+  const { error } = await db
+    .from("leads")
+    .update({ digital_footprint: footprint })
+    .eq("id", leadId);
+  if (error) throw new Error(`Failed to patch inferred_state for lead ${leadId}: ${error.message}`);
+}
+
 export async function loadAllLeads(): Promise<Lead[]> {
   const db = getSupabase();
   const pageSize = 1000;
@@ -578,6 +639,58 @@ export async function loadAllLeads(): Promise<Lead[]> {
   return leads;
 }
 
+export async function loadLeadsBySource(
+  source: string,
+  opts: { passedOnly?: boolean } = { passedOnly: true }
+): Promise<Lead[]> {
+  const db = getSupabase();
+  const pageSize = 1000;
+  const leads: Lead[] = [];
+
+  for (let from = 0; ; from += pageSize) {
+    const to = from + pageSize - 1;
+    let query = db
+      .from("leads")
+      .select("*")
+      .eq("source", source)
+      .order("name")
+      .range(from, to);
+    if (opts.passedOnly) {
+      query = query.eq("passed_filter", true);
+    }
+    const { data, error } = await query;
+    if (error) throw new Error(`Failed to load leads for source ${source}: ${error.message}`);
+    const batch = (data ?? []) as Lead[];
+    leads.push(...batch);
+    if (batch.length < pageSize) break;
+  }
+
+  return leads;
+}
+
+export async function loadAllPassedLeads(): Promise<Lead[]> {
+  const db = getSupabase();
+  const pageSize = 1000;
+  const leads: Lead[] = [];
+
+  for (let from = 0; ; from += pageSize) {
+    const to = from + pageSize - 1;
+    const { data, error } = await db
+      .from("leads")
+      .select("*")
+      .eq("passed_filter", true)
+      .order("name")
+      .range(from, to);
+
+    if (error) throw new Error(`Failed to load all passed leads: ${error.message}`);
+    const batch = (data ?? []) as Lead[];
+    leads.push(...batch);
+    if (batch.length < pageSize) break;
+  }
+
+  return leads;
+}
+
 export async function updateLeadScore(leadId: string, result: ScoreResult): Promise<void> {
   const { error } = await getSupabase()
     .from("leads")
@@ -591,4 +704,23 @@ export async function updateLeadScore(leadId: string, result: ScoreResult): Prom
     })
     .eq("id", leadId);
   if (error) throw new Error(`Failed to update scores for lead ${leadId}: ${error.message}`);
+}
+
+export async function upsertBuyerScores(
+  leadId: string,
+  scores: BuyerTypeScore[]
+): Promise<void> {
+  if (scores.length === 0) return;
+  const db = getSupabase();
+  const rows = scores.map((s) => ({
+    lead_id: leadId,
+    buyer_type: s.buyer_type,
+    score: s.score,
+    breakdown: s.breakdown,
+    computed_at: new Date().toISOString(),
+  }));
+  const { error } = await db
+    .from("lead_buyer_scores")
+    .upsert(rows, { onConflict: "lead_id,buyer_type" });
+  if (error) throw new Error(`upsertBuyerScores failed: ${error.message}`);
 }

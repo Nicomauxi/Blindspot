@@ -1,8 +1,10 @@
 import { z } from "zod";
 import { getLogger } from "../../shared/logger.js";
-import { loadLeadsByRunId, loadAllLeads, updateLeadScore, tagDuplicates } from "../../storage/leads.js";
+import { loadLeadsByRunId, loadAllLeads, loadAllPassedLeads, updateLeadScore, upsertBuyerScores, tagDuplicates, tagFranchises } from "../../storage/leads.js";
+import { loadRuntimeLists } from "../../storage/system-lists.js";
 import { createScoringRun, completeScoringRun, failRun, getRunById } from "../../storage/runs.js";
 import { scoreLead } from "../../modules/scoring/index.js";
+import { computeAllBuyerScores } from "../../modules/scoring/buyer-types.js";
 import type { Lead, ScoringRunStats, ProspectEntry } from "../../shared/types.js";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -11,20 +13,27 @@ const ScoreArgsSchema = z
   .object({
     run: z.string().regex(UUID_RE, "run must be a UUID").optional(),
     all: z.boolean().default(false),
+    buyerTypes: z.boolean().default(false),
+    buyerType: z.string().optional(),
     dryRun: z.coerce.boolean().default(false),
   })
   .superRefine((args, ctx) => {
-    if (!args.run && !args.all) {
-      ctx.addIssue({ code: "custom", message: "Either --run <uuid> or --all is required" });
+    if (!args.run && !args.all && !args.buyerTypes) {
+      ctx.addIssue({ code: "custom", message: "Either --run <uuid>, --all, or --buyer-types is required" });
     }
     if (args.run && args.all) {
       ctx.addIssue({ code: "custom", message: "--run and --all are mutually exclusive" });
+    }
+    if (args.buyerType && !args.buyerTypes) {
+      ctx.addIssue({ code: "custom", message: "--buyer-type requires --buyer-types" });
     }
   });
 
 interface RawScoreArgs {
   run?: string;
   all?: boolean;
+  buyerTypes?: boolean;
+  buyerType?: string;
   dryRun?: boolean;
 }
 
@@ -53,6 +62,31 @@ function buildTopBottom(scored: Array<{ lead: Lead; prospectScore: number }>): {
   return { top_5, bottom_5 };
 }
 
+async function scoreBuyerTypes(opts: { buyerType?: string; dryRun: boolean }): Promise<void> {
+  const log = getLogger();
+  const leads = await loadAllPassedLeads();
+  const eligible = leads.filter((l) => l.score_breakdown?.sub_scores != null);
+
+  log.info({ total: eligible.length }, "Computing buyer-type scores");
+
+  let processed = 0;
+  for (const lead of eligible) {
+    let scores = computeAllBuyerScores(lead);
+    if (opts.buyerType) {
+      scores = scores.filter((s) => s.buyer_type === opts.buyerType);
+    }
+    if (!opts.dryRun) {
+      await upsertBuyerScores(lead.id, scores);
+    }
+    processed++;
+    if (processed % 100 === 0) {
+      log.info({ processed, total: eligible.length }, "buyer-type scoring progress");
+    }
+  }
+
+  log.info({ processed, dry_run: opts.dryRun }, "Buyer-type scoring complete");
+}
+
 export async function scoreCommand(rawArgs: RawScoreArgs): Promise<void> {
   const log = getLogger();
 
@@ -79,7 +113,7 @@ export async function scoreCommand(rawArgs: RawScoreArgs): Promise<void> {
   }
 
   const scoringRun = await createScoringRun({
-    scope: opts.all ? "all" : "run",
+    scope: opts.all || opts.buyerTypes ? "all" : "run",
     ...(sourceRun ? { sourceRun } : {}),
     dryRun: opts.dryRun,
   });
@@ -89,34 +123,43 @@ export async function scoreCommand(rawArgs: RawScoreArgs): Promise<void> {
   }
 
   try {
-    const leads = opts.all
-      ? await loadAllLeads()
-      : await loadLeadsByRunId(opts.run!);
-
-    log.info({ total: leads.length }, "Loaded leads to score");
-
     const scored: Array<{ lead: Lead; prospectScore: number }> = [];
 
-    for (let i = 0; i < leads.length; i++) {
-      const lead = leads[i]!;
-      const result = scoreLead(lead);
+    if (opts.run || opts.all) {
+      const leads = opts.all
+        ? await loadAllLeads()
+        : await loadLeadsByRunId(opts.run!);
 
-      log.info(
-        `[${i + 1}/${leads.length}] scored ${lead.name} → bq=${result.business_quality_score} dg=${result.digital_gap_score} sg=${result.systems_gap_score} prospect=${result.prospect_score}`
-      );
+      log.info({ total: leads.length }, "Loaded leads to score");
 
-      if (!opts.dryRun) {
-        await updateLeadScore(lead.id, result);
+      for (let i = 0; i < leads.length; i++) {
+        const lead = leads[i]!;
+        const result = scoreLead(lead);
+
+        log.info(
+          `[${i + 1}/${leads.length}] scored ${lead.name} → bq=${result.business_quality_score} dg=${result.digital_gap_score} sg=${result.systems_gap_score} prospect=${result.prospect_score}`
+        );
+
+        if (!opts.dryRun) {
+          await updateLeadScore(lead.id, result);
+        }
+
+        scored.push({ lead, prospectScore: result.prospect_score });
       }
 
-      scored.push({ lead, prospectScore: result.prospect_score });
+      if (!opts.dryRun) {
+        const leadsWithScore = scored.map(({ lead, prospectScore }) => ({
+          ...lead,
+          prospect_score: prospectScore,
+        }));
+        await tagDuplicates(leadsWithScore);
+        const runtimeLists = await loadRuntimeLists();
+        await tagFranchises(leadsWithScore, runtimeLists.franchiseNames);
+      }
     }
 
-    if (!opts.dryRun) {
-      await tagDuplicates(scored.map(({ lead, prospectScore }) => ({
-        ...lead,
-        prospect_score: prospectScore,
-      })));
+    if (opts.buyerTypes) {
+      await scoreBuyerTypes({ ...(opts.buyerType ? { buyerType: opts.buyerType } : {}), dryRun: opts.dryRun });
     }
 
     const duration_ms = Date.now() - startedAt;
@@ -124,7 +167,7 @@ export async function scoreCommand(rawArgs: RawScoreArgs): Promise<void> {
 
     const stats: ScoringRunStats = {
       command: "score",
-      scope: opts.all ? "all" : "run",
+      scope: opts.all || opts.buyerTypes ? "all" : "run",
       ...(sourceRun ? { source_run_id: sourceRun.id } : {}),
       dry_run: opts.dryRun,
       leads_scored: scored.length,
