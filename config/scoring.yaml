@@ -204,3 +204,17 @@ buyer_types:
     inferred_penalties:
       has_pos: -30
       has_ecommerce: -40
+
+review_count_multiplier:
+  - max: 10
+    multiplier: 0.75
+  - max: 50
+    multiplier: 1.00
+  - max: 200
+    multiplier: 1.20
+  - max: null
+    multiplier: 1.40
+
+rating_bonus:
+  threshold: 4.3
+  bonus: 5

@@ -42,6 +42,16 @@ const DimensionSchema = z
 
 const SUB_SCORE_KEYS = ["web_nuevo", "rediseno", "marketing", "software", "catalogo"] as const;
 
+const ReviewCountMultiplierRuleSchema = z.object({
+  max: z.number().nullable(),
+  multiplier: z.number().positive(),
+});
+
+const RatingBonusSchema = z.object({
+  threshold: z.number(),
+  bonus: z.number(),
+});
+
 const BuyerTypeConfigSchema = z.object({
   formula: z.record(z.string(), z.number()),
   inferred_required: z.record(z.string(), z.boolean()).optional(),
@@ -64,6 +74,8 @@ const ScoringConfigSchema = z
     cap: z.number().default(100),
     prospect_formula: z.string(),
     buyer_types: z.record(z.string(), BuyerTypeConfigSchema).optional(),
+    review_count_multiplier: z.array(ReviewCountMultiplierRuleSchema).optional(),
+    rating_bonus: RatingBonusSchema.optional(),
   })
   .superRefine((cfg, ctx) => {
     if (cfg.cap <= 0) {

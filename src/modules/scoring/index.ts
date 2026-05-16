@@ -2,6 +2,8 @@ import type { Lead } from "../../shared/types.js";
 import { getScoringConfig } from "./config.js";
 import { evaluateRule, resolveField } from "./evaluator.js";
 import { applyMutualExclusions } from "./exclusions.js";
+import { getReviewCountMultiplier, getRatingBonus } from "./review-multiplier.js";
+import { calculateSubScores } from "./sub-scores.js";
 import { scoreSystemsGap } from "./systems-gap.js";
 import type { EvaluatedRule, ScoreResult, ScoringRule } from "./types.js";
 
@@ -38,6 +40,12 @@ function scoreDimension(
   return { total: Math.max(0, Math.min(sum, cap)), breakdown: filtered };
 }
 
+function contactabilityMultiplier(lead: Lead): number {
+  const emailFromFootprint = (lead.digital_footprint?.contact_emails ?? []).length > 0;
+  const emailFromCanonical = !!lead.canonical_fields?.["email"];
+  return emailFromFootprint || emailFromCanonical ? 1.2 : 1.0;
+}
+
 export function scoreLead(lead: Lead): ScoreResult {
   const config = getScoringConfig();
   const computedAt = new Date().toISOString();
@@ -60,7 +68,21 @@ export function scoreLead(lead: Lead): ScoreResult {
   const bqScore = Math.floor(bq.total);
   const dgScore = Math.floor(dg.total);
   const sgScore = Math.floor(sg.total);
-  const prospectScore = Math.floor((bqScore * dgScore) / 100);
+
+  const subScores = calculateSubScores(lead, sgScore);
+  const maxSubScore = Math.max(
+    subScores.web_nuevo,
+    subScores.rediseno,
+    subScores.marketing,
+    subScores.software,
+    subScores.catalogo,
+  );
+  const reviewMultiplier = getReviewCountMultiplier(lead, config);
+  const ratingBonus = getRatingBonus(lead, config);
+  const prospectScore = Math.min(
+    100,
+    Math.floor(maxSubScore * contactabilityMultiplier(lead) * reviewMultiplier) + ratingBonus,
+  );
 
   return {
     business_quality_score: bqScore,
@@ -74,6 +96,7 @@ export function scoreLead(lead: Lead): ScoreResult {
       digital_gap: { total: dgScore, rules: dg.breakdown },
       systems_gap: { total: sgScore, rules: sg.breakdown },
       prospect: { formula: config.prospect_formula, total: prospectScore },
+      sub_scores: subScores,
     },
     systems_gap_breakdown: { total: sgScore, rules: sg.breakdown },
   };

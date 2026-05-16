@@ -1,5 +1,6 @@
 import { resolveField } from "./evaluator.js";
 import { getScoringConfig } from "./config.js";
+import { getReviewCountMultiplier, getRatingBonus } from "./review-multiplier.js";
 import type { Lead } from "../../shared/types.js";
 import type { BuyerTypeConfig, BuyerTypeScore } from "./types.js";
 
@@ -83,7 +84,11 @@ function computeBuyerScore(
     }
   }
 
-  const score = Math.max(0, Math.min(100, Math.round(base + adjustments)));
+  const cfg = getScoringConfig();
+  const reviewMultiplier = getReviewCountMultiplier(lead, cfg);
+  const ratingBonus = getRatingBonus(lead, cfg);
+  const rawScore = Math.round(base + adjustments);
+  const score = Math.max(0, Math.min(100, Math.round(rawScore * reviewMultiplier) + ratingBonus));
   return { buyer_type: buyerType, score, breakdown: { base, adjustments, applied_modifiers: modifiers } };
 }
 
