@@ -10,6 +10,8 @@ vi.mock("../../src/storage/runs.js", () => ({
 
 vi.mock("../../src/storage/leads.js", () => ({
   loadLeadsByRunId: vi.fn(),
+  loadLeadsBySource: vi.fn(),
+  loadAllPassedLeads: vi.fn(),
   updateLeadEnrichment: vi.fn(),
 }));
 
@@ -20,6 +22,8 @@ vi.mock("../../src/storage/vocabulary.js", () => ({
 vi.mock("../../src/storage/system-lists.js", () => ({
   loadAllRuntime: vi.fn(),
   detectAndSeedEmailProviders: vi.fn(),
+  retroactiveEmailCleanup: vi.fn(),
+  detectAndSeedHeuristicDomains: vi.fn(),
 }));
 
 vi.mock("../../src/modules/enrichment/index.js", () => ({
@@ -28,9 +32,9 @@ vi.mock("../../src/modules/enrichment/index.js", () => ({
 
 import { enrichCommand } from "../../src/cli/commands/enrich.js";
 import { getRunById, createEnrichmentRun, completeRun } from "../../src/storage/runs.js";
-import { loadLeadsByRunId, updateLeadEnrichment } from "../../src/storage/leads.js";
+import { loadLeadsByRunId, loadLeadsBySource, loadAllPassedLeads, updateLeadEnrichment } from "../../src/storage/leads.js";
 import { loadFilterWordsForNiche } from "../../src/storage/vocabulary.js";
-import { detectAndSeedEmailProviders, loadAllRuntime } from "../../src/storage/system-lists.js";
+import { detectAndSeedEmailProviders, loadAllRuntime, retroactiveEmailCleanup, detectAndSeedHeuristicDomains } from "../../src/storage/system-lists.js";
 import { enrichLead } from "../../src/modules/enrichment/index.js";
 
 const RUN_ID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
@@ -105,6 +109,7 @@ const baseRuntime = {
     menuKeywords: [] as string[],
     catalogKeywords: [] as string[],
     chatWidgets: [] as string[],
+    ecommercePlatforms: [] as string[],
   },
   mappings: {
     descriptorWords: new Map<string, string>(),
@@ -124,6 +129,10 @@ beforeEach(() => {
   vi.mocked(loadFilterWordsForNiche).mockResolvedValue(new Set());
   vi.mocked(loadAllRuntime).mockResolvedValue(baseRuntime);
   vi.mocked(detectAndSeedEmailProviders).mockResolvedValue(0);
+  vi.mocked(retroactiveEmailCleanup).mockResolvedValue(0);
+  vi.mocked(detectAndSeedHeuristicDomains).mockResolvedValue(0);
+  vi.mocked(loadLeadsBySource).mockResolvedValue([]);
+  vi.mocked(loadAllPassedLeads).mockResolvedValue([]);
 });
 
 describe("enrichCommand — vocabulary loading", () => {
@@ -269,20 +278,34 @@ describe("enrichCommand — vocabulary loading", () => {
   });
 });
 
-describe("enrichCommand — passed_filter scoping", () => {
-  it("loads only passed leads by default (no --all)", async () => {
+describe("enrichCommand — mode routing", () => {
+  it("--run: loads passed leads from run by default", async () => {
     vi.mocked(loadLeadsByRunId).mockResolvedValue([]);
 
     await enrichCommand({ run: RUN_ID, forceRefresh: false, withHeuristic: false, concurrency: 1 });
 
     expect(loadLeadsByRunId).toHaveBeenCalledWith(RUN_ID, { passedOnly: true });
+    expect(loadLeadsBySource).not.toHaveBeenCalled();
+    expect(loadAllPassedLeads).not.toHaveBeenCalled();
   });
 
-  it("loads all leads when --all is set", async () => {
-    vi.mocked(loadLeadsByRunId).mockResolvedValue([]);
+  it("--source: loads passed leads by source, not by run", async () => {
+    vi.mocked(loadLeadsBySource).mockResolvedValue([]);
 
-    await enrichCommand({ run: RUN_ID, forceRefresh: false, withHeuristic: false, concurrency: 1, all: true });
+    await enrichCommand({ source: "mintur", forceRefresh: false, withHeuristic: false, concurrency: 1 });
 
-    expect(loadLeadsByRunId).toHaveBeenCalledWith(RUN_ID, { passedOnly: false });
+    expect(loadLeadsBySource).toHaveBeenCalledWith("mintur", { passedOnly: true });
+    expect(loadLeadsByRunId).not.toHaveBeenCalled();
+    expect(loadAllPassedLeads).not.toHaveBeenCalled();
+  });
+
+  it("--all: loads all passed leads from DB", async () => {
+    vi.mocked(loadAllPassedLeads).mockResolvedValue([]);
+
+    await enrichCommand({ all: true, forceRefresh: false, withHeuristic: false, concurrency: 1 });
+
+    expect(loadAllPassedLeads).toHaveBeenCalled();
+    expect(loadLeadsByRunId).not.toHaveBeenCalled();
+    expect(loadLeadsBySource).not.toHaveBeenCalled();
   });
 });

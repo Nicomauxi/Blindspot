@@ -95,12 +95,9 @@ prospect_formula: "business_quality * digital_gap / 100"
     });
   });
 
-  it("throws when prospect_formula is not the expected literal", () => {
-    const yaml = VALID_YAML.replace(
-      '"business_quality * digital_gap / 100"',
-      '"wrong_formula"'
-    );
-    expect(() => parseConfig(yaml)).toThrow(/prospect_formula|Invalid literal/i);
+  it("throws when prospect_formula is absent", () => {
+    const yaml = VALID_YAML.replace('prospect_formula: "business_quality * digital_gap / 100"\n', "");
+    expect(() => parseConfig(yaml)).toThrow();
   });
 
   it("throws when a dimension has duplicate rule names", () => {
@@ -184,7 +181,7 @@ describe("getScoringConfig", () => {
       "whatsapp_derived",
       "whatsapp_missing",
     ]);
-    expect(config.prospect_formula).toBe("business_quality * digital_gap / 100");
+    expect(config.prospect_formula).toBe("max(sub_scores) * contactabilityMultiplier");
   });
 
   it("singleton: two calls return the same object reference", () => {

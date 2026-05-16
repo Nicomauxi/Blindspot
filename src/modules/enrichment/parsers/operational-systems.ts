@@ -29,8 +29,18 @@ const CHAT_WIDGET_PATTERNS = [
   "freshchat.com",
   "wchat.freshchat.com",
 ];
+const ECOMMERCE_PLATFORMS = [
+  "mercadopago.com/integrations",
+  "js.stripe.com",
+  "paypal.com/sdk",
+  "cdn.shopify.com",
+  "wp-content/plugins/woocommerce",
+  "d3ugyf5w97bob5.cloudfront.net",
+];
+const WHATSAPP_BUSINESS_PATTERNS = ["wa.me/", "api.whatsapp.com/send", "click.whatsapp.com"];
 
 export interface OperationalSystemsCtx {
+  bookingPlatforms?: readonly string[];
   reservationPlatforms?: readonly string[];
   deliveryPlatforms?: readonly string[];
   classBookingPlatforms?: readonly string[];
@@ -38,6 +48,7 @@ export interface OperationalSystemsCtx {
   menuKeywords?: readonly string[];
   catalogKeywords?: readonly string[];
   chatWidgetPatterns?: readonly string[];
+  ecommercePlatforms?: readonly string[];
 }
 
 function emptySignal(): OperationalSystemsSignal {
@@ -52,6 +63,8 @@ function emptySignal(): OperationalSystemsSignal {
     catalog_keywords: [],
     contact_form: false,
     chat_widget: false,
+    ecommerce_platforms: [],
+    whatsapp_web_link: false,
   };
 }
 
@@ -94,6 +107,8 @@ export function parseOperationalSystems(
       return path.endsWith(".pdf") && (path.includes("menu") || path.includes("carta"));
     });
 
+    const bookingPlatforms = ctx?.bookingPlatforms ?? BOOKING_PLATFORMS;
+    const ecommercePlatforms = ctx?.ecommercePlatforms ?? ECOMMERCE_PLATFORMS;
     const reservationPlatforms = ctx?.reservationPlatforms ?? RESERVATION_PLATFORMS;
     const deliveryPlatforms = ctx?.deliveryPlatforms ?? DELIVERY_PLATFORMS;
     const classBookingPlatforms = ctx?.classBookingPlatforms ?? CLASS_BOOKING_PLATFORMS;
@@ -113,7 +128,7 @@ export function parseOperationalSystems(
     );
 
     return {
-      booking_platforms: unique(presentPlatforms(urls, BOOKING_PLATFORMS)),
+      booking_platforms: unique(presentPlatforms(urls, bookingPlatforms)),
       reservation_platforms: unique(presentPlatforms(urls, reservationPlatforms)),
       delivery_platforms: unique(presentPlatforms(urls, deliveryPlatforms)),
       menu_links: unique(menu_links),
@@ -123,6 +138,10 @@ export function parseOperationalSystems(
       catalog_keywords,
       contact_form,
       chat_widget,
+      ecommerce_platforms: unique(presentPlatforms(urls, ecommercePlatforms)),
+      whatsapp_web_link: hrefs.some((href) =>
+        WHATSAPP_BUSINESS_PATTERNS.some((p) => href.includes(p))
+      ),
     };
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);

@@ -15,7 +15,15 @@ function breakdown(): ScoreBreakdown {
       ],
     },
     systems_gap: { total: 0, rules: [] },
-    prospect: { formula: "business_quality * digital_gap / 100", total: 46 },
+    prospect: { formula: "max(sub_scores) * contactabilityMultiplier", total: 46 },
+    sub_scores: {
+      web_nuevo: 45,
+      rediseno: 0,
+      marketing: 0,
+      software: 0,
+      catalogo: 0,
+      primary_offer: "web_nuevo",
+    },
   };
 }
 

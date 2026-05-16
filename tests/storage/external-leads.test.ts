@@ -76,6 +76,51 @@ describe("insertExternalLead", () => {
     expect(capturedPayload?.niche).toBe("other");
   });
 
+  it("popula canonical_fields.email cuando candidate.email está presente", async () => {
+    const returnedLead = { id: "lead-1", place_id: "mintur:42", name: "Hotel Ejemplo", canonical_fields: null };
+    const singleFn = vi.fn(async () => ({ data: returnedLead, error: null }));
+    const upsertTable = {
+      upsert: vi.fn(() => ({
+        select: vi.fn(() => ({ single: singleFn })),
+      })),
+    };
+    let updatePayload: Record<string, unknown> | null = null;
+    const updateEqFn = vi.fn(async () => ({ error: null }));
+    const updateFn = vi.fn((payload: Record<string, unknown>) => {
+      updatePayload = payload;
+      return { eq: updateEqFn };
+    });
+    const leadsUpdateTable = { update: updateFn };
+
+    supabaseRef.current = {
+      from: vi.fn()
+        .mockReturnValueOnce(upsertTable)
+        .mockReturnValueOnce(leadsUpdateTable),
+    };
+
+    await insertExternalLead(candidate({ email: "hotel@ejemplo.com" }));
+
+    expect(updateFn).toHaveBeenCalledOnce();
+    expect((updatePayload?.canonical_fields as { email: string })?.email).toBe("hotel@ejemplo.com");
+    expect(updateEqFn).toHaveBeenCalledWith("id", "lead-1");
+  });
+
+  it("omite UPDATE de canonical_fields cuando candidate.email es null", async () => {
+    const returnedLead = { id: "lead-1", place_id: "mintur:42", name: "Hotel Ejemplo", canonical_fields: null };
+    const singleFn = vi.fn(async () => ({ data: returnedLead, error: null }));
+    const upsertTable = {
+      upsert: vi.fn(() => ({
+        select: vi.fn(() => ({ single: singleFn })),
+      })),
+    };
+    const fromFn = vi.fn().mockReturnValueOnce(upsertTable);
+    supabaseRef.current = { from: fromFn };
+
+    await insertExternalLead(candidate({ email: null }));
+
+    expect(fromFn).toHaveBeenCalledTimes(1);
+  });
+
   it("propagates DB error", async () => {
     const singleFn = vi.fn(async () => ({ data: null, error: { message: "db error" } }));
     const upsertTable = {
@@ -86,6 +131,22 @@ describe("insertExternalLead", () => {
     supabaseRef.current = { from: vi.fn(() => upsertTable) };
 
     await expect(insertExternalLead(candidate())).rejects.toThrow("insertExternalLead failed: db error");
+  });
+
+  it("pasa extraTags al upsert cuando se proporcionan", async () => {
+    let capturedPayload: Record<string, unknown> | null = null;
+    const singleFn = vi.fn(async () => ({ data: { id: "lead-3" }, error: null }));
+    const upsertTable = {
+      upsert: vi.fn((payload: Record<string, unknown>) => {
+        capturedPayload = payload;
+        return { select: vi.fn(() => ({ single: singleFn })) };
+      }),
+    };
+    supabaseRef.current = { from: vi.fn(() => upsertTable) };
+
+    await insertExternalLead(candidate(), { extraTags: ["franchise-detected"] });
+
+    expect(capturedPayload?.tags).toEqual(["franchise-detected"]);
   });
 });
 

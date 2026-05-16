@@ -24,8 +24,9 @@ describe("parseOperationalSystems", () => {
         <a href="https://api.whatsapp.com/send?phone=59899123456">WhatsApp API</a>
       </body></html>
     `;
-
-    expect(parseOperationalSystems(html).chat_widget).toBe(false);
+    const result = parseOperationalSystems(html);
+    expect(result.chat_widget).toBe(false);
+    expect(result.whatsapp_web_link).toBe(true);
   });
 
   it("detects known chat widget platforms in scripts and hrefs", () => {
@@ -110,6 +111,24 @@ describe("parseOperationalSystems", () => {
       catalog_keywords: [],
       contact_form: false,
       chat_widget: false,
+      ecommerce_platforms: [],
+      whatsapp_web_link: false,
     });
+  });
+
+  it("detects MercadoPago e-commerce script", () => {
+    const html = `<html><body>
+      <script src="https://sdk.mercadopago.com/integrations/v1/web-payment-checkout.js"></script>
+    </body></html>`;
+    expect(parseOperationalSystems(html).ecommerce_platforms).toEqual(
+      expect.arrayContaining(["mercadopago.com/integrations"])
+    );
+  });
+
+  it("detects WhatsApp Business link as whatsapp_web_link", () => {
+    const html = `<html><body>
+      <a href="https://wa.me/59899123456">Escribinos</a>
+    </body></html>`;
+    expect(parseOperationalSystems(html).whatsapp_web_link).toBe(true);
   });
 });

@@ -78,28 +78,65 @@ export async function getRunById(runId: string): Promise<Run | null> {
   return (data as Run | null) ?? null;
 }
 
+const ENRICHMENT_SOURCE_SENTINEL = "__enrichment_source__";
+const ENRICHMENT_ALL_SENTINEL = "__enrichment_all__";
+
 export async function createEnrichmentRun(params: {
-  sourceRun: Run;
+  mode: "run" | "source" | "all";
+  sourceRun?: Run;
+  source?: string;
   forceRefresh: boolean;
   withHeuristic?: boolean;
   concurrency: number;
 }): Promise<Run> {
-  const { sourceRun, forceRefresh, withHeuristic, concurrency } = params;
+  const { mode, sourceRun, source, forceRefresh, withHeuristic, concurrency } = params;
+
+  let niche: string;
+  let location: string;
+  let profile: DiscoveryProfile;
+  let config: Record<string, unknown>;
+
+  if (mode === "run") {
+    const run = sourceRun!;
+    niche = run.niche;
+    location = run.location;
+    profile = run.profile;
+    config = {
+      command: "enrich",
+      mode: "run",
+      source_run_id: run.id,
+      force_refresh: forceRefresh,
+      with_heuristic: withHeuristic === true,
+      concurrency,
+    };
+  } else if (mode === "source") {
+    niche = ENRICHMENT_SOURCE_SENTINEL;
+    location = source!;
+    profile = "a";
+    config = {
+      command: "enrich",
+      mode: "source",
+      source: source!,
+      force_refresh: forceRefresh,
+      with_heuristic: withHeuristic === true,
+      concurrency,
+    };
+  } else {
+    niche = ENRICHMENT_ALL_SENTINEL;
+    location = ENRICHMENT_ALL_SENTINEL;
+    profile = "a";
+    config = {
+      command: "enrich",
+      mode: "all",
+      force_refresh: forceRefresh,
+      with_heuristic: withHeuristic === true,
+      concurrency,
+    };
+  }
+
   const { data, error } = await getSupabase()
     .from("runs")
-    .insert({
-      niche: sourceRun.niche,
-      location: sourceRun.location,
-      profile: sourceRun.profile,
-      config: {
-        command: "enrich",
-        source_run_id: sourceRun.id,
-        force_refresh: forceRefresh,
-        with_heuristic: withHeuristic === true,
-        concurrency,
-      },
-      status: "running",
-    })
+    .insert({ niche, location, profile, config, status: "running" })
     .select()
     .single();
 

@@ -22,6 +22,7 @@ export interface DiscoveryConfig {
   profiles: Record<string, ProfileConfig>;
   social_domains: string[];
   persist_rejected: boolean;
+  source_refresh?: Record<string, number> | undefined;
 }
 
 export interface FilterResult {
@@ -60,7 +61,7 @@ export interface ScoringRunStats {
 
 export interface EnrichmentRunStats extends RunStats {
   command: "enrich";
-  source_run_id: string;
+  source_run_id?: string;
   leads_processed: number;
   skipped_no_website: number;
   skipped_social_only: number;
@@ -239,6 +240,8 @@ export interface OperationalSystemsSignal {
   catalog_keywords: string[];
   contact_form: boolean;
   chat_widget: boolean;
+  ecommerce_platforms: string[];
+  whatsapp_web_link: boolean;
 }
 
 export type DigitalFootprintSkipped = {
@@ -250,6 +253,23 @@ export type DigitalFootprintSkipped = {
   directory_discovery?: DirectoryDiscovery;
   social_search?: SocialSearch;
 };
+
+export interface InferredStateField {
+  value: boolean;
+  confidence: number;
+  via: string[];
+}
+
+export interface InferredState {
+  has_reservations:     InferredStateField;
+  has_delivery:         InferredStateField;
+  has_online_catalog:   InferredStateField;
+  has_ecommerce:        InferredStateField;
+  has_pos:              InferredStateField;
+  has_chat_support:     InferredStateField;
+  digitalization_level: "none" | "basic" | "intermediate" | "advanced";
+  computed_at:          string;
+}
 
 export interface DigitalFootprintEnriched {
   skipped?: false;
@@ -297,6 +317,7 @@ export interface DigitalFootprintEnriched {
     age_years: number | null;
     error?: string;
   };
+  inferred_state?: InferredState;
 }
 
 export type DigitalFootprint = DigitalFootprintSkipped | DigitalFootprintEnriched;

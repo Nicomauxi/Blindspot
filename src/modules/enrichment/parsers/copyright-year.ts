@@ -8,7 +8,10 @@ export const OUTDATED_YEAR_THRESHOLD = 2020;
 const COPYRIGHT_CONTEXT = /(?:©|&copy;|copyright)\s*.{0,80}/gi;
 const YEAR = /\b(?:19|20)\d{2}\b/g;
 
-export function parseCopyrightYear(html: string): CopyrightYearSignal {
+export function parseCopyrightYear(
+  html: string,
+  threshold = OUTDATED_YEAR_THRESHOLD
+): CopyrightYearSignal {
   let year: number | null = null;
   const contexts = html.match(COPYRIGHT_CONTEXT) ?? [];
 
@@ -22,6 +25,6 @@ export function parseCopyrightYear(html: string): CopyrightYearSignal {
 
   return {
     year,
-    outdated: year !== null && year <= OUTDATED_YEAR_THRESHOLD,
+    outdated: year !== null && year <= threshold,
   };
 }

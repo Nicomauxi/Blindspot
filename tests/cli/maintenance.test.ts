@@ -4,6 +4,9 @@ const enrichCommand = vi.fn();
 const scoreCommand = vi.fn();
 const computeConcurrency = vi.fn();
 const logInfo = vi.fn();
+const mockGetDiscoveryConfig = vi.fn(() => ({
+  source_refresh: { google_places: 30 },
+}));
 
 vi.mock("../../src/cli/commands/enrich.js", () => ({ enrichCommand }));
 vi.mock("../../src/cli/commands/score.js", () => ({ scoreCommand }));
@@ -11,17 +14,40 @@ vi.mock("../../src/shared/ram.js", () => ({ computeConcurrency }));
 vi.mock("../../src/shared/logger.js", () => ({
   getLogger: () => ({ info: logInfo, error: vi.fn() }),
 }));
+vi.mock("../../src/modules/discovery/config.js", () => ({
+  getDiscoveryConfig: () => mockGetDiscoveryConfig(),
+  getSourceRefreshDays: (source: string, fallback = 30) =>
+    ({ google_places: 30, mintur: 90, osm: 90 } as Record<string, number>)[
+      source
+    ] ?? fallback,
+}));
 
-// Supabase mock: a single chainable query builder that is also a thenable.
-// All chaining methods return the same object; awaiting it resolves to
-// { data: mockQueryData, error: null } using the current value of the variable.
+// Supabase mock: two chainable query builders.
+// queryChain — used by queryStaleRuns (no .limit call)
+// limitChain — returned by queryChain.limit(1), used by hasStaleLeadsForSource
+
 let mockQueryData: Array<{ first_seen_run_id: string; niche: string }> = [];
+let mockLimitData: Array<unknown> = [];
+
+const limitChain: {
+  then: (
+    onfulfilled?: ((value: unknown) => unknown) | null,
+    onrejected?: ((reason: unknown) => unknown) | null
+  ) => Promise<unknown>;
+} = {
+  then: (onfulfilled, onrejected) =>
+    Promise.resolve({ data: mockLimitData, error: null }).then(
+      onfulfilled ?? undefined,
+      onrejected ?? undefined
+    ),
+};
 
 const queryChain: {
   select: ReturnType<typeof vi.fn>;
   eq: ReturnType<typeof vi.fn>;
   not: ReturnType<typeof vi.fn>;
   or: ReturnType<typeof vi.fn>;
+  limit: ReturnType<typeof vi.fn>;
   then: (
     onfulfilled?: ((value: unknown) => unknown) | null,
     onrejected?: ((reason: unknown) => unknown) | null
@@ -31,6 +57,7 @@ const queryChain: {
   eq: vi.fn(),
   not: vi.fn(),
   or: vi.fn(),
+  limit: vi.fn(),
   then: (onfulfilled, onrejected) =>
     Promise.resolve({ data: mockQueryData, error: null }).then(
       onfulfilled ?? undefined,
@@ -42,6 +69,7 @@ queryChain.select.mockReturnValue(queryChain);
 queryChain.eq.mockReturnValue(queryChain);
 queryChain.not.mockReturnValue(queryChain);
 queryChain.or.mockReturnValue(queryChain);
+queryChain.limit.mockReturnValue(limitChain);
 
 vi.mock("../../src/shared/supabase.js", () => ({
   getSupabase: () => ({ from: () => queryChain }),
@@ -53,6 +81,7 @@ describe("maintenanceCommandAction", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockQueryData = [];
+    mockLimitData = [];
     consoleLog = vi.spyOn(console, "log").mockImplementation(() => {});
     computeConcurrency.mockReturnValue({
       mode: "conservative",
@@ -62,11 +91,13 @@ describe("maintenanceCommandAction", () => {
     });
     enrichCommand.mockResolvedValue(undefined);
     scoreCommand.mockResolvedValue(undefined);
+    mockGetDiscoveryConfig.mockReturnValue({ source_refresh: { google_places: 30 } });
     // Restore chaining after clearAllMocks wipes call history
     queryChain.select.mockReturnValue(queryChain);
     queryChain.eq.mockReturnValue(queryChain);
     queryChain.not.mockReturnValue(queryChain);
     queryChain.or.mockReturnValue(queryChain);
+    queryChain.limit.mockReturnValue(limitChain);
   });
 
   afterEach(() => {
@@ -85,7 +116,7 @@ describe("maintenanceCommandAction", () => {
     await maintenanceCommandAction({ dryRun: true });
 
     expect(consoleLog).toHaveBeenCalledWith(
-      "Found 2 run(s) with stale/missing enrichment"
+      "Found 2 run(s) with stale/missing enrichment (Google Places)"
     );
     expect(enrichCommand).not.toHaveBeenCalled();
     expect(scoreCommand).not.toHaveBeenCalled();
@@ -166,8 +197,95 @@ describe("maintenanceCommandAction", () => {
 
     expect(enrichCommand).not.toHaveBeenCalled();
     expect(scoreCommand).not.toHaveBeenCalled();
-    expect(consoleLog).toHaveBeenCalledWith(
-      "No stale runs found. Nothing to do."
-    );
+    expect(consoleLog).toHaveBeenCalledWith("No stale leads found. Nothing to do.");
+  });
+
+  describe("external source maintenance", () => {
+    it("runs enrichCommand for source when stale leads exist", async () => {
+      mockGetDiscoveryConfig.mockReturnValue({
+        source_refresh: { google_places: 30, mintur: 90 },
+      });
+      mockQueryData = []; // no GP stale runs
+      mockLimitData = [{ id: "lead-1" }]; // mintur has stale leads
+
+      const { maintenanceCommandAction } = await import(
+        "../../src/cli/commands/maintenance.js"
+      );
+      await maintenanceCommandAction({});
+
+      expect(enrichCommand).toHaveBeenCalledWith(
+        expect.objectContaining({ source: "mintur", withHeuristic: false })
+      );
+      expect(scoreCommand).toHaveBeenCalledTimes(1);
+    });
+
+    it("skips source when no stale leads", async () => {
+      mockGetDiscoveryConfig.mockReturnValue({
+        source_refresh: { google_places: 30, mintur: 90 },
+      });
+      mockQueryData = [];
+      mockLimitData = []; // mintur has no stale leads
+
+      const { maintenanceCommandAction } = await import(
+        "../../src/cli/commands/maintenance.js"
+      );
+      await maintenanceCommandAction({});
+
+      expect(enrichCommand).not.toHaveBeenCalled();
+      expect(consoleLog).toHaveBeenCalledWith("No stale leads found. Nothing to do.");
+    });
+
+    it("dry-run lists external sources with stale leads", async () => {
+      mockGetDiscoveryConfig.mockReturnValue({
+        source_refresh: { google_places: 30, mintur: 90, osm: 90 },
+      });
+      mockQueryData = [];
+      mockLimitData = [{ id: "lead-1" }]; // both mintur and osm are stale
+
+      const { maintenanceCommandAction } = await import(
+        "../../src/cli/commands/maintenance.js"
+      );
+      await maintenanceCommandAction({ dryRun: true });
+
+      expect(consoleLog).toHaveBeenCalledWith(
+        expect.stringContaining("External sources with stale leads:")
+      );
+      expect(enrichCommand).not.toHaveBeenCalled();
+    });
+
+    it("no-op when no stale runs AND no stale external sources", async () => {
+      mockGetDiscoveryConfig.mockReturnValue({
+        source_refresh: { google_places: 30, mintur: 90 },
+      });
+      mockQueryData = [];
+      mockLimitData = [];
+
+      const { maintenanceCommandAction } = await import(
+        "../../src/cli/commands/maintenance.js"
+      );
+      await maintenanceCommandAction({});
+
+      expect(enrichCommand).not.toHaveBeenCalled();
+      expect(scoreCommand).not.toHaveBeenCalled();
+      expect(consoleLog).toHaveBeenCalledWith("No stale leads found. Nothing to do.");
+    });
+
+    it("uses --stale-days as override for all sources when provided", async () => {
+      mockGetDiscoveryConfig.mockReturnValue({
+        source_refresh: { google_places: 30, mintur: 90 },
+      });
+      mockQueryData = [];
+      mockLimitData = [{ id: "lead-1" }];
+
+      const { maintenanceCommandAction } = await import(
+        "../../src/cli/commands/maintenance.js"
+      );
+      await maintenanceCommandAction({ staleDays: 14 });
+
+      // With staleDays=14 as override, mintur uses 14 days instead of 90
+      expect(enrichCommand).toHaveBeenCalledWith(
+        expect.objectContaining({ source: "mintur" })
+      );
+    });
   });
 });

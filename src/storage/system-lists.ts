@@ -21,6 +21,7 @@ export interface RuntimeLists {
   foreignEmailTlds:       ReadonlySet<string>;
   foreignGeoTerms:        readonly string[];
   foreignPhonePrefixes:   readonly string[];
+  franchiseNames:         ReadonlySet<string>;
 }
 
 export interface RuntimePatterns {
@@ -37,6 +38,7 @@ export interface RuntimePatterns {
   classBookingPlatforms: readonly string[];
   appStorePlatforms:     readonly { pattern: string; matchType: string }[];
   chatWidgetPatterns:    readonly string[];
+  ecommercePlatforms:    readonly string[];
 }
 
 export interface RuntimeMappings {
@@ -102,6 +104,13 @@ function fallbackLists(): RuntimeLists {
       "santiago de chile", "sao paulo", "são paulo", "tehuacan", "tehuacán",
     ],
     foreignPhonePrefixes: ["+52", "+54", "+55", "+56", "+57", "+51", "+591", "+595"],
+    franchiseNames: new Set([
+      "Abitab", "Redpagos", "Hertz Rent A Car", "McDonald's", "Subway",
+      "KFC", "Burger King", "Starbucks", "Pizza Hut", "Farmashop", "Farmacenter",
+      "Tienda Inglesa", "Devoto", "Disco", "Ta-Ta", "Ancap", "Antel", "UTE", "OSE",
+      "Pronto!", "OCA", "Creditel", "COT", "Cometa", "El Rápido", "COPSA",
+      "Cinépolis", "Cinemark", "Macro Mercado", "Multiahorro",
+    ]),
   };
 }
 
@@ -122,6 +131,14 @@ function fallbackPatterns(): RuntimePatterns {
     "cdn.livechatinc.com", "zendesk.com/embeddable_framework",
     "freshchat.com", "wchat.freshchat.com",
   ];
+  const ecommerce = [
+    "mercadopago.com/integrations",
+    "js.stripe.com",
+    "paypal.com/sdk",
+    "cdn.shopify.com",
+    "wp-content/plugins/woocommerce",
+    "d3ugyf5w97bob5.cloudfront.net",
+  ];
 
   return {
     booking,
@@ -137,6 +154,7 @@ function fallbackPatterns(): RuntimePatterns {
     classBookingPlatforms: classBooking,
     appStorePlatforms: appStore,
     chatWidgetPatterns: chatWidgets,
+    ecommercePlatforms: ecommerce,
   };
 }
 
@@ -283,6 +301,10 @@ export async function loadRuntimeLists(): Promise<RuntimeLists> {
       foreignEmailTlds:       new Set(byName("foreign_tlds")),
       foreignGeoTerms:        byName("foreign_geo_terms"),
       foreignPhonePrefixes:   byName("foreign_phone_prefixes"),
+      franchiseNames: (() => {
+        const raw = byName("franchise_names");
+        return raw.length > 0 ? new Set(raw) : fallbackLists().franchiseNames;
+      })(),
     };
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -325,6 +347,7 @@ export async function loadRuntimePatterns(): Promise<RuntimePatterns> {
     const menuKeywords = keywordPatterns("menu_keyword");
     const catalogKeywords = keywordPatterns("catalog_keyword");
     const chatWidgets = substringPatterns("chat_widget");
+    const ecommerce = substringPatterns("ecommerce");
 
     return {
       booking,
@@ -340,6 +363,7 @@ export async function loadRuntimePatterns(): Promise<RuntimePatterns> {
       classBookingPlatforms: classBooking,
       appStorePlatforms: appStore,
       chatWidgetPatterns: chatWidgets,
+      ecommercePlatforms: ecommerce.length > 0 ? ecommerce : fallbackPatterns().ecommercePlatforms,
     };
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -663,6 +687,37 @@ export async function detectAndSeedHeuristicDomains(minLeadCount = 2): Promise<n
     return 0;
   }
 }
+
+/*
+  Seed inicial para franchise_names — ejecutar una vez en la DB:
+
+  INSERT INTO system_lists (list_name, value, scope, source, confidence, reason, enabled) VALUES
+    ('franchise_names', 'Abitab', NULL, 'seed', 1.0, 'cadena financiera UY', true),
+    ('franchise_names', 'Redpagos', NULL, 'seed', 1.0, 'cadena financiera UY', true),
+    ('franchise_names', 'Hertz Rent A Car', NULL, 'seed', 1.0, 'rentadora internacional', true),
+    ('franchise_names', 'McDonald''s', NULL, 'seed', 1.0, 'cadena fast food', true),
+    ('franchise_names', 'Subway', NULL, 'seed', 1.0, 'cadena fast food', true),
+    ('franchise_names', 'KFC', NULL, 'seed', 1.0, 'cadena fast food', true),
+    ('franchise_names', 'Burger King', NULL, 'seed', 1.0, 'cadena fast food', true),
+    ('franchise_names', 'Starbucks', NULL, 'seed', 1.0, 'cadena café', true),
+    ('franchise_names', 'Farmashop', NULL, 'seed', 1.0, 'cadena farmacia UY', true),
+    ('franchise_names', 'Farmacenter', NULL, 'seed', 1.0, 'cadena farmacia UY', true),
+    ('franchise_names', 'Tienda Inglesa', NULL, 'seed', 1.0, 'supermercado UY', true),
+    ('franchise_names', 'Devoto', NULL, 'seed', 1.0, 'supermercado UY', true),
+    ('franchise_names', 'Disco', NULL, 'seed', 1.0, 'supermercado UY', true),
+    ('franchise_names', 'Ta-Ta', NULL, 'seed', 1.0, 'supermercado UY', true),
+    ('franchise_names', 'Ancap', NULL, 'seed', 1.0, 'estación de servicio estatal UY', true),
+    ('franchise_names', 'Pronto!', NULL, 'seed', 1.0, 'cadena financiera UY', true),
+    ('franchise_names', 'OCA', NULL, 'seed', 1.0, 'cadena financiera UY', true),
+    ('franchise_names', 'Creditel', NULL, 'seed', 1.0, 'cadena financiera UY', true),
+    ('franchise_names', 'COT', NULL, 'seed', 1.0, 'transporte interurbano UY', true),
+    ('franchise_names', 'Cometa', NULL, 'seed', 1.0, 'transporte interurbano UY', true),
+    ('franchise_names', 'El Rápido', NULL, 'seed', 1.0, 'transporte interurbano UY', true),
+    ('franchise_names', 'COPSA', NULL, 'seed', 1.0, 'transporte interurbano UY', true),
+    ('franchise_names', 'Multiahorro', NULL, 'seed', 1.0, 'supermercado UY', true),
+    ('franchise_names', 'Macro Mercado', NULL, 'seed', 1.0, 'supermercado UY', true)
+  ON CONFLICT DO NOTHING;
+*/
 
 function extractEmailDomain(email: unknown): string | null {
   if (typeof email !== "string") return null;

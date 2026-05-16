@@ -1,7 +1,11 @@
 import { MINTURProvider } from "../../modules/discovery/providers/mintur.js";
-import { findCrossSourceMatch } from "../../modules/discovery/deduplication.js";
+import { OSMProvider } from "../../modules/discovery/providers/osm.js";
+import { YeluProvider } from "../../modules/discovery/providers/yelu.js";
+import { PedidosYaProvider } from "../../modules/discovery/providers/pedidosya.js";
+import { findCrossSourceMatch, isFranchise } from "../../modules/discovery/deduplication.js";
 import { loadAllLeads } from "../../storage/leads.js";
 import { addCorroboratingSource, insertExternalLead } from "../../storage/external-leads.js";
+import { loadRuntimeLists } from "../../storage/system-lists.js";
 
 export interface DiscoverExternalOptions {
   source: string;
@@ -15,6 +19,12 @@ export async function discoverExternalCommand(opts: DiscoverExternalOptions): Pr
   let provider;
   if (opts.source === "mintur") {
     provider = new MINTURProvider();
+  } else if (opts.source === "osm") {
+    provider = new OSMProvider();
+  } else if (opts.source === "yelu") {
+    provider = new YeluProvider();
+  } else if (opts.source === "pedidosya") {
+    provider = new PedidosYaProvider();
   } else {
     throw new Error(`Unknown provider source: ${opts.source}`);
   }
@@ -25,6 +35,7 @@ export async function discoverExternalCommand(opts: DiscoverExternalOptions): Pr
   }
 
   const allLeads = await loadAllLeads();
+  const runtimeLists = await loadRuntimeLists();
 
   let inserted = 0;
   let corroborated = 0;
@@ -35,7 +46,14 @@ export async function discoverExternalCommand(opts: DiscoverExternalOptions): Pr
       await addCorroboratingSource(match.id, candidate, { dryRun: opts.dryRun });
       corroborated++;
     } else {
-      await insertExternalLead(candidate, { dryRun: opts.dryRun });
+      const franchiseTags = isFranchise(candidate.name, runtimeLists.franchiseNames)
+        ? ["franchise-detected"]
+        : [];
+      const lead = await insertExternalLead(candidate, {
+        dryRun: opts.dryRun,
+        extraTags: franchiseTags,
+      });
+      if (lead) allLeads.push(lead);
       inserted++;
     }
   }
