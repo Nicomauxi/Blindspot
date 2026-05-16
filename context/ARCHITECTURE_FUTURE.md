@@ -137,6 +137,8 @@ Si `lead_filter` es null (admin), el CM ve todos los leads.
 
 | Endpoint | admin | cm |
 |----------|:-----:|:--:|
+| POST /auth/login | 🌐 público | 🌐 público |
+| POST /auth/refresh | 🌐 público | 🌐 público |
 | GET /api/v1/leads (filtrado por lead_filter) | ✅ todos | ✅ su filtro |
 | GET /api/v1/leads/:id | ✅ | ✅ si pasa su filtro |
 | PATCH /api/v1/leads/:id/contact | ✅ | ✅ |
@@ -149,11 +151,19 @@ Si `lead_filter` es null (admin), el CM ve todos los leads.
 | POST /api/v1/pipeline/run | ✅ | ❌ |
 | GET /api/v1/discovery/jobs | ✅ | ❌ |
 | POST /api/v1/discovery/jobs | ✅ | ❌ |
-| GET+POST /api/v1/users | ✅ | ❌ |
+| GET /api/v1/users | ✅ | ❌ |
+| POST /api/v1/users | ✅ | ❌ |
+| PATCH /api/v1/users/:id | ✅ | ❌ |
 | GET /api/v1/campaigns | ✅ todas | ✅ solo propias |
 | POST /api/v1/campaigns | ✅ | ✅ (user_id = suyo) |
 | GET /api/v1/campaigns/:id/stats | ✅ | ✅ solo propia |
-| GET /api/v1/health | ✅ público | ✅ público |
+| GET /api/v1/health | 🌐 público | 🌐 público |
+
+**`POST /auth/login`**: `body: { email, password }` → `{ token, user: { id, email, role, lead_filter } }`. Sin JWT — este endpoint lo emite.
+
+**`POST /auth/refresh`**: `body: { token }` (token válido o recién expirado, hasta 7 días desde emisión) → `{ token }` nuevo con 24h más. El CM no necesita re-autenticarse si usa la app diariamente. Si el token tiene más de 7 días → 401, re-login.
+
+**Nota — CM y su propia contraseña:** los CMs no tienen endpoint para cambiar su propia contraseña (decisión de diseño: uso interno, admin lo gestiona via `PATCH /api/v1/users/:id`). Si se requiere auto-servicio en el futuro, agregar `PATCH /api/v1/users/me` con body `{ current_password, new_password }` limitado al usuario autenticado.
 
 ---
 
@@ -191,9 +201,13 @@ PATCH /api/v1/leads/:id/contact
      body: { contacted_at, channel, notes }
 
 GET  /api/v1/outreach?status=pending,responded
-POST /api/v1/outreach  body: { lead_id, channel, offer_type?, offer_text? }
+POST /api/v1/outreach  body: { lead_id, channel, offer_type, offer_package? }
+     → offer_package: { text: string, source_llm: string|null, generated_at: string }
+     → NO usar offer_text como campo separado — todo va dentro de offer_package
 PATCH /api/v1/outreach/:id  body: { status, outcome, service_sold, price_sold, notes }
 POST /api/v1/outreach/generate-offer  body: { lead_id, offer_type?, channel }
+     → En Fase API: stub que devuelve template fijo (OfferPackage)
+     → En Fase 26: reemplaza el stub con lógica LLM real
 
 GET  /api/v1/campaigns
 POST /api/v1/campaigns  body: { name, segment_filter }
@@ -223,6 +237,22 @@ GET  /api/v1/pipeline/runs/active
 GET  /api/v1/pipeline/runs/:id
 GET  /api/v1/pipeline/runs/:id/log?since=<iso>
 
+POST /auth/login   body: { email, password }
+     → 200: { token: string, user: { id, email, role, lead_filter } }
+     → 401: credenciales incorrectas | cuenta inactiva
+POST /auth/refresh body: { token: string }
+     → 200: { token: string } (nuevo token 24h) si el token tiene < 7 días desde emisión
+     → 401: token expirado > 7 días — requiere re-login
+
+GET  /api/v1/users
+     → [{ id, email, role, lead_filter, active, last_login_at, created_at }]
+     → cursor-based: ?limit=50&cursor=<id>
+     → Solo admin. Response: { data: User[], next_cursor: string|null, total: number }
+POST /api/v1/users body: { email, password, role, lead_filter? }
+     → 201: { id, email, role } — crea cuenta CM, password se hashea internamente (bcrypt cost 12)
+PATCH /api/v1/users/:id body: { password?, active?, lead_filter?, role? }
+     → Solo admin. Si incluye password → re-hashea (bcrypt cost 12)
+
 GET  /api/v1/health
 ```
 
@@ -249,6 +279,7 @@ SELECT
   (l.inferred_state->'has_reservations'->>'value')::boolean AS has_reservations,
   l.data_confidence_score,
   l.contact_reliability_score,
+  l.contact_ready,
   l.contacted_at, l.created_at,
   lbs_top.buyer_type AS top_buyer_type,
   lbs_top.score      AS top_buyer_score
@@ -529,8 +560,13 @@ Cuando un lead tiene múltiples fuentes, `canonical_fields` debe ser el resultad
   score_breakdown: {
     sub_scores, primary_offer, pitch_hook,
     urgency_signal, contact_tier,
-    source_quality_bonus, contactability_multiplier,
-    review_multiplier, rating_bonus
+    source_quality_bonus,
+    commercial_breadth,
+    business_quality_pts,
+    accessibility_factor,
+    timing_factor,
+    urgency_bonus,
+    inferred_state_summary
   }
 ```
 
@@ -562,13 +598,15 @@ Hoy `passed_filter=true` significa cosas diferentes según la fuente:
 Diseño objetivo: agregar `contact_ready: boolean` y `contacted_by` como campos derivados en `leads`.
 
 ```
-contact_ready = (contact_tier IN ('A', 'B', 'C'))
-             AND (prospect_score >= 30 OR buyer_type_score_max >= 50)
+contact_ready = contact_tier IN ('A','B','C')
+             AND prospect_score >= 30
              AND NOT franchise_detected
 ```
 
+**Definición canónica** (no hay condición `OR buyer_type_score_max >= 50` — se descartó por complejidad: buyer_type_scores no siempre están disponibles en el momento del upsert, y `prospect_score >= 30` ya filtra leads sin valor comercial real).
+
 ```sql
--- Migración para leads
+-- Migración para leads (Fase 22-pre)
 ALTER TABLE leads ADD COLUMN contact_ready boolean;
 -- NO usar GENERATED ALWAYS AS: la expresión mezcla JSONB (score_breakdown->>'contact_tier'),
 -- integer (prospect_score) y array (tags) — puede fallar en Supabase según versión de PostgreSQL.
@@ -1066,9 +1104,17 @@ CREATE TABLE lead_outreach (
   campaign_id   uuid REFERENCES outreach_campaigns(id),  -- null = sin campaña
   
   -- Oferta generada
-  offer_type    text NOT NULL,              -- 'web_nuevo' | 'delivery_propio' | etc.
-  channel       text NOT NULL,             -- 'email' | 'whatsapp' | 'phone'
-  offer_package jsonb,                     -- OfferPackage completo — nullable: permite logging rápido sin oferta
+  offer_type    text NOT NULL CHECK (offer_type IN (
+                  'web_nuevo','rediseno','marketing','software','catalogo',
+                  'contacto_directo','delivery_propio','catalogo_digital','reservas_online'
+                )),
+  -- Nota: offer_type ≠ primary_offer. primary_offer es el gap del lead ('web_nuevo',etc.).
+  -- offer_type es lo que el agente ofrece — puede incluir 'delivery_propio' y 'reservas_online'
+  -- que son buyer_types convertidos en propuestas concretas de venta.
+  channel       text NOT NULL CHECK (channel IN ('email','whatsapp','phone')),
+  offer_package jsonb,
+  -- OfferPackage completo: { text: string, source_llm: string|null, generated_at: string }
+  -- nullable: permite registrar un contacto sin oferta generada formalmente
   
   -- Estado del pipeline
   status        text NOT NULL DEFAULT 'pending',
@@ -1238,15 +1284,14 @@ CRON: cada domingo 03:00
 ### API de discovery jobs
 
 ```
-GET  /api/discovery/jobs            — lista jobs con estado
-POST /api/discovery/jobs            — crear nuevo job (encola)
-PATCH /api/discovery/jobs/:id       — pause/resume/cancel
-GET  /api/discovery/suggestions     — zonas sugeridas (gap analysis)
-GET  /api/discovery/coverage        — mapa de cobertura por zona+fuente
-POST /api/discovery/jobs/:id/run    — ejecutar job inmediatamente
+GET  /api/v1/discovery/jobs            — lista jobs con estado
+POST /api/v1/discovery/jobs            — crear nuevo job (encola, src/ lo ejecuta via poll)
+PATCH /api/v1/discovery/jobs/:id       — pause/resume/cancel
+GET  /api/v1/discovery/suggestions     — zonas sugeridas (gap analysis)
+GET  /api/v1/discovery/coverage        — mapa de cobertura por zona+fuente
 ```
 
-El backend de cada job llama el mismo código que el CLI (`discover-external`, `enrich --source`, `score --source`) via `execa` o equivalente, capturando stdout para el progress bar.
+**Ejecución de jobs — modelo correcto:** `api/` solo escribe el registro en `discovery_jobs` con `status='queued'`. `src/` (core pipeline) pollea `discovery_jobs WHERE status='queued'` cada 30s y ejecuta el job. `api/` NUNCA llama código de discovery ni usa execa — viola la separación de procesos. El progress bar de la UI consulta `GET /api/v1/discovery/jobs/:id` que lee el campo `progress` que `src/` actualiza en la DB mientras ejecuta.
 
 ---
 
@@ -1557,17 +1602,17 @@ blindspot report --run <uuid> --format csv|html|md|all
 
 **Diseño objetivo (UI):**
 ```
-GET /api/leads?contact_tier=A,B&prospect_score_gte=40&niche=restaurant
+GET /api/v1/leads?contact_tier=A,B&prospect_score_gte=40&niche=restaurant
   → paginado (cursor-based, 50/página)
   → campos del LeadCard contract (sin joins)
   → sort: prospect_score DESC, urgency_signal DESC
 
-GET /api/leads/:id
+GET /api/v1/leads/:id
   → lead completo con score_breakdown expandido
   → buyer_type_scores ordenados por score DESC
   → corroborating_sources con labels
 
-PATCH /api/leads/:id/outreach
+PATCH /api/v1/leads/:id/contact
   → { contacted_at, channel, notes }
   → actualiza estado de outreach
 ```
@@ -1762,6 +1807,102 @@ async function jobWatcher() {
 **Abort y pause:** `blindspot-api` escribe `pipeline_runs.abort_requested = true`. `blindspot` verifica este flag entre cada lead procesado y termina limpiamente si está activo.
 
 **Regla absoluta:** `blindspot-api` nunca importa módulos de `blindspot`. Si necesita saber si el pipeline está corriendo, lee `pipeline_runs WHERE status='running'`. Si necesita el resultado, lee `leads`. Nunca invoca código de scoring o discovery directamente.
+
+---
+
+### Schema completo — `pipeline_runs`
+
+```sql
+CREATE TABLE pipeline_runs (
+  id               uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  created_at       timestamptz DEFAULT now(),
+  started_at       timestamptz,
+  completed_at     timestamptz,
+
+  -- Control
+  status           text NOT NULL DEFAULT 'pending',
+  -- 'pending' | 'running' | 'completed' | 'failed' | 'partial' | 'aborted'
+  triggered_by     text NOT NULL DEFAULT 'manual',
+  -- 'manual' | 'cron' | 'startup-recovery' | 'api'
+  abort_requested  boolean DEFAULT false,
+  dashboard_stale  boolean DEFAULT false,  -- true si el run falló a mitad del refresh
+
+  -- Config usada en este run
+  config_snapshot  jsonb,   -- copia de pipeline_config al momento de iniciar
+  overrides        jsonb,   -- overrides opcionales del POST /pipeline/run
+
+  -- Resultados por fase
+  phase_results    jsonb,
+  -- {
+  --   refresh:   { leads_processed: N, by_source: {gp: N, mintur: N, ...}, duration_ms: N },
+  --   discovery: { jobs_run: N, leads_new: N, leads_corroborated: N },
+  --   enrich:    { leads_processed: N, duration_ms: N },
+  --   score:     { leads_scored: N, new_hot: N, score_up_15: N, score_down_15: N }
+  -- }
+
+  -- Log para el monitor de UI
+  log_lines        jsonb DEFAULT '[]',
+  -- [{ ts: "ISO", msg: "texto", level: "info"|"warn"|"error" }, ...]
+
+  -- Invariantes post-run
+  invariant_details jsonb,
+  -- { passed_not_enriched: 0, tags_contradictorios: 0, passed_sin_score: 0, contact_tier_x_hot: 0 }
+
+  -- Notificaciones
+  webhook_status   text DEFAULT 'not_configured'
+  -- 'not_configured' | 'sent' | 'failed'
+);
+
+CREATE INDEX pipeline_runs_status ON pipeline_runs(status);
+CREATE INDEX pipeline_runs_created_at ON pipeline_runs(created_at DESC);
+```
+
+---
+
+### Schema completo — `pipeline_config`
+
+```sql
+CREATE TABLE pipeline_config (
+  id                    uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  updated_at            timestamptz DEFAULT now(),
+
+  -- Schedule
+  enabled               boolean DEFAULT false,
+  cron_expression       text DEFAULT '0 2 * * 0',  -- domingos 02:00
+  scheduled_for         timestamptz,               -- próxima ejecución calculada al guardar
+  last_completed_at     timestamptz,               -- última ejecución completada OK
+
+  -- Recursos
+  cpu_budget            text DEFAULT 'balanced',   -- 'conservative'|'balanced'|'aggressive'
+  timeout_per_lead_sec  integer DEFAULT 120,
+  max_retries           integer DEFAULT 2,
+
+  -- Config por fase (jsonb para flexibilidad sin migraciones adicionales)
+  phases                jsonb DEFAULT '{
+    "refresh":   { "enabled": true,  "sources": ["google_places","mintur","yelu","osm"], "priority_tiers_first": true },
+    "discovery": { "enabled": true,  "max_jobs": 5 },
+    "enrich":    { "enabled": true,  "with_heuristic": false, "concurrency": 5 },
+    "score":     { "enabled": true,  "recalculate_buyer_types": true }
+  }'::jsonb,
+
+  -- Presupuesto Google Places
+  google_places_budget_total     numeric(8,2) DEFAULT 200.00,
+  google_places_budget_spent     numeric(8,2) DEFAULT 0.00,
+  google_places_alert_threshold  numeric(8,2) DEFAULT 10.00,
+
+  -- Notificaciones
+  notify_webhook_url     text,
+  notify_webhook_secret  text,
+  notify_webhook_events  text[] DEFAULT ARRAY['run_completed','new_hot_leads']
+);
+
+-- Solo existe una fila — singleton pattern
+-- Seed inicial:
+INSERT INTO pipeline_config DEFAULT VALUES;
+
+CREATE TRIGGER pipeline_config_updated_at BEFORE UPDATE ON pipeline_config
+  FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+```
 
 ---
 
@@ -2754,33 +2895,33 @@ CREATE INDEX pipeline_runs_created_at ON pipeline_runs(created_at DESC);
 ```typescript
 // src/api/routes/pipeline.ts
 
-GET  /api/pipeline/config         → PipelineConfig desde tabla pipeline_config
-PUT  /api/pipeline/config         → guardar config, reconfigurar cron en memoria
-PATCH /api/pipeline/config        → actualización parcial
+GET  /api/v1/pipeline/config         → PipelineConfig desde tabla pipeline_config
+PUT  /api/v1/pipeline/config         → guardar config, reconfigurar cron en memoria
+PATCH /api/v1/pipeline/config        → actualización parcial
 
-POST /api/pipeline/run
+POST /api/v1/pipeline/run
      body: { overrides?: Partial<PhaseConfig & { cpu_budget, phases }> }
      → inserta pipeline_runs row (status='queued'), dispara ejecución en background
      → responde { run_id } inmediatamente
 
-POST /api/pipeline/run/dry
+POST /api/v1/pipeline/run/dry
      body: { overrides? }
      → calcula qué haría: cuántos leads refreshearía, qué jobs discovery correría
      → responde { plan: { refresh_count, discovery_jobs, enrich_estimate, duration_estimate } }
 
-POST /api/pipeline/abort          → marca run activo como 'aborting', espera al lead actual
-POST /api/pipeline/pause-phase
+POST /api/v1/pipeline/abort          → marca run activo como 'aborting', espera al lead actual
+POST /api/v1/pipeline/pause-phase
      body: { phase: 1|2|3|4 }    → pausa la fase, continúa con la siguiente al retomar
 
-GET  /api/pipeline/runs?status=completed,failed&limit=20&cursor=<id>
-GET  /api/pipeline/runs/active    → run con status='running', null si no hay
-GET  /api/pipeline/runs/:id       → run completo con phase_results
-GET  /api/pipeline/runs/:id/log?since=<iso> → log_lines nuevas desde timestamp
+GET  /api/v1/pipeline/runs?status=completed,failed&limit=20&cursor=<id>
+GET  /api/v1/pipeline/runs/active    → run con status='running', null si no hay
+GET  /api/v1/pipeline/runs/:id       → run completo con phase_results
+GET  /api/v1/pipeline/runs/:id/log?since=<iso> → log_lines nuevas desde timestamp
 ```
 
 ### Configuración del cron en el servidor
 
-El cron se configura en memoria al arrancar el servidor API. Si `pipeline_config.enabled=true`, registra el job con la expresión cron guardada. Cuando el frontend actualiza la config vía `PUT /api/pipeline/config`, el servidor recalcula y reregistra el cron job en memoria sin reiniciar.
+El cron se configura en memoria al arrancar el servidor API. Si `pipeline_config.enabled=true`, registra el job con la expresión cron guardada. Cuando el frontend actualiza la config vía `PUT /api/v1/pipeline/config`, el servidor recalcula y reregistra el cron job en memoria sin reiniciar.
 
 ```typescript
 // src/api/pipeline/scheduler.ts

@@ -79,7 +79,7 @@ El proyecto `blindspot` expone estos endpoints. El frontend solo consume — no 
 ### Leads
 
 ```
-GET  /api/leads
+GET  /api/v1/leads
      ?contact_tier=A,B,C
      &prospect_score_gte=40
      &niche=restaurant
@@ -91,12 +91,12 @@ GET  /api/leads
      &limit=50&cursor=<id>
      → LeadCard[] paginado (cursor-based)
 
-GET  /api/leads/:id
+GET  /api/v1/leads/:id
      → Lead completo con score_breakdown expandido
        + buyer_type_scores ordenados por score DESC
        + corroborating_sources con labels
 
-PATCH /api/leads/:id/contact
+PATCH /api/v1/leads/:id/contact
      body: { contacted_at, channel, notes }
      → actualiza estado de outreach en leads.contacted_at
 ```
@@ -104,86 +104,88 @@ PATCH /api/leads/:id/contact
 ### Outreach
 
 ```
-GET  /api/outreach
+GET  /api/v1/outreach
      ?status=pending,responded
      &order=created_at:desc
      → LeadOutreach[]
 
-POST /api/outreach
-     body: { lead_id, channel, offer_type?, offer_text?, offer_source? }
+POST /api/v1/outreach
+     body: { lead_id, channel, offer_type, offer_package? }
+     → offer_package: { text: string, source_llm: string|null, generated_at: string }
+     → NO usar offer_text — la oferta va dentro de offer_package.text
      → crea registro en lead_outreach
 
-PATCH /api/outreach/:id
+PATCH /api/v1/outreach/:id
      body: { status, responded, outcome, lost_reason, service_sold, price_sold, notes }
      → actualiza estado del outreach
 
-POST /api/outreach/generate-offer
+POST /api/v1/outreach/generate-offer
      body: { lead_id, offer_type?, channel }
-     → OfferPackage generado (LLM o template)
+     → OfferPackage generado (LLM en Fase 26, template en Fase API)
 ```
 
 ### Discovery
 
 ```
-GET  /api/discovery/jobs?status=running,queued → DiscoveryJob[]
-POST /api/discovery/jobs  body: { source, location, niche, profile, max_results, cpu_budget }
-PATCH /api/discovery/jobs/:id  body: { action: 'pause'|'resume'|'cancel' }
-GET  /api/discovery/suggestions → zonas sugeridas con exploration_priority
-GET  /api/discovery/coverage    → mapa de cobertura por zona+fuente
+GET  /api/v1/discovery/jobs?status=running,queued → DiscoveryJob[]
+POST /api/v1/discovery/jobs  body: { source, location, niche, profile, max_results, cpu_budget }
+PATCH /api/v1/discovery/jobs/:id  body: { action: 'pause'|'resume'|'cancel' }
+GET  /api/v1/discovery/suggestions → zonas sugeridas con exploration_priority
+GET  /api/v1/discovery/coverage    → mapa de cobertura por zona+fuente
 ```
 
 ### Stats
 
 ```
-GET /api/stats/overview → { total_leads, hot, pitcheables, by_tier, by_niche, by_source }
-GET /api/stats/outreach → { contacted, responded, closed_won, conversion_rate, avg_price }
-GET /api/stats/pipeline → { last_run, next_run, phase_results }
+GET /api/v1/stats/overview → { total_leads, hot, pitcheables, by_tier, by_niche, by_source }
+GET /api/v1/stats/outreach → { contacted, responded, closed_won, conversion_rate, avg_price }
+GET /api/v1/stats/pipeline → { last_run, next_run, phase_results }
 ```
 
 ### Pipeline
 
 ```
-GET  /api/pipeline/config
+GET  /api/v1/pipeline/config
      → PipelineConfig completa (schedule, fases, cpu_budget, notificaciones)
 
-PUT  /api/pipeline/config
+PUT  /api/v1/pipeline/config
      body: PipelineConfig completa
      → guarda config en DB (tabla pipeline_config), reconfigura el cron en el servidor
 
-PATCH /api/pipeline/config
+PATCH /api/v1/pipeline/config
      body: campos parciales de PipelineConfig
      → actualización parcial
 
-POST /api/pipeline/run
+POST /api/v1/pipeline/run
      body: { overrides?: Partial<PipelineConfig> }
      → dispara ejecución inmediata, responde con { run_id }
      → el servidor inicia el pipeline en background
 
-POST /api/pipeline/run/dry
+POST /api/v1/pipeline/run/dry
      body: { overrides?: Partial<PipelineConfig> }
      → simula la ejecución: qué leads refresheará, qué jobs correrá, estimado de tiempo
      → NO ejecuta nada, responde con { plan: PipelinePlan }
 
-POST /api/pipeline/abort
+POST /api/v1/pipeline/abort
      → aborta el run activo (si lo hay), espera a que el lead actual termine limpiamente
 
-POST /api/pipeline/pause-phase
+POST /api/v1/pipeline/pause-phase
      body: { phase: 1 | 2 | 3 | 4 }
      → pausa la fase indicada, continúa con la siguiente
 
-GET  /api/pipeline/runs
+GET  /api/v1/pipeline/runs
      ?status=completed,failed,partial
      &limit=20&cursor=<id>
      → PipelineRun[] con stats resumidos
 
-GET  /api/pipeline/runs/active
+GET  /api/v1/pipeline/runs/active
      → PipelineRun activo con phase_results parciales + job actual
      → null si no hay run corriendo
 
-GET  /api/pipeline/runs/:id
+GET  /api/v1/pipeline/runs/:id
      → PipelineRun completo con phase_results detallados por fuente
 
-GET  /api/pipeline/runs/:id/log
+GET  /api/v1/pipeline/runs/:id/log
      ?since=<iso_timestamp>
      → líneas de log nuevas desde `since` (para polling del monitor en tiempo real)
 ```
@@ -510,11 +512,11 @@ Con PostGIS y coordenadas disponibles, el Segment Explorer agrega una vista de m
 ```
 
 **Comportamiento:**
-- Progress bar en tiempo real vía polling `GET /api/discovery/jobs/:id` cada 2s
-- Zonas sugeridas: `GET /api/discovery/suggestions` (gap analysis en backend)
-- Cola: `GET /api/discovery/jobs?status=queued,running`
-- Iniciar exploración: `POST /api/discovery/jobs`
-- Pause/resume/cancel: `PATCH /api/discovery/jobs/:id`
+- Progress bar en tiempo real vía polling `GET /api/v1/discovery/jobs/:id` cada 2s
+- Zonas sugeridas: `GET /api/v1/discovery/suggestions` (gap analysis en backend)
+- Cola: `GET /api/v1/discovery/jobs?status=queued,running`
+- Iniciar exploración: `POST /api/v1/discovery/jobs`
+- Pause/resume/cancel: `PATCH /api/v1/discovery/jobs/:id`
 
 ---
 
@@ -603,10 +605,10 @@ Control total sobre cuándo y cómo se ejecutan las pipelines en el servidor. El
 ```
 
 **Comportamiento:**
-- Guardar config → `PUT /api/pipeline/config` — persiste en DB (`pipeline_config` table)
-- Ejecutar ahora → `POST /api/pipeline/run` con optional overrides → abre monitor de ejecución
-- Dry run → `POST /api/pipeline/run/dry` → muestra resumen de qué haría (sin ejecutar)
-- Historial → `GET /api/pipeline/runs` paginado
+- Guardar config → `PUT /api/v1/pipeline/config` — persiste en DB (`pipeline_config` table)
+- Ejecutar ahora → `POST /api/v1/pipeline/run` con optional overrides → abre monitor de ejecución
+- Dry run → `POST /api/v1/pipeline/run/dry` → muestra resumen de qué haría (sin ejecutar)
+- Historial → `GET /api/v1/pipeline/runs` paginado
 
 ---
 
@@ -641,10 +643,10 @@ Aparece automáticamente cuando hay un pipeline corriendo. También accesible de
 ```
 
 **Comportamiento:**
-- Polling cada 3s a `GET /api/pipeline/runs/active` mientras hay un run activo
-- Abortar → `POST /api/pipeline/abort` con confirmación
-- Pausar fase → `POST /api/pipeline/pause-phase` (pausa el job actual, completa el lead en proceso)
-- Log en tiempo real: polling a `GET /api/pipeline/runs/:id/log?since=<timestamp>` cada 3s
+- Polling cada 3s a `GET /api/v1/pipeline/runs/active` mientras hay un run activo
+- Abortar → `POST /api/v1/pipeline/abort` con confirmación
+- Pausar fase → `POST /api/v1/pipeline/pause-phase` (pausa el job actual, completa el lead en proceso)
+- Log en tiempo real: polling a `GET /api/v1/pipeline/runs/:id/log?since=<timestamp>` cada 3s
 
 ---
 
@@ -721,7 +723,7 @@ Se abre desde Lead Explorer o Lead Detail al hacer "Marcar contactado".
 └─────────────────────────────────────────────┘
 ```
 
-**Todos los campos opcionales excepto Canal.** `POST /api/outreach` al guardar.
+**Todos los campos opcionales excepto Canal.** `POST /api/v1/outreach` al guardar. Body: `{ lead_id, channel, offer_type, offer_package? }` — la oferta generada va en `offer_package.text`, no en un campo `offer_text` separado.
 
 ---
 
@@ -753,7 +755,7 @@ Se abre desde Lead Explorer o Lead Detail al hacer "Marcar contactado".
 └──────────────────────────────────────────────────────┘
 ```
 
-`POST /api/outreach/generate-offer` con `{ lead_id, offer_type, channel }`.
+`POST /api/v1/outreach/generate-offer` con `{ lead_id, offer_type, channel }` → devuelve `OfferPackage { text, source_llm, generated_at }`.
 
 ---
 

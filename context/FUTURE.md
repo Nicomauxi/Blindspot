@@ -132,9 +132,15 @@ blindspot discover-external --source mintur --dry-run   # verificar antes
 blindspot discover-external --source osm --location montevideo --niche restaurant
 blindspot discover-external --source yelu --location montevideo
 # ... resto de fuentes y zonas
-# Después re-scorear para actualizar contact_tier con canonical_fields ahora poblados:
+```
+
+**⚠️ Tercer `score --all` obligatorio post-reconciliación:**
+La reconciliación retroactiva cambia `corroborating_sources`, `canonical_fields` y potencialmente `contact_tier` en leads fusionados. Estos son inputs directos de la fórmula v2 (`business_quality_pts` usa `corroborating_sources >= 2`; `accessibility_factor` usa `contact_tier`). Los scores calculados en Fase 22 quedan desactualizados para los leads afectados. Al terminar la reconciliación:
+```bash
+# Re-score de todos los leads para incorporar los canonical_fields y corroborating_sources actualizados:
 blindspot score --all
 ```
+Este tercer score es el definitivo — los scores v2 + datos reconciliados son los que la UI consumirá.
 
 **Verificación:**
 ```sql
@@ -164,6 +170,14 @@ WHERE passed_filter = true GROUP BY 1 ORDER BY 1;
    CREATE INDEX leads_has_pos ON leads ((inferred_state->'has_pos'->>'value'));
    ```
 4. Actualizar todos los accesos en código: `digital_footprint->'inferred_state'` → `inferred_state`
+   **Archivos que tienen accesos al path anidado (lista completa para CC):**
+   - `src/modules/scoring/index.ts` — usa `inferred_state` para `pitch_hook`, `timing_factor`, `computePitchHook`
+   - `src/modules/scoring/sub-scores.ts` — usa `has_delivery`, `has_pos`, `has_reservations`, `digitalization_level`
+   - `src/modules/enrichment/inferred-state.ts` — escribe el resultado al finalizar enrich
+   - `src/modules/enrichment/index.ts` — `saveFootprint` actualiza `digital_footprint` incluyendo `inferred_state`
+   - `src/cli/commands/report.ts` (si existe) — puede leer `inferred_state` para el reporte
+   - `src/storage/` — queries que filtran por `digital_footprint->'inferred_state'`
+   - Cualquier query SQL en tests que referencie `digital_footprint->'inferred_state'`
 5. Eliminar `inferred_state` del JSONB `digital_footprint` (UPDATE en lotes de 500 — destructivo, sin rollback):
    ```sql
    -- Verificar ANTES de eliminar:
@@ -216,10 +230,15 @@ SELECT COUNT(*) FROM leads WHERE digital_footprint->'inferred_state' IS NOT NULL
 1. Migración: tabla `users` (id, email, password_hash, role, lead_filter, active, created_at, updated_at, last_login_at) — ver schema completo en `ARCHITECTURE_FUTURE.md § Autenticación y roles`
 2. Migración: `ALTER TABLE lead_outreach ADD COLUMN user_id uuid REFERENCES users(id) NOT NULL;`
    — si la tabla no existe todavía, `user_id` entra desde el CREATE inicial (Fase 25)
-3. Insertar usuario admin inicial:
+3. Insertar usuario admin inicial — generar el hash primero:
+   ```bash
+   # Generar bcrypt hash (cost 12) desde Node.js antes de insertar:
+   node -e "const bcrypt = require('bcrypt'); bcrypt.hash('tu_password_aqui', 12).then(h => console.log(h))"
+   # Copiar el output ($2b$12$...) y usarlo en el INSERT:
+   ```
    ```sql
    INSERT INTO users (email, password_hash, role)
-   VALUES ('admin@blindspot.local', '<bcrypt_hash_cost12>', 'admin');
+   VALUES ('admin@blindspot.local', '$2b$12$<hash_generado_arriba>', 'admin');
    ```
 4. Índice lookup: no crear índice adicional — `email text UNIQUE NOT NULL` ya crea el índice automáticamente.
 5. Trigger `updated_at`:
@@ -341,12 +360,14 @@ curl -X POST -H "Authorization: Bearer <token>" http://localhost:3001/api/v1/pip
 5. Al terminar: verificar invariantes, guardar en `pipeline_runs.invariant_details`
 
 **Implementación — API (para el Pipeline Manager del frontend):**
-1. `GET/PUT/PATCH /api/pipeline/config` — leer y escribir pipeline_config
-2. `POST /api/pipeline/run` — disparar ejecución con overrides opcionales → `{ run_id }`
-3. `POST /api/pipeline/run/dry` → plan de qué haría sin ejecutar
-4. `POST /api/pipeline/abort` — abortar run activo limpiamente
-5. `GET /api/pipeline/runs/active` — run activo con progress en tiempo real
-6. `GET /api/pipeline/runs/:id/log?since=<ts>` — nuevas líneas de log (polling cada 3s desde UI)
+> Estos endpoints ya están definidos en Fase API — no reimplementar. Fase 23 los *completa* con la lógica de cron y el scheduler, pero las rutas HTTP las crea Fase API.
+> Referencia: `ARCHITECTURE_FUTURE.md § Diseño objetivo — api/ → Endpoints que expone`.
+
+La responsabilidad de Fase 23 en la API es únicamente el lado `src/` (core):
+- Implementar `node-cron` en `src/` que lee `pipeline_config.cron_expression` y dispara el run
+- Implementar `configWatcher()` que reconfigura el cron cuando `pipeline_config.updated_at` cambia
+- Implementar las tablas `pipeline_runs` y `pipeline_config` (schemas completos en `ARCHITECTURE_FUTURE.md § Schema completo — pipeline_runs/pipeline_config`)
+- Implementar el comando `blindspot pipeline --run-all` que `api/` dispara via pg_notify
 
 **Fases del pipeline en orden:**
 ```
@@ -387,8 +408,13 @@ curl -X POST -H "Authorization: Bearer <token>" http://localhost:3001/api/v1/pip
 
 **Por qué:** sin registro de qué pasó con los leads contactados, el sistema no puede mejorar. Esta fase solo guarda datos — el algoritmo los usa en fases posteriores. Ver `ARCHITECTURE_FUTURE.md § Feedback loop de outreach`.
 
+**Prerequisito crítico:** Fase API-0 (tabla `users`) debe estar aplicada — `lead_outreach.user_id` es FK a `users(id) NOT NULL`. Si `users` no existe, el CREATE TABLE falla.
+
+**Prerequisito de UI:** Fase API completa (el modal de registro en Lead Detail consume el endpoint `POST /api/v1/outreach`).
+
 **Implementación:**
-1. Migración: crear tabla `lead_outreach` (ver diseño completo en ARCHITECTURE_FUTURE.md)
+1. Migración: crear tabla `lead_outreach` — ver schema completo en `ARCHITECTURE_FUTURE.md § Tabla lead_outreach — diseño final`.
+   La tabla incluye desde el inicio: `user_id uuid REFERENCES users(id) NOT NULL` — no necesita ALTER TABLE posterior.
 2. UI modal en Lead Detail: "Registrar contacto" → canal + respondió + outcome + servicio + precio (todo opcional)
 3. Vista "Mis contactos" en UI: lista de leads con outreach registrado, filtrables por status
 4. CLI para ver stats básicos: `blindspot outreach --stats` (cuántos contactados, cuántos cerrados)
@@ -408,11 +434,14 @@ curl -X POST -H "Authorization: Bearer <token>" http://localhost:3001/api/v1/pip
 2. Config via `.env`: `LLM_PROVIDER=gemini|ollama|openai-compatible` + credenciales por proveedor
 3. Función `generateOffer(lead, offerType, channel): Promise<OfferPackage>` con fallback a templates
 4. UI en Lead Detail: botón "Generar oferta" → muestra texto generado → "Copiar" / "Editar" / "Aprobar"
-5. Guardar oferta generada en `lead_outreach.offer_text` + `offer_source` (qué LLM la generó)
+5. Guardar resultado en `lead_outreach.offer_package` (jsonb — incluye `text`, `source_llm`, `generated_at`).
+   El endpoint `POST /api/v1/outreach` acepta `offer_package` en el body. No usar un campo `offer_text` separado.
 
 **Proveedor recomendado para empezar:** Gemini free tier (gemini-1.5-flash) — sin costo, 1M tokens/día, suficiente para ~2000 ofertas/día.
 
 **Prerequisito:** Fase 25 (tabla lead_outreach donde persiste la oferta).
+
+**Nota — relación con Fase API:** el endpoint `POST /api/v1/outreach/generate-offer` existe como parte de Fase API (stub que devuelve template fijo). Fase 26 agrega la lógica LLM real al handler ya existente — no crea el endpoint desde cero.
 
 ---
 
