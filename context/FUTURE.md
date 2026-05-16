@@ -411,11 +411,29 @@ curl -X POST -H "Authorization: Bearer <token>" http://localhost:3001/api/v1/pip
 
 **Por qué:** los pitches dicen "el sistema cuesta $X" pero ese número no existe. Cada usuario de Blindspot tiene sus propios precios. Sin tabla de precios, la cuantificación es un placeholder.
 
+**Schema:**
+```sql
+CREATE TABLE service_pricing (
+  id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id      uuid REFERENCES users(id) NOT NULL,
+  service_type text NOT NULL,           -- 'web_nuevo' | 'rediseno' | 'marketing' | 'reservas' | 'pos' | 'delivery_system'
+  base_price   numeric(10,2) NOT NULL,  -- precio base UYU
+  monthly_fee  numeric(10,2),           -- precio recurrente mensual UYU (null si one-time)
+  notes        text,
+  created_at   timestamptz DEFAULT now(),
+  updated_at   timestamptz DEFAULT now()
+);
+CREATE INDEX service_pricing_user ON service_pricing(user_id);
+CREATE TRIGGER service_pricing_updated_at BEFORE UPDATE ON service_pricing
+  FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+```
+
 **Implementación:**
-1. Tabla `service_pricing` editable en UI: tipo de servicio → precio base → precio recurrente
-2. Ejemplos precargados: web desde cero, rediseño, community management, sistema de reservas, POS delivery
+1. Migración: crear tabla + trigger `updated_at` (mismo patrón que `users`)
+2. Seed: INSERT de 6 filas por usuario admin (web_nuevo, rediseno, marketing, reservas, pos, delivery_system) con precios UYU de referencia
 3. `commission_estimate` en buyer_type `delivery_propio` usa `service_pricing.delivery_system` para calcular ROI real
 4. La generación de ofertas (Fase 26) consulta esta tabla para incluir números reales
+5. Endpoints CRUD: `GET/POST/PATCH/DELETE /api/v1/settings/pricing` (admin only)
 
 ---
 
@@ -940,6 +958,40 @@ curl /api/v1/leads?q=veterinaria&contact_tier=A,B
 2. Si diff tiene cambios críticos (website appeared, contact_tier cambió) → tag `state-changed-significant` + re-score automático
 3. Persistir `digital_footprint.last_change_diff: EnrichmentDiff`
 4. Monitor de ejecución muestra "N leads con cambios significativos" post-run
+
+---
+
+### Fase 46 — Social-enrich anti-detección (Facebook / Instagram)
+
+**Por qué:** Facebook e Instagram son las plataformas con detección de bots más agresiva. Un run semanal desde la misma IP con el mismo user-agent genera ban permanente en días. Las plataformas de Meta bloquean por IP, fingerprint de browser y patrones de tiempo. Sin anti-detección, el enriquecimiento de redes sociales es inviable en producción.
+
+**Implementación:**
+1. **User-agent rotation:** pool de 10+ UAs reales (Chrome Windows, Chrome Mac, Firefox Linux) rotando aleatoriamente por request. Configurar en `config/discovery.yaml → scraping.social_ua_pool`.
+2. **Timing aleatorio:** delay base `[2000, 5000]ms` + jitter `±30%` entre requests. Nunca intervalos regulares.
+3. **Backoff exponencial:** ante HTTP 429 o redirect a login → esperar `min(2^attempt × 5s, 300s)` antes de reintentar. Máximo 3 reintentos por lead.
+4. **Headless browser fingerprinting:** si se usa Playwright/Puppeteer para JS-heavy pages → usar `playwright-stealth` plugin para ocultar `navigator.webdriver`, `navigator.languages`, `window.chrome`, etc.
+5. **Proxy rotation (opcional, producción):** integración con proveedor de proxies residenciales (e.g. BrightData, Smartproxy). Config `config/discovery.yaml → scraping.proxy_enabled: false` (desactivado por defecto).
+6. **Rate limit por dominio:** máximo 1 request/10s por dominio (facebook.com, instagram.com separados).
+7. **Graceful fallback:** si social-enrich falla para un lead → `digital_footprint.social_enrich_status: 'blocked'` + tag `social-blocked` + skip sin error fatal.
+
+**Config en `config/discovery.yaml`:**
+```yaml
+scraping:
+  social_ua_pool:
+    - "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    - "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    # ... 8+ más
+  social_delay_ms: [2000, 5000]
+  social_max_retries: 3
+  proxy_enabled: false
+```
+
+**Verificación:**
+```bash
+# Correr con --dry-run para confirmar que los delays y UA rotation están activos
+blindspot enrich --social --dry-run --verbose
+# Confirmar que leads con bloqueo quedan con status='blocked', no error fatal
+```
 
 ---
 

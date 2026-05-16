@@ -240,7 +240,7 @@ SELECT
   l.canonical_fields->'phone'->>'value'        AS contact_phone,
   l.whatsapp                                   AS contact_whatsapp,
   l.prospect_score,
-  l.score_breakdown->'sub_scores'->>'primary_offer'  AS primary_offer,
+  l.score_breakdown->>'primary_offer'           AS primary_offer,
   l.score_breakdown->>'pitch_hook'             AS pitch_hook,
   l.score_breakdown->>'urgency_signal'         AS urgency_signal,
   l.inferred_state->>'digitalization_level'    AS digitalization_level,
@@ -1771,7 +1771,7 @@ CREATE VIEW lead_dashboard AS
 -- Índices en la tabla leads (no en la view) — son los que importan para performance:
 CREATE INDEX leads_contact_tier ON leads ((score_breakdown->>'contact_tier'));
 CREATE INDEX leads_prospect_score ON leads(prospect_score DESC) WHERE passed_filter = true;
-CREATE INDEX leads_primary_offer ON leads ((score_breakdown->'sub_scores'->>'primary_offer')) WHERE passed_filter = true;
+CREATE INDEX leads_primary_offer ON leads ((score_breakdown->>'primary_offer')) WHERE passed_filter = true;
 ```
 
 **Cuándo reconsiderar:** si en el futuro hay >20 usuarios concurrentes o el dashboard tarda >500ms → migrar a MATERIALIZED VIEW con `REFRESH CONCURRENTLY`. Por ahora, VIEW normal.
@@ -2359,7 +2359,7 @@ SELECT
 
   -- Score y oferta
   l.prospect_score,
-  l.score_breakdown->'sub_scores'->>'primary_offer'  AS primary_offer,
+  l.score_breakdown->>'primary_offer'           AS primary_offer,
   l.score_breakdown->>'pitch_hook'             AS pitch_hook,
   l.score_breakdown->>'urgency_signal'         AS urgency_signal,
 
