@@ -14,7 +14,7 @@
 - **HTTP:** undici ^7
 - **DB:** Supabase PostgreSQL — Docker local (`supabase_db_gap-radar`) + cloud
 - **Scraping:** Playwright
-- **Tests:** Vitest — 659 passing, 7 skipped, 61 files
+- **Tests:** Vitest — 850 passing, 7 skipped, 67 files
 - **Dev:** tsx/esm
 - **Config:** YAML en `config/` — fuente de verdad para parámetros de discovery y scoring
 - **Repo:** https://github.com/Nicomauxi/Blindspot
@@ -37,21 +37,28 @@ vino de Google Places, MINTUR, OSM u otra fuente — debe poder pasar por `enric
 ```
 blindspot discover-google-places --niche <text> --location <text> --profile <a|b|c|d> [--max-results N]
 blindspot discover-mintur   --location <text> [--niche <text>] [--limit N] [--dry-run]
+blindspot discover-osm      --location <text> [--niche <text>] [--limit N] [--dry-run]
+blindspot discover-external --source <yelu|pedidosya> --location <text> --niche <text> [--limit N] [--dry-run]
 blindspot enrich            --run <uuid> [--force-refresh] [--with-heuristic]
-                            --source <source> [--force-refresh] [--with-heuristic]  ← pendiente
-                            --all [--force-refresh] [--with-heuristic]              ← pendiente
-blindspot score             [--run <uuid> | --all]
+                            --source <source> [--force-refresh] [--with-heuristic]
+                            --all [--force-refresh] [--with-heuristic]
+blindspot score             [--run <uuid> | --all] [--buyer-types [--buyer-type <type>]] [--dry-run]
 blindspot social-enrich     [--run <uuid> | --all] [--limit N] [--force]
 blindspot report            --run <uuid> [--format csv|html|md|all]
 blindspot leads list        [--run <uuid>] [--passed-only] [--seen-in <uuid>]
 blindspot vocabulary        rebuild [--niche <name> | --all]
 blindspot heuristic-refresh [--run <uuid> | --all] [--force]
+blindspot infer-state       --all [--passed-only] [--force] [--concurrency N]
 blindspot run               --niche <text> --location <text> --profile <a|b|c|d|all>
                             [--max-results N] [--ram-mode conservative|auto|manual]
                             [--concurrency N] [--score-threshold N] [--no-social]
                             [--dry-run] [--override key=value]
 blindspot maintenance       [--stale-days N] [--niche <text>] [--dry-run]
                             [--ram-mode conservative|auto|manual] [--concurrency N]
+                            # Google Places: re-enriches stale runs (default: 30 días)
+                            # External sources (MINTUR, OSM): detecta leads stale por source
+                            #   y llama enrichCommand --source. Sin --stale-days usa source_refresh
+                            #   de config/discovery.yaml por fuente. --stale-days lo overridea todo.
 ```
 
 ### Perfiles de discovery
@@ -74,21 +81,28 @@ src/
 │   └── commands/
 │       ├── discover.ts              — orquesta discovery via Google Places
 │       ├── discover-external.ts     — orquesta provider externo → deduplica → persiste
+│       │                              actualiza allLeads en memoria tras cada inserción (fix in-memory bug)
 │       ├── enrich.ts                — enrich + llama retroactiveEmailCleanup post-seed
 │       ├── score.ts
 │       ├── social-enrich.ts         — Playwright FB/IG
 │       ├── report.ts
 │       ├── run.ts                   — pipeline completo, RAM-aware concurrency
-│       └── maintenance.ts           — stale enrichment detection
+│       └── maintenance.ts           — source-aware stale enrichment; GP via runs, externos via enrichCommand --source
 │
 ├── modules/
 │   ├── discovery/
 │   │   ├── places.ts                — Google Places API (Text Search + Details)
 │   │   ├── filters.ts               — applyProfileFilter, tagCandidate
-│   │   ├── deduplication.ts         — levenshtein, normalizeName, nameSimilarity, findCrossSourceMatch
+│   │   ├── deduplication.ts         — levenshtein, normalizeName, nameSimilarity, findCrossSourceMatch, isFranchise(name, franchiseNames)
 │   │   └── providers/
 │   │       ├── google-places.ts     — GooglePlacesProvider: IDiscoveryProvider sobre places.ts
-│   │       └── mintur.ts            — MINTURProvider: IDiscoveryProvider sobre API CKAN catalogodatos.gub.uy
+│   │       ├── mintur.ts            — MINTURProvider: IDiscoveryProvider sobre API CKAN catalogodatos.gub.uy
+│   │       ├── osm.ts               — OSMProvider: IDiscoveryProvider sobre Overpass API (GPS nativo, interior UY)
+│   │       ├── yelu.ts              — YeluProvider: IDiscoveryProvider scraping yelu.uy (31k listings, confianza 0.65)
+│   │       └── pedidosya.ts         — PedidosYaProvider: IDiscoveryProvider Playwright-based,
+│   │                                  pedidosya.com.uy, MAX_PAGES=5, expedition_type:delivery
+│                                  Usa bbox predefinidos por ciudad (UY_BBOXES) en lugar de area["admin_level"]
+│                                  Endpoint: http://overpass.openstreetmap.fr (IPv4 forzado via undici Agent)
 │   │
 │   ├── enrichment/
 │   │   ├── index.ts                 — orquestador; exporta MAX_CONTACT_EMAILS = 3
@@ -96,6 +110,10 @@ src/
 │   │   ├── heuristic-discovery.ts   — getHeuristicConfig(), candidatos web/social
 │   │   │                              lee config/enrichment.yaml (cacheado)
 │   │   ├── directory-discovery.ts   — scraping yelu.uy en enrich-time
+│   │   ├── inferred-state.ts        — computeInferredState(fp, lead): InferredState
+│   │   │                              función pura, sin I/O; calcula has_reservations,
+│   │   │                              has_delivery (señal PedidosYa → 0.95), has_ecommerce,
+│   │   │                              has_online_catalog, has_pos, has_chat_support, digitalization_level
 │   │   └── parsers/
 │   │       ├── email.ts             — extracción y validación emails
 │   │       ├── whatsapp.ts          — normalización UY; lee mobile_prefixes_uy
@@ -104,19 +122,29 @@ src/
 │   │       └── whois.ts             — domain age via WHOIS
 │   │
 │   ├── scoring/
-│   │   ├── index.ts                 — prospect_score + scoring escalonado heuristic
+│   │   ├── index.ts                 — prospect_score = max(sub_scores) × contactabilityMultiplier
+│   │   ├── sub-scores.ts            — calculateSubScores(lead, sgScore): SubScores
+│   │   │                              5 sub-scores: web_nuevo, rediseno, marketing, software, catalogo
+│   │   │                              primary_offer: oferta con mayor sub-score
+│   │   ├── buyer-types.ts           — computeAllBuyerScores(lead): BuyerTypeScore[]
+│   │   │                              7 tipos: agencia_web, software_pos, marketing_social,
+│   │   │                              delivery_propio, reservas_online, catalogo_digital, whatsapp_business
+│   │   │                              Configurados en config/scoring.yaml → buyer_types
 │   │   └── confidence.ts            — calculateDataConfidence(), calculateContactReliability()
 │   │
 │   └── social-enrich/
 │       └── index.ts
 │
 ├── storage/
-│   ├── leads.ts                     — upsertLeads, loadAllLeads (paginado PostgREST)
+│   ├── leads.ts                     — upsertLeads, loadAllLeads, loadLeadsByRunId, loadLeadsBySource, loadAllPassedLeads (paginado PostgREST)
+│   │                                  tagDuplicates, tagFranchises(leads, franchiseNames)
 │   │                                  importa MAX_CONTACT_EMAILS desde enrichment/index.ts
-│   ├── external-leads.ts            — insertExternalLead, addCorroboratingSource
+│   ├── external-leads.ts            — insertExternalLead(candidate, {dryRun?, extraTags?}), addCorroboratingSource
 │   ├── runs.ts                      — createRun, completeRun
-│   └── system-lists.ts              — loadAllRuntime, detectAndSeedEmailProviders,
+│   └── system-lists.ts              — loadAllRuntime, loadRuntimeLists, detectAndSeedEmailProviders,
 │                                      retroactiveEmailCleanup (corre post-seed)
+│                                      RuntimeLists incluye franchiseNames: ReadonlySet<string>
+│                                      RuntimePatterns incluye ecommercePlatforms: readonly string[]
 │
 └── shared/
     ├── types.ts                     — tipos globales
@@ -124,6 +152,8 @@ src/
     ├── ram.ts                       — RAM-aware concurrency
     └── config/
         ├── discovery.yaml           — perfiles A/B/C/D, mobile_prefixes_uy (fuente canónica)
+        │                              source_refresh: días por fuente (google_places:30, mintur:90, osm:90, yelu:90, pedidosya:90)
+        │                              getSourceRefreshDays(source, fallback=30) en modules/discovery/config.ts
         └── scoring.yaml             — pesos de reglas de scoring
 ```
 
@@ -184,6 +214,18 @@ WHERE external_id IS NOT NULL
 ```
 `place_id` UNIQUE se mantiene para backward compat.
 
+### Tabla: lead_buyer_scores (migración 20260516)
+
+| Campo | Tipo | Notas |
+|-------|------|-------|
+| lead_id | uuid FK | ON DELETE CASCADE |
+| buyer_type | text | agencia_web, software_pos, etc. |
+| score | smallint | CHECK 0–100 |
+| computed_at | timestamptz | DEFAULT now() |
+| breakdown | jsonb | base, adjustments, applied_modifiers |
+
+PK: `(lead_id, buyer_type)`. Índice: `(buyer_type, score DESC)`.
+
 ### Nuevas tablas (migración 009)
 
 | Tabla | Descripción |
@@ -196,7 +238,7 @@ WHERE external_id IS NOT NULL
 | Tabla | Contenido |
 |-------|-----------|
 | system_lists | Todas las listas de negocio — ver sección "Sistema de listas" |
-| platform_patterns | 42 filas: delivery, booking, chat_widget, etc. |
+| platform_patterns | 42 filas: delivery, booking, chat_widget, ecommerce (fallback si vacío), etc. |
 | niche_mappings | 76 filas: niche_alias, descriptor_word, directory_category |
 
 ---
@@ -231,8 +273,69 @@ Listas activas:
 ## Scoring
 
 ```
-prospect_score = floor(business_quality_score * digital_gap_score / 100)
+prospect_score = floor(max(sub_scores) * contactabilityMultiplier)
 ```
+
+### Sub-scores por tipo de oferta (Fase B)
+
+`src/modules/scoring/sub-scores.ts` — `calculateSubScores(lead, sgScore): SubScores`
+
+| Sub-score | Señales principales | Cap |
+|-----------|--------------------|----|
+| `web_nuevo` | `no-website`(35) + `high-reviews-no-web`(10) + `fb/ig-only-presence`/`social-link-only`(15) | 60 |
+| `rediseno` | Requiere web. `site-unreachable`(15) + `ssl-missing`(10) + `not-responsive`(10) + `stack-obsolete`(10) + `web-outdated`(8) + `domain-old-stale`(5) | 58 |
+| `marketing` | `web-only-no-social`(28) + `fb/ig-heuristic`(15 c/u, sin -confirmed/-only) + `pixel-missing`(5) + `analytics-missing`(5) | 68 |
+| `software` | `systems_gap_score` + `whatsapp-missing`(10) + `chat-widget-missing`(3) | 100 |
+| `catalogo` | `hours-missing-on-web`(3) + ausencia de `ecommerce_platforms`(25) + ausencia de `menu_links`(20) + niche bonus(15) | 63 |
+
+`primary_offer: PrimaryOffer` = la oferta con mayor sub-score (`"none"` si todos son 0).
+Penalizaciones por `inferred_state` (Fase F): **activas** — `has_ecommerce` × 0.3 en `web_nuevo`; `has_reservations` × 0.7 y `has_delivery` × 0.8 en `software`.
+
+`score_breakdown.sub_scores: SubScores` — persiste los 5 valores + `primary_offer` en DB.
+
+### InferredState (Fase F — activa)
+
+`src/modules/enrichment/inferred-state.ts` — `computeInferredState(fp, lead): InferredState`
+
+Función pura que corre al final del pipeline de enrichment (post-WHOIS). Resultado persistido en `digital_footprint.inferred_state`.
+
+```typescript
+interface InferredStateField { value: boolean; confidence: number; via: string[] }
+interface InferredState {
+  has_reservations, has_delivery, has_online_catalog,
+  has_ecommerce, has_pos, has_chat_support: InferredStateField;
+  digitalization_level: "none" | "basic" | "intermediate" | "advanced";
+  computed_at: string;
+}
+```
+
+`digitalization_level`: 0 activos = none, 1–2 = basic, 3 = intermediate, 4+ = advanced.
+
+**Reglas de inferencia activas:**
+
+| Conclusión | Señal | Confianza |
+|---|---|---|
+| `has_delivery` | `delivery_platforms` no vacío | 0.8 |
+| `has_delivery` | `source === 'pedidosya'` o `corroborating_sources` incluye pedidosya | 0.95 |
+
+Comando retroactivo: `blindspot infer-state --all [--force]` — vía `patchLeadInferredState` en `storage/leads.ts`.
+
+### Operadores del evaluador de reglas
+
+`src/modules/scoring/evaluator.ts` — soporta: `eq`, `neq`, `gte`, `lte`, `between`.
+Nota: `neq` retorna `matched: false` cuando el campo es null (null-guard en línea 23).
+
+### contactabilityMultiplier
+
+`src/modules/scoring/index.ts` — función privada que aplica ×1.2 al `prospect_score` final
+si el lead tiene al menos un email en `digital_footprint.contact_emails` o en
+`canonical_fields.email`. Cap en 100. Aplica a todos los sources.
+
+### Regla external_source_quality
+
+`config/scoring.yaml` — en `business_quality.rules`. Suma 70 puntos a leads con
+`source != google_places` (operador `neq`). Compensa la ausencia de rating/reviews en
+fuentes externas. Sin mutual_exclusion.
 
 ### Scoring escalonado — regla website_heuristic
 
@@ -308,6 +411,9 @@ El pipeline captura señales que hoy se usan para scoring digital, pero que tamb
 | `analytics-missing` | Marketing digital | Sin métricas de visitas |
 | `chat-widget-missing` | Conversión web | Sin canal de contacto directo en web |
 | `alternative-phone-found` | Contactabilidad | Múltiples canales disponibles |
+| `ecommerce_platforms` | E-commerce | Detección de MercadoPago, Stripe, Shopify, WooCommerce, Tienda Nube |
+| `whatsapp_web_link` | WhatsApp Business | Links wa.me / api.whatsapp.com en HTML (complementa parser de teléfono) |
+| `franchise-detected` | Clasificación | Cadena/franquicia — mal prospecto para agencias. Vía lista `franchise_names` en system_lists o heurístico (mismo nombre en 3+ direcciones distintas). |
 
 ---
 
@@ -379,10 +485,10 @@ email_evidences: [
 |--------|------|---------------|--------|
 | Google Places | API oficial | 0.90 | ✅ Activo |
 | MINTUR | Dataset oficial UY, actualización diaria, incluye email + GPS | 0.80 | ✅ Activo |
-| PedidosYa | Marketplace — confirma negocio operativo | 0.70 | Planificado |
+| PedidosYa | Marketplace — confirma delivery activo, Playwright-based, MAX_PAGES=5 | 0.70 | ✅ Activo |
 | IMM Habilitaciones | CSV oficial Montevideo | 0.75 | Planificado |
-| Yelu | Directorio privado UY, 31k+ listings | 0.65 | Planificado |
-| OSM / Overpass Turbo | Colaborativo, gratuito, cubre interior | 0.60 | Planificado |
+| Yelu | Directorio privado UY, 31k+ listings — scraping HTML, sin GPS ni email en listado | 0.65 | ✅ Activo |
+| OSM / Overpass Turbo | Colaborativo, gratuito, GPS nativo, cubre interior | 0.60 | ✅ Activo |
 | InfoNegocios | Directorio B2B ejecutivos, decisores | 0.65 | Futuro |
 | DGI | RUT + razón social (requiere resolución a nombre comercial) | 0.35 | Futuro |
 

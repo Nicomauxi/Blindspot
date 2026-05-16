@@ -4,6 +4,10 @@
 > Leé este archivo + `ARCHITECTURE.md` + `FUTURE.md` al iniciar cada sesión.
 > `LEADS_DATA.md` solo cuando el trabajo involucra análisis de datos concretos.
 > Nicolás es el Product Owner — supervisa y decide. Vos ejecutás.
+>
+> **Señal de continuación de sesión:** si Nicolás adjunta solo este archivo (sin mensaje adicional),
+> significa que quiere retomar la sesión donde quedó. Leé la sección `ESTADO DE SESIÓN` al final
+> y arrancá desde la "Próxima acción" listada ahí — sin preguntar, ejecutar directamente el loop.
 
 ---
 
@@ -45,7 +49,17 @@ Blindspot es una plataforma de inteligencia comercial que identifica negocios lo
   7. Verifica / siguiente paso               │
 ```
 
-**Regla crítica:** Tech Lead (esta sesión) NO usa herramientas de edición de código (Edit, Write, Bash con cambios de estado). Solo usa: Read, Bash para queries SQL y git log, y texto para generar prompts.
+**Regla crítica — nunca violar:** Tech Lead NO usa Edit, Write, ni crea/modifica archivos `.ts`, `.js` o `.yaml` de código fuente. Eso va SIEMPRE a CC.
+
+**Lo que Tech Lead SÍ puede hacer (sin preguntar):**
+- Leer código: Read, Bash readonly (`git log`, `git diff`, `grep`, `ls`)
+- Queries SQL de diagnóstico: `docker exec supabase_db_gap-radar psql ...`
+- Actualizar `context/` únicamente: PROJECT_MASTER.md, FUTURE.md, ARCHITECTURE.md
+- Comandos CLI de la app (`pnpm test`, `pnpm typecheck`, `enrich`, `score`, `discover-*`) — **solo cuando Nicolás lo pida explícitamente para diagnóstico o fix de invariantes**
+
+**Trampa común:** cuando Nicolás dice "ejecutalos vos" en referencia a CLI commands, eso NO autoriza a implementar código. El límite duro es: si la tarea requiere Edit/Write sobre `.ts`/`.yaml` de código → generar prompt para CC.
+
+**Señal de alerta:** si notás que estás a punto de usar Edit o Write sobre código fuente → STOP. Generá el prompt para CC en su lugar.
 
 ---
 
@@ -202,8 +216,8 @@ docker exec supabase_db_gap-radar psql -U postgres -d postgres -c "..."
 
 | Concepto | Valor |
 |----------|-------|
-| Google Places API acumulado | ~$4 USD |
-| Crédito disponible | ~$196 USD (free tier $200) |
+| Google Places API acumulado | ~$5.16 USD (+$1.16 sesión 2026-05-15 — 10 runs discovery Colonia/Minas/Durazno) |
+| Crédito disponible | ~$194.84 USD (free tier $200) |
 
 ---
 
@@ -211,8 +225,29 @@ docker exec supabase_db_gap-radar psql -U postgres -d postgres -c "..."
 
 > Reescribir completamente al cerrar cada sesión. Solo el snapshot necesario para arrancar la siguiente — sin narrativa histórica (eso vive en git log).
 
-**Tests:** 668 passing | **Typecheck:** limpio | **DB:** 2027 leads MINTUR limpios (0 S/D)
+**Tests:** 850 passing, 7 skipped, 67 files | **Typecheck:** limpio
 
-**Unstaged:** limpio
+**Fases F + C + 9 + 10 + 11 + 12 completadas.**
 
-**Próxima acción:** Fase 7b — `enrich --source <source>` y `enrich --all` (pipeline source-agnostic). Bloquea OSM, Yelu y todas las fuentes futuras.
+### Estado de DB (snapshot 2026-05-16)
+
+| Fuente | Total | Passed | Notas |
+|--------|-------|--------|-------|
+| mintur | 2027 | 2027 | Enrich completo. |
+| yelu | 672+ | 672+ | Enrich probablemente completo. |
+| osm | 622+ | 622+ | Enrich probablemente completo. |
+| google_places | 1474 | 172 | Enrich completo. |
+
+**lead_buyer_scores:** 3493 leads × 7 buyer_types = 24,451 filas. Calculadas con `score --buyer-types`.
+
+### Próximas acciones — en este orden
+
+1. **Verificar invariantes:**
+   ```bash
+   docker exec supabase_db_gap-radar psql -U postgres -d postgres -c "SELECT COUNT(*) FILTER (WHERE passed_filter=true AND digital_footprint IS NULL) AS passed_not_enriched, COUNT(*) FILTER (WHERE 'no-website'=ANY(tags) AND 'website-heuristic'=ANY(tags) AND passed_filter=true) AS tags_contradictorios, COUNT(*) FILTER (WHERE passed_filter=true AND prospect_score IS NULL) AS passed_sin_score FROM leads;"
+   ```
+2. **Fase 13 — PedidosYa escape** (desbloqueada): ver FUTURE.md.
+3. **Yelu gym:** re-run si necesario:
+   ```bash
+   node --env-file=.env --import tsx/esm src/cli/index.ts discover-external --source yelu --niche gym --location montevideo --limit 50
+   ```
