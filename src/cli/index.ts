@@ -12,6 +12,7 @@ import { socialEnrichCommand } from "./commands/social-enrich.js";
 import { runCommand } from "./commands/run.js";
 import { maintenanceCommand } from "./commands/maintenance.js";
 import { discoverExternalCommand } from "./commands/discover-external.js";
+import { inferStateCommand } from "./commands/infer-state.js";
 
 const program = new Command();
 
@@ -57,26 +58,29 @@ program
 program
   .command("enrich")
   .description(
-    "Enrich leads of a discovery run with digital footprint signals (HTML + WHOIS)"
+    "Enrich leads with digital footprint signals (HTML + WHOIS)"
   )
-  .requiredOption("--run <uuid>", "Discovery run id whose leads should be enriched")
+  .option("--run <uuid>", "Discovery run id whose leads should be enriched")
+  .option("--source <source>", "Enrich all passed leads from a specific source (e.g. mintur, osm)")
   .option("--force-refresh", "Ignore cache and re-fetch HTML / WHOIS for every lead", false)
   .option("--with-heuristic", "Discover candidate websites/social/WhatsApp before enrichment", false)
   .option("--concurrency <number>", "Max parallel HTTP fetches", "5")
-  .option("--all", "Enrich all leads in the run including rejected ones (default: passed only)", false)
+  .option("--all", "Enrich all passed leads in the DB regardless of source (mutually exclusive with --run and --source)", false)
   .action(async (opts: {
-    run: string;
+    run?: string;
+    source?: string;
     forceRefresh: boolean;
     withHeuristic: boolean;
     concurrency: string;
     all: boolean;
   }) => {
     await enrichCommand({
-      run: opts.run,
+      ...(opts.run ? { run: opts.run } : {}),
+      ...(opts.source ? { source: opts.source } : {}),
+      all: opts.all,
       forceRefresh: opts.forceRefresh,
       withHeuristic: opts.withHeuristic,
       concurrency: opts.concurrency,
-      all: opts.all,
     });
   });
 
@@ -127,11 +131,15 @@ program
   .description("Score leads by computing business_quality, digital_gap, and prospect scores")
   .option("--run <uuid>", "Score leads of this discovery/enrichment run")
   .option("--all", "Score all leads in the DB (mutually exclusive with --run)")
+  .option("--buyer-types", "Compute buyer-type scores for all leads with score_breakdown", false)
+  .option("--buyer-type <type>", "Only compute this buyer type (requires --buyer-types)")
   .option("--dry-run", "Compute scores without persisting to the DB", false)
-  .action(async (opts: { run?: string; all?: boolean; dryRun?: boolean }) => {
+  .action(async (opts: { run?: string; all?: boolean; buyerTypes?: boolean; buyerType?: string; dryRun?: boolean }) => {
     await scoreCommand({
       ...(opts.run ? { run: opts.run } : {}),
       all: opts.all ?? false,
+      buyerTypes: opts.buyerTypes ?? false,
+      ...(opts.buyerType ? { buyerType: opts.buyerType } : {}),
       dryRun: opts.dryRun ?? false,
     });
   });
@@ -234,8 +242,75 @@ program
     });
   });
 
+program
+  .command("discover-osm")
+  .description("Fetch leads from OpenStreetMap via Overpass API and persist to DB")
+  .requiredOption("--location <string>", "Location to search (e.g. 'Montevideo', 'Colonia')")
+  .option("--niche <string>", "Niche to search (restaurant|gym|hairdresser|car_dealer|other)", "other")
+  .option("--limit <number>", "Max candidates to process (useful for smoke tests)")
+  .option("--dry-run", "Simulate without writing to DB", false)
+  .action(async (opts: {
+    location: string;
+    niche: string;
+    limit?: string;
+    dryRun: boolean;
+  }) => {
+    await discoverExternalCommand({
+      source: "osm",
+      location: opts.location,
+      niche: opts.niche,
+      ...(opts.limit !== undefined ? { limit: Number(opts.limit) } : {}),
+      dryRun: opts.dryRun,
+    });
+  });
+
+program
+  .command("discover-external")
+  .description("Fetch leads from an external source (yelu, pedidosya) and persist to DB")
+  .requiredOption("--source <string>", "Source provider: yelu|pedidosya")
+  .requiredOption("--location <string>", "Location to search (e.g. 'Montevideo')")
+  .requiredOption("--niche <string>", "Niche to search (restaurant|gym|hairdresser|car_dealer|other)")
+  .option("--limit <number>", "Max candidates to process (useful for smoke tests)")
+  .option("--dry-run", "Simulate without writing to DB", false)
+  .action(async (opts: {
+    source: string;
+    location: string;
+    niche: string;
+    limit?: string;
+    dryRun: boolean;
+  }) => {
+    await discoverExternalCommand({
+      source: opts.source,
+      location: opts.location,
+      niche: opts.niche,
+      ...(opts.limit !== undefined ? { limit: Number(opts.limit) } : {}),
+      dryRun: opts.dryRun,
+    });
+  });
+
 program.addCommand(runCommand);
 program.addCommand(maintenanceCommand);
+
+program
+  .command("infer-state")
+  .description("Compute inferred operational state for enriched leads")
+  .option("--all", "process all leads (required)", false)
+  .option("--passed-only", "only process passed_filter=true leads (default: true)", true)
+  .option("--force", "recompute even if recently computed", false)
+  .option("--concurrency <n>", "parallel workers", "20")
+  .action(async (opts: {
+    all: boolean;
+    passedOnly: boolean;
+    force: boolean;
+    concurrency: string;
+  }) => {
+    await inferStateCommand({
+      all: opts.all,
+      passedOnly: opts.passedOnly,
+      force: opts.force,
+      concurrency: opts.concurrency,
+    });
+  });
 
 try {
   getScoringConfig();

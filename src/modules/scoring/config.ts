@@ -5,7 +5,7 @@ import type { ScoringConfig } from "./types.js";
 
 const FieldConditionSchema = z.object({
   field: z.string(),
-  op: z.enum(["eq", "gte", "lte", "between"]),
+  op: z.enum(["eq", "neq", "gte", "lte", "between"]),
   value: z.union([
     z.tuple([z.number(), z.number()]),
     z.number(),
@@ -40,7 +40,18 @@ const DimensionSchema = z
     }
   });
 
-const ScoringConfigSchema: z.ZodType<ScoringConfig> = z
+const SUB_SCORE_KEYS = ["web_nuevo", "rediseno", "marketing", "software", "catalogo"] as const;
+
+const BuyerTypeConfigSchema = z.object({
+  formula: z.record(z.string(), z.number()),
+  inferred_required: z.record(z.string(), z.boolean()).optional(),
+  niche_required: z.array(z.string()).optional(),
+  tag_required: z.string().optional(),
+  inferred_bonuses: z.record(z.string(), z.number()).optional(),
+  inferred_penalties: z.record(z.string(), z.number()).optional(),
+});
+
+const ScoringConfigSchema = z
   .object({
     version: z.number(),
     recent_reviews_threshold_days: z.number().int().positive(),
@@ -51,7 +62,8 @@ const ScoringConfigSchema: z.ZodType<ScoringConfig> = z
       digital_gap: z.array(z.array(z.string())).default([]),
     }),
     cap: z.number().default(100),
-    prospect_formula: z.literal("business_quality * digital_gap / 100"),
+    prospect_formula: z.string(),
+    buyer_types: z.record(z.string(), BuyerTypeConfigSchema).optional(),
   })
   .superRefine((cfg, ctx) => {
     if (cfg.cap <= 0) {
@@ -94,7 +106,7 @@ export function parseConfig(yamlString: string): ScoringConfig {
       .join("\n");
     throw new Error(`Invalid scoring config:\n${msgs}`);
   }
-  return result.data;
+  return result.data as ScoringConfig;
 }
 
 export function getScoringConfig(): ScoringConfig {
