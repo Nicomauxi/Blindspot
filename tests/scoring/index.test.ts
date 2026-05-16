@@ -18,21 +18,25 @@ beforeEach(() => {
 });
 
 describe("scoreLead", () => {
-  it("profile A full enrichment → bq=50, dg=55, prospect=27", () => {
+  it("profile A full enrichment → bq=50, dg=55, prospect=40 (web_nuevo=35 + rating bonus 5)", () => {
     const result = scoreLead(profileA_full);
     expect(result.business_quality_score).toBe(50);
     expect(result.digital_gap_score).toBe(55);
-    expect(result.prospect_score).toBe(27);
+    expect(result.prospect_score).toBe(40); // floor(35 * 1.0 * 1.0) + 5 (rating=4.7 >= 4.3)
+    expect(result.score_breakdown.sub_scores.web_nuevo).toBe(35);
+    expect(result.score_breakdown.sub_scores.primary_offer).toBe("web_nuevo");
   });
 
-  it("site_unreachable (no no-website tag) → dg=15 only", () => {
+  it("site_unreachable (no no-website tag) → dg=15 only, prospect=15 via rediseno sub-score", () => {
     // Invariant: enrichment returns skipped("no-website") before fetch attempt,
     // so site-unreachable cannot co-exist with no-website tag.
     // ssl-missing also cannot co-tag: fetch_error branch never sets footprint.ssl.
     const result = scoreLead(site_unreachable);
     expect(result.digital_gap_score).toBe(15);
     expect(result.business_quality_score).toBe(0);
-    expect(result.prospect_score).toBe(0);
+    expect(result.prospect_score).toBe(15);
+    expect(result.score_breakdown.sub_scores.rediseno).toBe(15);
+    expect(result.score_breakdown.sub_scores.primary_offer).toBe("rediseno");
   });
 
   it("fb-only and no-website → exclusion keeps no_website (35 > 25) → dg=35", () => {
@@ -87,12 +91,12 @@ describe("scoreLead", () => {
     expect(result.prospect_score).toBe(0);
   });
 
-  it("prospect_score arithmetic: floor(bq * dg / 100)", () => {
-    // profileA_full: bq=50, dg=55 → 50*55/100 = 27.5 → floor = 27
-    const result = scoreLead(profileA_full);
-    expect(result.prospect_score).toBe(
-      Math.floor(result.business_quality_score * result.digital_gap_score / 100)
-    );
+  it("prospect_score: floor(max(sub_scores) * contactabilityMultiplier)", () => {
+    // web-only-no-social → marketing=28. With email → multiplier=1.2 → 28*1.2=33.6 → floor=33
+    const lead = { ...empty_lead, tags: ["web-only-no-social"], canonical_fields: { email: "owner@example.com" } };
+    const result = scoreLead(lead);
+    expect(result.score_breakdown.sub_scores.marketing).toBe(28);
+    expect(result.prospect_score).toBe(33); // floor(28 * 1.2) = floor(33.6) = 33, not ceil=34
   });
 
   it("breakdown.rules contains ONLY post-exclusion rules (no excluded rules)", () => {
@@ -123,11 +127,12 @@ describe("scoreLead", () => {
     expect(ts).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
   });
 
-  it("floor not round: prospect=27 not ceil(27.5)=28", () => {
-    // bq=50, dg=55 → 50*55/100 = 27.5 → Math.floor = 27, Math.ceil = 28
-    const result = scoreLead(profileA_full);
-    expect(result.prospect_score).toBe(27);
-    expect(result.prospect_score).not.toBe(28);
+  it("floor not round: web-only-no-social + email → 33 not ceil(33.6)=34", () => {
+    // marketing=28, multiplier=1.2 → 28*1.2=33.6 → Math.floor=33, Math.ceil=34
+    const lead = { ...empty_lead, tags: ["web-only-no-social"], canonical_fields: { email: "owner@example.com" } };
+    const result = scoreLead(lead);
+    expect(result.prospect_score).toBe(33);
+    expect(result.prospect_score).not.toBe(34);
   });
 
   it("google_data fields absent → matched:false, no throw", () => {
@@ -141,11 +146,11 @@ describe("scoreLead", () => {
     expect(bqRuleNames).not.toContain("has_recent_reviews");
   });
 
-  it("prospect formula arithmetic: profile A no_enrichment → bq=43, dg=35, prospect=15", () => {
+  it("profile A no_enrichment → bq=43, dg=35, prospect=40 (web_nuevo=35 + rating bonus 5)", () => {
     const result = scoreLead(profileA_no_enrichment);
     expect(result.business_quality_score).toBe(43);
     expect(result.digital_gap_score).toBe(35);
-    expect(result.prospect_score).toBe(15); // floor(43*35/100) = floor(15.05) = 15
+    expect(result.prospect_score).toBe(40); // floor(35 * 1.0 * 1.0) + 5 (rating=4.5 >= 4.3)
   });
 
   it("clamps digital_gap to 0 after summing negative weights", () => {

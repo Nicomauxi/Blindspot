@@ -25,6 +25,16 @@ export interface MutualExclusions {
   digital_gap: string[][];
 }
 
+export interface ReviewCountMultiplierRule {
+  max: number | null;
+  multiplier: number;
+}
+
+export interface RatingBonusConfig {
+  threshold: number;
+  bonus: number;
+}
+
 export interface ScoringConfig {
   version: number;
   recent_reviews_threshold_days: number;
@@ -34,6 +44,8 @@ export interface ScoringConfig {
   cap: number;
   prospect_formula: string;
   buyer_types?: BuyerTypesConfig;
+  review_count_multiplier?: ReviewCountMultiplierRule[];
+  rating_bonus?: RatingBonusConfig;
 }
 
 export interface EvaluatedRule {
