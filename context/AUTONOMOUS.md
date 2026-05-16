@@ -164,12 +164,15 @@ Mantener el estilo existente del archivo (tablas, bloques de código, secciones)
 ### Paso 10 — Commit
 
 ```bash
-git add -p  # revisar diff antes de stagear
+# Stagear solo los archivos modificados por esta fase (no usar git add -p — es interactivo)
+git add <lista-de-archivos-específicos>
+git diff --staged   # revisar que el diff sea coherente con la fase
 git commit -m "<tipo>: <descripción concisa>"
 ```
 
 Tipos: feat, fix, refactor, docs, test, chore.
 El mensaje debe describir el comportamiento, no los archivos.
+Nunca usar `git add -p`, `git add -i` ni ningún comando interactivo — el modo autónomo no tiene input humano.
 
 ### Paso 11 — Continuar o detener
 
@@ -240,16 +243,18 @@ Cuando se llega a una stop condition, NO continuar al siguiente paso. En cambio:
 
 **Última actualización:** 2026-05-16
 
-**Sesiones autónomas completadas:** ninguna (archivo recién creado)
+**Sesiones autónomas completadas:** ninguna
 
-**Próxima fase a ejecutar:** Fase 22 — Scoring v2 completo
-(seguir la spec en FUTURE.md § Fase 22)
+**Próxima fase a ejecutar:** Fase 22-pre — migración `scoring_version` + `contact_ready`
+(seguir la spec en FUTURE.md § Fase 22-pre — es PREREQUISITO de Fase 22, no saltear)
 
 **Estado conocido:**
 - Tests: 882 passing, 7 skipped, 69 files
 - Typecheck: limpio
 - DB invariantes: todos en 0 (verificado 2026-05-16)
-- Último commit: 0a8784d (docs: auditoría de arquitectura — debilidades, mejoras y oportunidades)
+- Último commit: 65f8e1e (docs: cuarta auditoría — 19 fixes en arquitectura y roadmap)
+
+**Contexto de la documentación:** los archivos context/ tienen 19 fixes aplicados en la cuarta auditoría (E1–E5, D1–D5, A1–A6, G1–G5). Antes de implementar cualquier fase, el diseño en ARCHITECTURE_FUTURE.md es el canónico — no tiene ambigüedades conocidas.
 
 **Arquitectura objetivo (tres proyectos):**
 - `blindspot` (este repo) — core pipeline puro: discovery, enrichment, scoring. Sin HTTP server. Proceso long-running que escucha instrucciones via PostgreSQL (pg_notify + polling).
