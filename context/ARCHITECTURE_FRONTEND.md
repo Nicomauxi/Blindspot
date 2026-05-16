@@ -7,23 +7,42 @@
 
 ---
 
-## Arquitectura de dos proyectos
+## Arquitectura de tres proyectos
 
 ```
-┌─────────────────────────────────┐     REST API      ┌──────────────────────────┐
-│  blindspot  (este repo)         │ ◄───────────────► │  blindspot-ui            │
-│                                 │                   │                          │
-│  • Pipeline CLI                 │                   │  • Next.js 15 (App Router│
-│  • Scoring engine               │                   │  • Tailwind + shadcn/ui  │
-│  • Discovery providers          │                   │  • Zustand               │
-│  • Enrichment                   │                   │  • No acceso directo a DB│
-│  • API HTTP (Express/Fastify)   │                   │                          │
-│  • Cron / scheduler             │                   │  Repo: blindspot-ui      │
-│  • PostgreSQL (Supabase)        │                   └──────────────────────────┘
-└─────────────────────────────────┘
+┌──────────────────────────────────────────────────────────┐
+│  blindspot-ui  (este repo — frontend)                    │
+│  Next.js 15 · Tailwind + shadcn/ui · Zustand            │
+│  Sin acceso a DB — solo consume REST API                 │
+└──────────────────────────┬───────────────────────────────┘
+                           │ REST /api/v1/ (HTTP)
+┌──────────────────────────▼───────────────────────────────┐
+│  blindspot-api  (repo separado — gateway HTTP)           │
+│  Fastify · TypeScript · Puerto 3001                      │
+│  • Todos los endpoints REST del sistema                  │
+│  • Lee leads, runs, scores de la DB                      │
+│  • Escribe pipeline_config, discovery_jobs, outreach     │
+│  • Dispara pipeline via pg_notify + pipeline_runs row    │
+│  • Sin Playwright · Sin lógica de scoring               │
+└──────────────────────────┬───────────────────────────────┘
+                           │ PostgreSQL compartido (Supabase)
+┌──────────────────────────▼───────────────────────────────┐
+│  blindspot  (repo core — pipeline puro)                  │
+│  Proceso long-running · Sin HTTP server                  │
+│  • Escucha pg_notify → ejecuta pipeline                  │
+│  • Lee pipeline_config → configura cron                  │
+│  • Polls discovery_jobs → ejecuta discovery              │
+│  • Discovery, Enrichment (Playwright), Scoring           │
+│  • Escribe leads, pipeline_runs, scores                  │
+└──────────────────────────────────────────────────────────┘
 ```
 
-**Regla crítica:** `blindspot-ui` nunca accede directamente a la base de datos. Toda interacción ocurre vía la API REST que expone el proyecto `blindspot`. La API es la única fuente de verdad.
+**Regla crítica de separación:**
+- `blindspot-ui` solo habla con `blindspot-api` via HTTP.
+- `blindspot-api` y `blindspot` (core) nunca se llaman por HTTP entre sí — coordinación exclusiva via PostgreSQL.
+- `blindspot` (core) nunca expone endpoints HTTP.
+
+**Beneficio principal:** el procesado de datos (Playwright, scoring masivo, discovery) corre en su propio proceso completamente aislado. Si el pipeline satura la CPU durante horas, la API y la UI siguen respondiendo sin degradación.
 
 ---
 

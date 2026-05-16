@@ -117,29 +117,45 @@ SELECT ROUND(AVG(prospect_score),1) FROM leads WHERE 'franchise-detected' = ANY(
 > Ver `context/ARCHITECTURE_FUTURE.md § Arquitectura de dos proyectos` y
 > `context/ARCHITECTURE_FRONTEND.md` para el diseño completo del frontend.
 
-### Fase API — Servidor HTTP en este proyecto (prerequisito de la UI)
+### Fase API — Nuevo repo `blindspot-api` (prerequisito de la UI)
 
-**Por qué:** `blindspot-ui` necesita consumir datos vía REST API. Esta capa vive en este proyecto (`src/api/`) y comparte el mismo módulo de storage y scoring. No hay lógica de negocio en el frontend.
+**Por qué:** el frontend necesita una API REST para consumir leads, configurar el pipeline y registrar outreach. Esta API vive en un **repo separado** (`blindspot-api`), no en este proyecto. Razón: el core pipeline (Playwright, scoring masivo, discovery) es CPU-bound — mezclarlo con el API server degrada la latencia de la UI cuando el pipeline está corriendo. La separación es total: dos repos, dos procesos, comunicación exclusiva via PostgreSQL.
+
+**Ver:** `ARCHITECTURE_FUTURE.md § Arquitectura de tres proyectos` y `§ Mecanismo de trigger: DB como bus de mensajes` para el diseño completo.
 
 **Prerequisitos:** Scoring v2 estable (Fase 22) + `contact_tier` y `pitch_hook` en score_breakdown.
 
-**Implementación:**
-1. `src/api/server.ts` — servidor Fastify con CORS configurado para `blindspot-ui`
-2. `src/api/routes/leads.ts` — `GET /api/leads` con filtros + cursor pagination + `GET /api/leads/:id`
-3. `src/api/routes/outreach.ts` — CRUD de `lead_outreach` + `POST /generate-offer`
-4. `src/api/routes/discovery.ts` — CRUD de `discovery_jobs` + `GET /suggestions`
-5. `src/api/routes/stats.ts` — `GET /api/stats/overview`
-6. Vista `lead_dashboard` en DB (desnormalización de LeadCard sin joins)
-7. `pnpm run api` — comando para iniciar el servidor API separado del CLI
+**Qué hace `blindspot-api` (nuevo repo):**
+1. Fastify server · TypeScript · Puerto 3001
+2. Todos los endpoints REST `/api/v1/leads`, `/api/v1/outreach`, `/api/v1/pipeline/*`, etc.
+3. Lee de la misma DB (Supabase) que este proyecto — mismo `SUPABASE_URL` + `SUPABASE_SERVICE_KEY`
+4. Escribe `pipeline_config`, `discovery_jobs`, `lead_outreach`, `outreach_campaigns`
+5. Dispara pipeline via `pg_notify('pipeline_trigger', run_id)` + insert en `pipeline_runs`
+6. Nunca importa módulos de `blindspot` — no conoce providers ni scoring logic
 
-**Config:** `config/api.yaml` con port, cors_origin, rate_limit, auth_token (bearer simple para primera versión).
+**Qué hace `blindspot` (este repo) para soportar la API:**
+1. `LISTEN pipeline_trigger` al arrancar — ejecuta run cuando llega NOTIFY
+2. Poll de `pipeline_config.updated_at` cada 60s para reconfigurar cron si cambió
+3. Poll de `discovery_jobs` cada 30s para ejecutar jobs encolados
+4. Verifica `pipeline_runs.abort_requested` entre cada lead para soportar abort limpio
+5. Vista `lead_dashboard` (MATERIALIZED VIEW) creada en la DB — blindspot-api la consulta directamente
 
-**Archivos:** `src/api/` (directorio nuevo), `config/api.yaml` (nuevo)
+**Lo que NUNCA va en blindspot-api:**
+- Playwright, Puppeteer, o cualquier browser automation
+- Lógica de scoring (`computeContactTier`, `calculateSubScores`, etc.)
+- Discovery providers (`YeluProvider`, `OSMProvider`, etc.)
+- Enrichment parsers
 
-**Verificación:**
+**Verificación post-setup:**
 ```bash
-curl http://localhost:3001/api/leads?contact_tier=A,B&prospect_score_gte=40&limit=5
+# blindspot-api corriendo en puerto 3001:
+curl http://localhost:3001/api/v1/leads?contact_tier=A,B&prospect_score_gte=40&limit=5
 # → array de LeadCard con todos los campos del contrato
+
+# blindspot core corriendo y escuchando:
+curl -X POST http://localhost:3001/api/v1/pipeline/run
+# → { run_id: "uuid" }
+# → blindspot core debe recibir el pg_notify y empezar a ejecutar
 ```
 
 ---
@@ -540,17 +556,27 @@ Ejecutar solo después de confirmar invariantes en 0.
 
 ## Infraestructura y operaciones
 
-### Fase 31 — Aislamiento de procesos API/pipeline
+### Fase 31 — Preparar `blindspot` (core) para modo long-running
 
-**Por qué:** el API server y el pipeline worker (Playwright + scoring masivo) comparten proceso. Un re-scoring de 3600 leads bloquea la event loop y la API deja de responder. Ver `ARCHITECTURE_FUTURE.md § Aislamiento de procesos`.
+**Por qué:** con la nueva arquitectura de tres proyectos, `blindspot` deja de tener un HTTP server y pasa a ser un proceso long-running que escucha instrucciones de la DB. Esta fase adapta el repo actual a ese modelo.
 
-**Implementación:**
-1. `src/workers/pipeline.ts` — extrae el pipeline a proceso hijo (`child_process.spawn`)
-2. `src/api/server.ts` — eliminar todos los imports de módulos de enrichment/Playwright
-3. Comunicación exclusiva vía tabla `pipeline_runs` en DB
-4. `pnpm run api` → solo API server; `pnpm run pipeline` → solo worker
+**Implementación en este repo (`blindspot`):**
+1. `src/core/runner.ts` — entry point long-running: `LISTEN pipeline_trigger` via pg_notify + poll config cada 60s + poll discovery_jobs cada 30s
+2. `pnpm run core` — inicia el proceso long-running (reemplaza `pnpm run api` que ya no existe aquí)
+3. Verificar `pipeline_runs.abort_requested` entre cada lead en `enrich` y `score`
+4. Poll de `pipeline_config.updated_at` → `reconfigureCron(expression)` si cambió
+5. Eliminar cualquier referencia a Fastify/HTTP de este repo — no corresponde acá
 
-**Prerequisito:** Fase API completada.
+**Qué NO implementar aquí:** el HTTP server va en `blindspot-api` (repo separado).
+
+**Verificación:**
+```bash
+pnpm run core
+# → "[core] LISTEN pipeline_trigger — esperando instrucciones"
+# → "[core] Cron configurado: 0 2 * * 0 (domingo 02:00)"
+# Luego desde blindspot-api: POST /api/v1/pipeline/run
+# → "[core] Recibido trigger run_id=uuid — iniciando pipeline"
+```
 
 ---
 

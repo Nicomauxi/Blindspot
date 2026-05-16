@@ -12,80 +12,119 @@
 
 ---
 
-## Arquitectura de dos proyectos
+## Arquitectura de tres proyectos
 
-Este sistema está compuesto por dos proyectos separados:
+El sistema está compuesto por tres repositorios con responsabilidades estrictamente separadas:
 
 ```
-┌─────────────────────────────────┐     REST API      ┌──────────────────────────┐
-│  blindspot  (este repo)         │ ◄───────────────► │  blindspot-ui            │
-│                                 │                   │                          │
-│  • Pipeline CLI                 │                   │  • Next.js 15            │
-│  • Scoring engine               │                   │  • Tailwind + shadcn/ui  │
-│  • Discovery providers          │                   │  • Zustand               │
-│  • Enrichment                   │                   │  • No acceso directo a DB│
-│  • API HTTP (Express/Fastify)   │                   │                          │
-│  • Cron / scheduler             │                   │  Diseño: ver             │
-│  • PostgreSQL (Supabase)        │                   │  ARCHITECTURE_FRONTEND.md│
-└─────────────────────────────────┘                   └──────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────┐
+│  blindspot-ui  (repo separado)                                           │
+│  Next.js 15 · Tailwind + shadcn/ui · Zustand                            │
+│  Sin acceso directo a DB — solo consume REST API                         │
+└────────────────────────────┬─────────────────────────────────────────────┘
+                             │ REST /api/v1/ (HTTP)
+┌────────────────────────────▼─────────────────────────────────────────────┐
+│  blindspot-api  (nuevo repo)                                             │
+│  Fastify · TypeScript · Puerto 3001                                      │
+│  • Expone todos los endpoints REST al frontend                           │
+│  • Lee leads, scores, pipeline_runs de la DB                             │
+│  • Escribe pipeline_config, discovery_jobs, lead_outreach                │
+│  • Dispara pipeline via pg_notify + pipeline_runs 'pending'              │
+│  • Sin Playwright · Sin scoring logic · Sin discovery providers          │
+└────────────────────────────┬─────────────────────────────────────────────┘
+                             │ PostgreSQL compartido (Supabase)
+┌────────────────────────────▼─────────────────────────────────────────────┐
+│  blindspot  (este repo) — core pipeline                                  │
+│  Proceso long-running · Sin HTTP server                                  │
+│  • Lee pipeline_config → configura cron interno                          │
+│  • Escucha pg_notify 'pipeline_trigger' → ejecución inmediata            │
+│  • Polls discovery_jobs 'queued' → ejecuta discovery                     │
+│  • Discovery providers (Playwright, scraping, APIs)                      │
+│  • Enrichment (Playwright, parsers, heurístico)                          │
+│  • Scoring engine (sub-scores, buyer_types, contact_tier)                │
+│  • Escribe leads, pipeline_runs, lead_buyer_scores                       │
+└──────────────────────────────────────────────────────────────────────────┘
 ```
 
-**Este proyecto (`blindspot`)** es el backend completo: recopila datos, los enriquece, calcula scores, y expone los resultados vía API REST. También corre los procesos programados (cron). Vive en un servidor.
+**Regla de comunicación:** `blindspot-api` y `blindspot` nunca se llaman por HTTP entre sí. Toda coordinación ocurre via PostgreSQL:
+- `blindspot-api` escribe → `blindspot` lee y ejecuta
+- `blindspot` escribe resultados → `blindspot-api` los expone al frontend
 
-**`blindspot-ui`** es un frontend puro: consume la API, no tiene acceso directo a la DB, no implementa lógica de scoring. Todo el diseño de pantallas, componentes y flujos UX está en `ARCHITECTURE_FRONTEND.md`.
+**`blindspot` (este repo)** es el core pipeline puro. No tiene HTTP server. Corre como proceso long-running en el servidor. Es el único que toca Playwright, discovery providers y scoring.
+
+**`blindspot-api`** es el gateway HTTP. Lee de la misma DB que blindspot. No sabe nada de cómo se procesan los datos — solo los expone y acepta comandos que se materializan como rows en la DB.
+
+**`blindspot-ui`** es el frontend puro. Consume blindspot-api. Todo el diseño está en `ARCHITECTURE_FRONTEND.md`.
 
 ---
 
-## Diseño objetivo — API HTTP (capa nueva en este proyecto)
+## Diseño objetivo — `blindspot-api` (nuevo repo)
 
-La API vive en `src/api/` dentro de este repo. Se agrega al mismo proceso que el CLI, o como proceso separado en el mismo servidor.
+Repo separado: `blindspot-api`. Stack mínimo: Fastify + TypeScript + cliente Supabase (mismo connection string que blindspot). Sin lógica de negocio — solo traducir requests HTTP a queries SQL y viceversa.
 
-### Stack recomendado
+### Stack
 
 ```typescript
-// Fastify — bajo overhead, TypeScript nativo, sin magia
+// src/server.ts
 import Fastify from 'fastify'
+import { createClient } from '@supabase/supabase-js'
+
 const app = Fastify({ logger: true })
-
-// Mismo acceso a DB que el CLI (comparten el módulo storage/)
-import { getLeads } from './storage/leads.js'
+const supabase = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_KEY!)
+// acceso a la misma DB que blindspot, pero solo lectura de leads/runs
+// y escritura de pipeline_config, discovery_jobs, lead_outreach
 ```
 
-### Endpoints que expone este proyecto
+### Endpoints que expone
 
 ```
-GET  /api/leads
-     ?contact_tier=A,B,C
-     &prospect_score_gte=40
-     &niche=restaurant
-     &urgency_signal=high
-     &primary_offer=web_nuevo
-     &contacted=false
-     &source=google_places,mintur
-     &order=prospect_score:desc
-     &limit=50&cursor=<id>
-     → LeadCard[] paginado (cursor-based)
+GET  /api/v1/leads
+     ?contact_tier=A,B,C  &prospect_score_gte=40  &niche=restaurant
+     &urgency_signal=high  &primary_offer=web_nuevo  &contacted=false
+     &q=veterinaria  &source=google_places,mintur
+     &order=prospect_score:desc  &limit=50&cursor=<id>
+     → LeadCard[] desde lead_dashboard MATERIALIZED VIEW
 
-GET  /api/leads/:id
+GET  /api/v1/leads/:id
      → Lead completo con score_breakdown + buyer_type_scores + corroborating_sources
 
-PATCH /api/leads/:id/contact
+PATCH /api/v1/leads/:id/contact
      body: { contacted_at, channel, notes }
 
-GET  /api/outreach?status=pending,responded
-POST /api/outreach  body: { lead_id, channel, offer_type?, offer_text?, offer_source? }
-PATCH /api/outreach/:id  body: { status, responded, outcome, ... }
-POST /api/outreach/generate-offer  body: { lead_id, offer_type?, channel }
+GET  /api/v1/outreach?status=pending,responded
+POST /api/v1/outreach  body: { lead_id, channel, offer_type?, offer_text? }
+PATCH /api/v1/outreach/:id  body: { status, outcome, service_sold, price_sold, notes }
+POST /api/v1/outreach/generate-offer  body: { lead_id, offer_type?, channel }
 
-GET  /api/discovery/jobs?status=running,queued
-POST /api/discovery/jobs  body: { source, location, niche, profile, max_results, cpu_budget }
-PATCH /api/discovery/jobs/:id  body: { action: 'pause'|'resume'|'cancel' }
-GET  /api/discovery/suggestions
-GET  /api/discovery/coverage
+GET  /api/v1/campaigns
+POST /api/v1/campaigns  body: { name, segment_filter }
+GET  /api/v1/campaigns/:id/stats
 
-GET  /api/stats/overview
-GET  /api/stats/outreach
-GET  /api/stats/pipeline
+GET  /api/v1/discovery/jobs?status=running,queued
+POST /api/v1/discovery/jobs  body: { source, location, niche, profile, max_results }
+PATCH /api/v1/discovery/jobs/:id  body: { action: 'pause'|'resume'|'cancel' }
+GET  /api/v1/discovery/suggestions
+GET  /api/v1/discovery/coverage
+
+GET  /api/v1/stats/overview
+GET  /api/v1/stats/outreach
+GET  /api/v1/stats/pipeline
+
+GET  /api/v1/pipeline/config
+PUT  /api/v1/pipeline/config   body: PipelineConfig completa → guarda en DB
+PATCH /api/v1/pipeline/config  body: campos parciales
+
+POST /api/v1/pipeline/run      body: { overrides? } → inserta pipeline_runs 'pending' + pg_notify
+POST /api/v1/pipeline/run/dry  body: { overrides? } → plan sin ejecutar
+POST /api/v1/pipeline/abort    → UPDATE pipeline_runs SET abort_requested=true WHERE status='running'
+POST /api/v1/pipeline/pause-phase  body: { phase: 1|2|3|4 }
+
+GET  /api/v1/pipeline/runs?status=completed,failed&limit=20&cursor=<id>
+GET  /api/v1/pipeline/runs/active
+GET  /api/v1/pipeline/runs/:id
+GET  /api/v1/pipeline/runs/:id/log?since=<iso>
+
+GET  /api/v1/health
 ```
 
 ### View `lead_dashboard` (materializada en DB)
@@ -1510,36 +1549,64 @@ WHERE niche = $niche
 
 ## Diseño objetivo — infraestructura y operaciones
 
-### Aislamiento de procesos: API vs pipeline
+### Mecanismo de trigger: DB como bus de mensajes
 
-El pipeline (Playwright + scoring masivo) es CPU-bound. La API necesita baja latencia. Compartir un solo proceso Node.js significa que un re-scoring de 3600 leads puede bloquear la event loop y la API deja de responder durante minutos.
+`blindspot-api` y `blindspot` (core) nunca se comunican por HTTP. Todo se coordina via PostgreSQL usando dos mecanismos complementarios:
 
-**Diseño objetivo:**
+**1. pg_notify para ejecución inmediata (manual runs):**
 
+```sql
+-- blindspot-api: al recibir POST /api/v1/pipeline/run
+INSERT INTO pipeline_runs (status, triggered_by, config_snapshot, overrides)
+VALUES ('pending', 'manual', $config, $overrides)
+RETURNING id;
+
+SELECT pg_notify('pipeline_trigger', $run_id::text);
+
+-- blindspot (core): al arrancar
+LISTEN pipeline_trigger;
+-- Callback inmediato al recibir NOTIFY:
+client.on('notification', async (msg) => {
+  const runId = msg.payload
+  await executePipeline(runId)   -- actualiza status: pending → running → completed/failed
+})
 ```
-Proceso 1: API server (Fastify)
-  → Low latency, solo lectura + writes pequeños (outreach, pipeline config)
-  → Puerto 3001, siempre disponible
 
-Proceso 2: Pipeline worker
-  → CPU-bound: discovery, enrich (Playwright), scoring masivo
-  → Lanzado bajo demanda (POST /api/v1/pipeline/run → spawn)
-  → Comunica progreso vía tabla pipeline_runs en DB (no IPC directo)
-  → Termina cuando el pipeline termina
+**2. Polling de `pipeline_config` para el cron:**
 
-Comunicación entre procesos: exclusivamente vía DB
-  → API lee pipeline_runs para estado y log
-  → Worker escribe pipeline_runs.log_lines, phase_results, progress
-  → Sin shared memory ni sockets entre procesos
+```typescript
+// blindspot (core) — loop principal cada 60s
+async function configWatcher() {
+  const config = await loadPipelineConfig()
+  if (config.updated_at > lastKnownUpdatedAt) {
+    reconfigureCron(config.cron_expression)
+    lastKnownUpdatedAt = config.updated_at
+  }
+}
+setInterval(configWatcher, 60_000)
 ```
 
-**Implementación:**
-- `src/api/server.ts` — proceso API puro, sin imports de Playwright
-- `src/workers/pipeline.ts` — worker invocado con `child_process.spawn`
-- `pnpm run api` → inicia solo el servidor API
-- `pnpm run pipeline` → inicia el worker standalone (para cron o manual)
+**3. Polling de `discovery_jobs` para jobs de exploración:**
 
-**Regla de boundary:** ningún módulo de enrichment (Playwright) puede ser importado en el proceso API. El boundary es estricto.
+```typescript
+// blindspot (core) — loop cada 30s
+async function jobWatcher() {
+  const job = await db
+    .from('discovery_jobs')
+    .select()
+    .eq('status', 'queued')
+    .order('created_at')
+    .limit(1)
+    .single()
+  if (job) {
+    await executeDiscoveryJob(job)
+  }
+}
+```
+
+**Abort y pause:** `blindspot-api` escribe `pipeline_runs.abort_requested = true`. `blindspot` verifica este flag entre cada lead procesado y termina limpiamente si está activo.
+
+**Regla absoluta:** `blindspot-api` nunca importa módulos de `blindspot`. Si necesita saber si el pipeline está corriendo, lee `pipeline_runs WHERE status='running'`. Si necesita el resultado, lee `leads`. Nunca invoca código de scoring o discovery directamente.
 
 ---
 

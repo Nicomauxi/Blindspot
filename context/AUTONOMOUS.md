@@ -249,13 +249,18 @@ Cuando se llega a una stop condition, NO continuar al siguiente paso. En cambio:
 - Tests: 882 passing, 7 skipped, 69 files
 - Typecheck: limpio
 - DB invariantes: todos en 0 (verificado 2026-05-16)
-- Último commit: f8863b0 (docs: Pipeline Manager — pantallas, config API y tablas DB)
+- Último commit: 0a8784d (docs: auditoría de arquitectura — debilidades, mejoras y oportunidades)
+
+**Arquitectura objetivo (tres proyectos):**
+- `blindspot` (este repo) — core pipeline puro: discovery, enrichment, scoring. Sin HTTP server. Proceso long-running que escucha instrucciones via PostgreSQL (pg_notify + polling).
+- `blindspot-api` (nuevo repo) — gateway HTTP Fastify. Lee/escribe en la misma DB. Dispara pipeline via pg_notify. Sin Playwright ni lógica de scoring.
+- `blindspot-ui` (nuevo repo) — frontend Next.js. Solo consume REST API de blindspot-api.
 
 **Archivos de contexto disponibles:**
 - `context/AUTONOMOUS.md` — este archivo, runbook del modo autónomo
 - `context/SECURITY.md` — reglas de seguridad, comandos bloqueados, presupuesto Google API
 - `context/ARCHITECTURE_FRONTEND.md` — diseño completo del frontend blindspot-ui
-- `context/ARCHITECTURE_FUTURE.md` — arquitectura planeada del backend y API
-- `context/ARCHITECTURE.md` — arquitectura implementada actualmente
+- `context/ARCHITECTURE_FUTURE.md` — arquitectura objetivo completa (tres proyectos + diseño de datos)
+- `context/ARCHITECTURE.md` — arquitectura implementada actualmente en este repo
 
 **Stop condition activa:** ninguna
