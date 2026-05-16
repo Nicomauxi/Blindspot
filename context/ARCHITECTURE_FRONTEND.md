@@ -7,18 +7,26 @@
 
 ---
 
-## Arquitectura de tres proyectos
+## Arquitectura: un repo, dos procesos
+
+```
+blindspot/
+├── src/     ← core pipeline (Playwright, scoring, discovery)
+├── api/     ← Fastify + JWT auth + REST endpoints
+└── ui/      ← este directorio — Next.js 15 (workspace pnpm)
+```
 
 ```
 ┌──────────────────────────────────────────────────────────┐
-│  blindspot-ui  (este repo — frontend)                    │
-│  Next.js 15 · Tailwind + shadcn/ui · Zustand            │
-│  Sin acceso a DB — solo consume REST API                 │
+│  ui/  (Next.js 15 · Tailwind + shadcn/ui · Zustand)     │
+│  Sin acceso a DB — solo consume REST API interna        │
+│  Build estático servido por Nginx en producción         │
 └──────────────────────────┬───────────────────────────────┘
-                           │ REST /api/v1/ (HTTP)
+                           │ REST /api/v1/ (HTTP · Puerto 3001)
 ┌──────────────────────────▼───────────────────────────────┐
-│  blindspot-api  (repo separado — gateway HTTP)           │
+│  api/  — proceso 1  (pnpm --filter api run start)       │
 │  Fastify · TypeScript · Puerto 3001                      │
+│  • JWT auth con roles (admin / cm)                       │
 │  • Todos los endpoints REST del sistema                  │
 │  • Lee leads, runs, scores de la DB                      │
 │  • Escribe pipeline_config, discovery_jobs, outreach     │
@@ -27,9 +35,10 @@
 └──────────────────────────┬───────────────────────────────┘
                            │ PostgreSQL compartido (Supabase)
 ┌──────────────────────────▼───────────────────────────────┐
-│  blindspot  (repo core — pipeline puro)                  │
+│  src/  — proceso 2  (pnpm --filter core run start)      │
 │  Proceso long-running · Sin HTTP server                  │
-│  • Escucha pg_notify → ejecuta pipeline                  │
+│  • LISTEN pipeline_trigger → ejecuta pipeline           │
+│  • Poll pipeline_runs 'pending' cada 60s (fallback)     │
 │  • Lee pipeline_config → configura cron                  │
 │  • Polls discovery_jobs → ejecuta discovery              │
 │  • Discovery, Enrichment (Playwright), Scoring           │
@@ -37,12 +46,17 @@
 └──────────────────────────────────────────────────────────┘
 ```
 
-**Regla crítica de separación:**
-- `blindspot-ui` solo habla con `blindspot-api` via HTTP.
-- `blindspot-api` y `blindspot` (core) nunca se llaman por HTTP entre sí — coordinación exclusiva via PostgreSQL.
-- `blindspot` (core) nunca expone endpoints HTTP.
+**Reglas de separación:**
+- `ui/` solo habla con `api/` via HTTP.
+- `api/` y `src/` nunca se llaman por HTTP — coordinación exclusiva via PostgreSQL.
+- `src/` nunca expone endpoints HTTP.
 
-**Beneficio principal:** el procesado de datos (Playwright, scoring masivo, discovery) corre en su propio proceso completamente aislado. Si el pipeline satura la CPU durante horas, la API y la UI siguen respondiendo sin degradación.
+**Beneficio del repo único:** un solo deploy, migraciones de DB coordinadas, config YAML compartida entre `api/` y `src/`, sin sincronización cross-repo.
+
+**Usuarios y roles:**
+- `admin`: acceso completo (pipeline, discovery, todos los leads, gestión de usuarios)
+- `cm`: leads filtrados por `lead_filter` configurado por admin, outreach propio, generate-offer
+- Ver `ARCHITECTURE_FUTURE.md § Autenticación y roles` para el diseño completo.
 
 ---
 

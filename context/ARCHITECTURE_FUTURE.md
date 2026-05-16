@@ -5,28 +5,68 @@
 > Su función es servir de norte compartido para que cada fase se construya
 > en dirección correcta y los datos recopilados se usen a su máximo potencial.
 >
-> **Para el diseño del frontend:** ver `ARCHITECTURE_FRONTEND.md` (proyecto separado `blindspot-ui`).
+> **Para el diseño del frontend:** ver `ARCHITECTURE_FRONTEND.md` (directorio `ui/` en este mismo repo).
 >
 > Antes de implementar cualquier fase nueva: leer este archivo para verificar
 > que la implementación sea coherente con el diseño objetivo.
 
 ---
 
-## Arquitectura de tres proyectos
+## Arquitectura: un repo, dos procesos
 
-El sistema está compuesto por tres repositorios con responsabilidades estrictamente separadas:
+El sistema vive en un único repositorio con tres directorios de código y dos procesos en producción.
+Contexto de uso: herramienta personal + acceso a usuarios seleccionados (baja concurrencia, 2-5 usuarios).
+
+```
+blindspot/                   ← repo único
+├── src/                     ← core pipeline (ya existe)
+├── api/                     ← NUEVO: Fastify + auth + REST endpoints
+├── ui/                      ← NUEVO: Next.js 15 (workspace pnpm)
+├── config/                  ← YAML compartido entre core y api
+├── .env                     ← variables de entorno de todos los procesos (un solo .env en raíz)
+└── pnpm-workspace.yaml
+```
+
+**`pnpm-workspace.yaml` (contenido):**
+```yaml
+packages:
+  - 'src'        # core pipeline — package.json en src/
+  - 'api'        # Fastify API
+  - 'ui'         # Next.js
+```
+
+**Comandos cross-workspace:**
+```bash
+pnpm --filter api run start      # arranca API
+pnpm --filter core run start     # arranca core pipeline (long-running)
+pnpm --filter ui run dev         # Next.js dev server
+pnpm --filter ui run build       # build estático para Nginx
+```
+
+**`.env` — un solo archivo en la raíz, cargado por todos los procesos:**
+```
+SUPABASE_URL=http://localhost:54321
+SUPABASE_SERVICE_KEY=...
+API_JWT_SECRET=...   # mínimo 32 chars aleatorios
+GOOGLE_PLACES_API_KEY=...
+LLM_PROVIDER=gemini  # gemini | ollama | openai-compatible
+GEMINI_API_KEY=...
+CORS_ORIGIN=http://localhost:3000   # en dev; en prod: https://blindspot.tudominio.com
+PORT=3001            # puerto del servidor API
+```
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
-│  blindspot-ui  (repo separado)                                           │
-│  Next.js 15 · Tailwind + shadcn/ui · Zustand                            │
-│  Sin acceso directo a DB — solo consume REST API                         │
+│  ui/  (Next.js 15 · Tailwind + shadcn/ui · Zustand)                     │
+│  Sin acceso a DB — solo consume REST API interna                         │
+│  Build estático servido por Nginx en producción                          │
 └────────────────────────────┬─────────────────────────────────────────────┘
-                             │ REST /api/v1/ (HTTP)
+                             │ REST /api/v1/ (HTTP · Puerto 3001)
 ┌────────────────────────────▼─────────────────────────────────────────────┐
-│  blindspot-api  (nuevo repo)                                             │
+│  api/  — proceso 1  (pnpm --filter api run start)                       │
 │  Fastify · TypeScript · Puerto 3001                                      │
-│  • Expone todos los endpoints REST al frontend                           │
+│  • JWT auth con roles (admin / cm)                                       │
+│  • Endpoints REST filtrados por rol                                      │
 │  • Lee leads, scores, pipeline_runs de la DB                             │
 │  • Escribe pipeline_config, discovery_jobs, lead_outreach                │
 │  • Dispara pipeline via pg_notify + pipeline_runs 'pending'              │
@@ -34,11 +74,12 @@ El sistema está compuesto por tres repositorios con responsabilidades estrictam
 └────────────────────────────┬─────────────────────────────────────────────┘
                              │ PostgreSQL compartido (Supabase)
 ┌────────────────────────────▼─────────────────────────────────────────────┐
-│  blindspot  (este repo) — core pipeline                                  │
+│  src/  — proceso 2  (pnpm --filter core run start)                      │
 │  Proceso long-running · Sin HTTP server                                  │
+│  • LISTEN pipeline_trigger (pg_notify) → ejecución inmediata            │
+│  • Poll pipeline_runs 'pending' cada 60s (fallback si NOTIFY se pierde) │
+│  • Poll discovery_jobs 'queued' cada 60s → ejecuta discovery            │
 │  • Lee pipeline_config → configura cron interno                          │
-│  • Escucha pg_notify 'pipeline_trigger' → ejecución inmediata            │
-│  • Polls discovery_jobs 'queued' → ejecuta discovery                     │
 │  • Discovery providers (Playwright, scraping, APIs)                      │
 │  • Enrichment (Playwright, parsers, heurístico)                          │
 │  • Scoring engine (sub-scores, buyer_types, contact_tier)                │
@@ -46,33 +87,82 @@ El sistema está compuesto por tres repositorios con responsabilidades estrictam
 └──────────────────────────────────────────────────────────────────────────┘
 ```
 
-**Regla de comunicación:** `blindspot-api` y `blindspot` nunca se llaman por HTTP entre sí. Toda coordinación ocurre via PostgreSQL:
-- `blindspot-api` escribe → `blindspot` lee y ejecuta
-- `blindspot` escribe resultados → `blindspot-api` los expone al frontend
+**Regla de comunicación:** `api/` y `src/` nunca se llaman por HTTP entre sí. Toda coordinación ocurre via PostgreSQL:
+- `api/` escribe → `src/` lee y ejecuta
+- `src/` escribe resultados → `api/` los expone al frontend
 
-**`blindspot` (este repo)** es el core pipeline puro. No tiene HTTP server. Corre como proceso long-running en el servidor. Es el único que toca Playwright, discovery providers y scoring.
-
-**`blindspot-api`** es el gateway HTTP. Lee de la misma DB que blindspot. No sabe nada de cómo se procesan los datos — solo los expone y acepta comandos que se materializan como rows en la DB.
-
-**`blindspot-ui`** es el frontend puro. Consume blindspot-api. Todo el diseño está en `ARCHITECTURE_FRONTEND.md`.
+**Ventaja del repo único:** una sola configuración de CI/CD, un solo deploy, migraciones de DB coordinadas sin sincronizar repos, config YAML compartida sin duplicación.
 
 ---
 
-## Diseño objetivo — `blindspot-api` (nuevo repo)
+## Autenticación y roles
 
-Repo separado: `blindspot-api`. Stack mínimo: Fastify + TypeScript + cliente Supabase (mismo connection string que blindspot). Sin lógica de negocio — solo traducir requests HTTP a queries SQL y viceversa.
+### Tabla `users`
+
+```sql
+CREATE TABLE users (
+  id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  email           text UNIQUE NOT NULL,
+  password_hash   text NOT NULL,             -- bcrypt, cost 12
+  role            text NOT NULL CHECK (role IN ('admin', 'cm')),
+  lead_filter     jsonb,                     -- filtro configurable por admin para cada CM
+  created_at      timestamptz DEFAULT now(),
+  updated_at      timestamptz DEFAULT now(),
+  last_login_at   timestamptz,              -- null = nunca ha hecho login
+  active          boolean DEFAULT true
+);
+```
+
+**`lead_filter`** permite que el admin defina qué ve cada CM sin tocar código:
+```json
+{ "primary_offer": ["marketing", "catalogo"], "contact_tier": ["A", "B"] }
+```
+Si `lead_filter` es null (admin), el CM ve todos los leads.
+
+### JWT
+
+- Firmado con secret en `.env.API_JWT_SECRET`
+- Payload: `{ user_id, email, role, lead_filter }`
+- Expiración: 24h
+- Sin self-registration — admin crea cuentas vía `POST /api/v1/users`
+- Revocación: `UPDATE users SET active=false` invalida el token en el siguiente middleware check
+
+### Mapa de acceso por rol
+
+| Endpoint | admin | cm |
+|----------|:-----:|:--:|
+| GET /api/v1/leads (filtrado por lead_filter) | ✅ todos | ✅ su filtro |
+| GET /api/v1/leads/:id | ✅ | ✅ si pasa su filtro |
+| PATCH /api/v1/leads/:id/contact | ✅ | ✅ |
+| POST /api/v1/outreach | ✅ | ✅ (user_id = suyo) |
+| PATCH /api/v1/outreach/:id | ✅ | ✅ solo propios |
+| POST /api/v1/outreach/generate-offer | ✅ | ✅ |
+| GET /api/v1/stats/overview | ✅ global | ✅ solo su outreach |
+| GET /api/v1/pipeline/config | ✅ | ❌ |
+| PUT /api/v1/pipeline/config | ✅ | ❌ |
+| POST /api/v1/pipeline/run | ✅ | ❌ |
+| GET /api/v1/discovery/jobs | ✅ | ❌ |
+| POST /api/v1/discovery/jobs | ✅ | ❌ |
+| GET+POST /api/v1/users | ✅ | ❌ |
+| GET /api/v1/health | ✅ público | ✅ público |
+
+---
+
+## Diseño objetivo — `api/` (directorio en el mismo repo)
+
+Directorio `api/` dentro del repo único. Stack mínimo: Fastify + TypeScript + cliente Supabase (mismo connection string que `src/`). Sin lógica de negocio — solo traducir requests HTTP a queries SQL y viceversa, con auth JWT + roles.
 
 ### Stack
 
 ```typescript
-// src/server.ts
+// api/src/server.ts
 import Fastify from 'fastify'
 import { createClient } from '@supabase/supabase-js'
 
 const app = Fastify({ logger: true })
 const supabase = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_KEY!)
-// acceso a la misma DB que blindspot, pero solo lectura de leads/runs
-// y escritura de pipeline_config, discovery_jobs, lead_outreach
+// acceso a la misma DB que src/ (core pipeline)
+// lectura de leads/runs + escritura de pipeline_config, discovery_jobs, lead_outreach
 ```
 
 ### Endpoints que expone
@@ -454,7 +544,7 @@ Hoy `passed_filter=true` significa cosas diferentes según la fuente:
 - Google Places: pasó filtro de calidad (rating, reviews, perfil)
 - Externas: existe en el directorio
 
-Diseño objetivo: agregar `contact_ready: boolean` como campo derivado.
+Diseño objetivo: agregar `contact_ready: boolean` y `contacted_by` como campos derivados en `leads`.
 
 ```
 contact_ready = (contact_tier IN ('A', 'B', 'C'))
@@ -462,7 +552,20 @@ contact_ready = (contact_tier IN ('A', 'B', 'C'))
              AND NOT franchise_detected
 ```
 
-Este campo es el filtro real para reportes de ventas. `passed_filter` se mantiene para compatibilidad.
+```sql
+-- Migración para leads
+ALTER TABLE leads ADD COLUMN contact_ready boolean GENERATED ALWAYS AS (
+  score_breakdown->>'contact_tier' IN ('A', 'B', 'C')
+  AND prospect_score >= 30
+  AND NOT ('franchise-detected' = ANY(tags))
+) STORED;
+
+ALTER TABLE leads ADD COLUMN contacted_by uuid REFERENCES users(id);
+-- null = nunca contactado. SET al crear el primer lead_outreach para este lead.
+CREATE INDEX leads_contacted_by ON leads(contacted_by) WHERE contacted_by IS NOT NULL;
+```
+
+`contacted_by` no reemplaza `lead_outreach` (historial completo) — es una referencia rápida al usuario propietario del lead para la UI de CM (filtra "mis leads"). `passed_filter` se mantiene para compatibilidad.
 
 ---
 
@@ -930,12 +1033,15 @@ cta:           "¿Les muestro cómo quedó para una peluquería similar en Monte
 CREATE TABLE lead_outreach (
   id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   lead_id       uuid REFERENCES leads(id) ON DELETE CASCADE,
+  user_id       uuid REFERENCES users(id) NOT NULL,  -- siempre requerido — quién contactó
   created_at    timestamptz DEFAULT now(),
+  updated_at    timestamptz DEFAULT now(),
+  campaign_id   uuid REFERENCES outreach_campaigns(id),  -- null = sin campaña
   
   -- Oferta generada
   offer_type    text NOT NULL,              -- 'web_nuevo' | 'delivery_propio' | etc.
   channel       text NOT NULL,             -- 'email' | 'whatsapp' | 'phone'
-  offer_package jsonb NOT NULL,            -- OfferPackage completo generado
+  offer_package jsonb,                     -- OfferPackage completo — nullable: permite logging rápido sin oferta
   
   -- Estado del pipeline
   status        text NOT NULL DEFAULT 'pending',
@@ -948,12 +1054,18 @@ CREATE TABLE lead_outreach (
   notes         text,
   outcome       text,                      -- 'won' | 'lost_price' | 'lost_timing' | 'lost_interest'
   
+  -- Cierre
+  service_sold  text,                      -- qué servicio se cerró (null si perdido)
+  price_sold    numeric(10,2),             -- precio acordado en UYU (null si perdido)
+  
   -- Feedback para scoring
   lead_quality_feedback smallint           -- -1/0/+1: el lead era tan bueno como prometía el score?
 );
 
-CREATE INDEX lead_outreach_lead_id ON lead_outreach(lead_id);
-CREATE INDEX lead_outreach_status ON lead_outreach(status);
+CREATE INDEX lead_outreach_lead_id   ON lead_outreach(lead_id);
+CREATE INDEX lead_outreach_user_id   ON lead_outreach(user_id);
+CREATE INDEX lead_outreach_status    ON lead_outreach(status);
+CREATE INDEX lead_outreach_campaign  ON lead_outreach(campaign_id) WHERE campaign_id IS NOT NULL;
 ```
 
 ### API de la pipeline (PostgREST)
@@ -1027,6 +1139,7 @@ CREATE TABLE discovery_jobs (
   created_at   timestamptz DEFAULT now(),
   started_at   timestamptz,
   completed_at timestamptz,
+  user_id      uuid REFERENCES users(id),  -- null = disparado por cron/sistema
   
   -- Parámetros
   source       text NOT NULL,
@@ -1042,11 +1155,11 @@ CREATE TABLE discovery_jobs (
   progress     integer DEFAULT 0,       -- 0–100
   
   -- Resultados
-  leads_found      integer DEFAULT 0,
-  leads_new        integer DEFAULT 0,
+  leads_found        integer DEFAULT 0,
+  leads_new          integer DEFAULT 0,
   leads_corroborated integer DEFAULT 0,
-  leads_hot_new    integer DEFAULT 0,
-  error_message    text,
+  leads_hot_new      integer DEFAULT 0,
+  error_message      text,
   
   -- Meta
   triggered_by text DEFAULT 'manual'   -- 'manual'|'scheduled'|'gap_analysis'
@@ -1610,30 +1723,28 @@ async function jobWatcher() {
 
 ---
 
-### `lead_dashboard` — MATERIALIZED VIEW con refresh controlado
+### `lead_dashboard` — VIEW normal (suficiente para 2-5 usuarios)
 
-La vista `lead_dashboard` debe ser una MATERIALIZED VIEW, no una VIEW normal, para garantizar latencia predecible bajo múltiples usuarios simultáneos.
+Para la concurrencia esperada (2-5 usuarios), una VIEW normal es suficiente. PostgreSQL optimiza el plan de query para las condiciones de filtro del request. Una MATERIALIZED VIEW agrega complejidad de refresh sin beneficio real a esta escala.
 
 ```sql
-CREATE MATERIALIZED VIEW lead_dashboard AS
-  SELECT ...   -- mismo SQL que la VIEW actual
+-- Crear como VIEW simple — sin MATERIALIZED
+CREATE VIEW lead_dashboard AS
+  SELECT ...   -- mismo SQL definido en § View lead_dashboard arriba
   FROM leads l
   LEFT JOIN LATERAL (...) lbs_top ON true
   WHERE l.passed_filter = true
     AND l.score_breakdown->>'contact_tier' != 'X';
 
-CREATE UNIQUE INDEX lead_dashboard_id     ON lead_dashboard(id);
-CREATE INDEX lead_dashboard_tier          ON lead_dashboard(contact_tier);
-CREATE INDEX lead_dashboard_score         ON lead_dashboard(prospect_score DESC);
-CREATE INDEX lead_dashboard_offer         ON lead_dashboard(primary_offer);
-CREATE INDEX lead_dashboard_urgency       ON lead_dashboard(urgency_signal);
-CREATE INDEX lead_dashboard_contacted     ON lead_dashboard(contacted_at);
+-- Índices en la tabla leads (no en la view) — son los que importan para performance:
+CREATE INDEX leads_contact_tier ON leads ((score_breakdown->>'contact_tier'));
+CREATE INDEX leads_prospect_score ON leads(prospect_score DESC) WHERE passed_filter = true;
+CREATE INDEX leads_primary_offer ON leads ((score_breakdown->'sub_scores'->>'primary_offer')) WHERE passed_filter = true;
 ```
 
-**Refresh strategy:**
-- Después de cada pipeline run: `REFRESH MATERIALIZED VIEW CONCURRENTLY lead_dashboard` como último paso antes de `pipeline_runs.completed_at`
-- Después de `PATCH /api/v1/leads/:id/contact`: marca `pipeline_runs.dashboard_stale = true`, refresca en el próximo ciclo
-- `CONCURRENTLY` garantiza que la vista sigue accesible durante el refresh (sin lock de lectura)
+**Cuándo reconsiderar:** si en el futuro hay >20 usuarios concurrentes o el dashboard tarda >500ms → migrar a MATERIALIZED VIEW con `REFRESH CONCURRENTLY`. Por ahora, VIEW normal.
+
+**Nota para implementación:** la VIEW no se autoactualiza — siempre refleja el estado real de `leads` en el momento de la query, que es exactamente lo que queremos.
 
 ---
 
@@ -1968,6 +2079,7 @@ CREATE TABLE outreach_campaigns (
   name            text NOT NULL,          -- "Restaurantes Pocitos mayo 2026"
   created_at      timestamptz DEFAULT now(),
   closed_at       timestamptz,
+  user_id         uuid REFERENCES users(id) NOT NULL,  -- quién creó la campaña
   segment_filter  jsonb NOT NULL,         -- {contact_tier: ['B'], niche: ['restaurant'], ...}
   status          text DEFAULT 'active',  -- 'active' | 'paused' | 'closed'
   notes           text
@@ -2015,7 +2127,7 @@ El Pipeline Manager muestra barra de presupuesto y emite alerta (badge rojo) si 
 ## Diseño de UI
 
 > El diseño completo de la UI (pantallas, wireframes, componentes, templates de oferta, orden de construcción)
-> está en `context/ARCHITECTURE_FRONTEND.md` — proyecto separado `blindspot-ui`.
+> está en `context/ARCHITECTURE_FRONTEND.md` — directorio `ui/` en el mismo repo.
 >
 > Este archivo solo define lo que el backend debe exponer para que la UI funcione.
 
@@ -2455,6 +2567,8 @@ El formulario es el mismo para todos los leads. No hay campos obligatorios más 
 CREATE TABLE lead_outreach (
   id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   lead_id       uuid NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
+  user_id       uuid NOT NULL REFERENCES users(id),  -- quién hizo el contacto
+  campaign_id   uuid REFERENCES outreach_campaigns(id),  -- null = sin campaña
   created_at    timestamptz DEFAULT now(),
   updated_at    timestamptz DEFAULT now(),
 
@@ -2489,6 +2603,8 @@ CREATE TABLE lead_outreach (
 );
 
 CREATE INDEX lead_outreach_lead_id    ON lead_outreach(lead_id);
+CREATE INDEX lead_outreach_user_id    ON lead_outreach(user_id);
+CREATE INDEX lead_outreach_campaign   ON lead_outreach(campaign_id) WHERE campaign_id IS NOT NULL;
 CREATE INDEX lead_outreach_status     ON lead_outreach(status);
 CREATE INDEX lead_outreach_outcome    ON lead_outreach(outcome) WHERE outcome IS NOT NULL;
 CREATE INDEX lead_outreach_closed_at  ON lead_outreach(closed_at) WHERE closed_at IS NOT NULL;

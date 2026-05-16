@@ -252,25 +252,22 @@ docker exec supabase_db_gap-radar psql -U postgres -d postgres -c "..."
 - `tags_contradictorios`: 0 ✅
 - `passed_sin_score`: 0 ✅
 
-### Trabajo de planificación realizado esta sesión
+### Arquitectura definida (docs 2026-05-16)
 
-Se creó `context/ARCHITECTURE_FUTURE.md` (2148 líneas) con:
-- Análisis crítico del scoring actual (6 problemas con datos concretos)
-- Fórmula commercial_score v2 completa (5 dimensiones)
-- Flujos detallados de cada etapa del pipeline
-- 8 señales de valor no capturadas
-- Diseño UI completo (4 pantallas + wireframes + API contract)
-- Pipeline de contacto automatizado + LLM genérico (Gemini/Ollama)
-- Feedback loop de outreach (tabla lead_outreach)
-- Automatización completa con cron (orden: refresh → discover → enrich → score)
-- DGI + RUT estrategia por etapas
-- Sub-niche detection para niche "other" (2034 leads invisibles)
-
-Se actualizó `context/FUTURE.md` con fases 21–30 ordenadas por impacto.
+- Un repo, dos procesos: `src/` (core pipeline) + `api/` (Fastify) + `ui/` (Next.js)
+- Auth: JWT + roles admin/cm + `lead_filter` por CM
+- Schemas completos: users, lead_outreach, discovery_jobs, outreach_campaigns, pipeline_runs, pipeline_config
+- Auditoría completa de 30 gaps — todos aplicados a los archivos context/
 
 ### Próximas acciones — en este orden
 
-1. **Commit checkpoint** de toda la documentación generada esta sesión
-2. **Fase 22 — Scoring v2** (crítico — scores actuales inflados, leads tier X como hot)
-3. **Fase 21 — PostGIS** (30 min de infra, desbloquea competitive density + hot zones)
-4. **Fase 28 — Sub-niche detection** (2034 leads "other" invisibles, costo ~0 con Gemini free)
+1. **Commit checkpoint** de toda la documentación de planificación y auditoría
+2. **Fase 22-pre** (~30 min) — `scoring_version smallint` en leads y lead_buyer_scores
+3. **Fase 22** — Scoring v2 completo (Phase 20 absorbida — incluye contact_tier + pitch_hook)
+4. **Fase 6** — Cross-source deduplication activo + reconciliación retroactiva
+5. **Fase 15** — Email quality + clasificación tipo teléfono
+6. **Fase inferred_state** — Migrar a columna propia (antes de cualquier endpoint UI)
+7. **Fase 21** — PostGIS (30 min infra, cloud via Dashboard → Extensions, no SQL)
+8. **Fase API-0** — Tabla users + roles
+9. **Fase API** — Servidor Fastify (CORS, JWT, endpoints, lead_dashboard VIEW, paginación)
+10. **UI** — Next.js (ver ARCHITECTURE_FRONTEND.md)

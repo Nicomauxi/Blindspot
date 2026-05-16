@@ -8,48 +8,167 @@
 
 ## Urgente — Bloqueantes para el valor del producto
 
-> Ejecutar en este orden antes de agregar providers nuevos.
+> Ejecutar en este orden. Fase 19 eliminada — era un stopgap innecesario, Fase 22 la reemplaza completamente.
 > Ver `ARCHITECTURE_FUTURE.md` para el diseño objetivo completo de scoring, contactabilidad y pitch.
 
-### Fase 19 — Fix scoring formula para fuentes externas (CRÍTICO)
+### Fase 22-pre — `scoring_version` field (PREREQUISITO de Fase 22, ~30 min)
 
-**Por qué:** `external_source_quality=70` suma puntos a `business_quality_score` (sistema viejo). La fórmula actual usa `max(sub_scores)` — los 70 puntos no tienen efecto en el score final. MINTUR, OSM y Yelu tienen scores de 1–18 aunque el sistema "debería" compensarlos. Ver `ARCHITECTURE_FUTURE.md § Fórmula corregida`.
+**Por qué:** sin este campo, al desplegar Scoring v2 y re-scorear todos los leads, no hay forma de distinguir scores v1 de v2 si el proceso falla a mitad. Hacerlo antes de cualquier cambio de fórmula.
 
 **Implementación:**
-1. Agregar `source_quality_bonus(lead): number` en `scoring/index.ts`:
-   - mintur → +20, pedidosya → +15, yelu → +10, osm → +8, google_places → 0
-   - Configurar en `config/scoring.yaml` bajo clave `source_quality_bonus`
-2. Cambiar fórmula: `floor((max(sub_scores) + source_quality_bonus) × contactabilityMultiplier × reviewMultiplier) + ratingBonus`
-3. Cambiar `contactabilityMultiplier`: actualmente `if(email) ×1.2 else ×1.0`.
-   Nuevo: `email → ×1.3 | whatsapp → ×1.2 | email+whatsapp → ×1.4 | phone_only → ×1.0 | sin_nada → ×0.5`
-4. Agregar sub-score `contacto_directo` en `scoring/sub-scores.ts` con cap 40:
-   señales: tiene phone verificado + niche activo + sin plataforma digital conocida
-5. Correr `score --all` para refrescar todos los leads
+1. Migración: `ALTER TABLE leads ADD COLUMN scoring_version smallint NOT NULL DEFAULT 1;`
+2. Migración: `ALTER TABLE lead_buyer_scores ADD COLUMN scoring_version smallint NOT NULL DEFAULT 1;`
+3. Backfill ya cubierto por el `DEFAULT 1` — verificar: `SELECT COUNT(*) FROM leads WHERE scoring_version IS NULL;` debe ser 0.
+4. Al desplegar Scoring v2: el comando `score --all` setea `scoring_version = 2` en cada row actualizada.
 
-**Archivos:** `src/modules/scoring/index.ts`, `src/modules/scoring/sub-scores.ts`, `config/scoring.yaml`
+**Tipo `smallint` (no text):** permite comparación numérica (`WHERE scoring_version < 2`) y es más eficiente que texto. Valor 1 = v1, 2 = v2, etc.
 
-**Verificación post-cambio:**
+**Invariante a agregar (activar post-Fase 22):**
 ```sql
--- MINTUR debe tener leads con prospect_score > 30 post-fix
-SELECT width_bucket(prospect_score, 0, 100, 5) * 20 AS bucket, COUNT(*)
-FROM leads WHERE source = 'mintur' GROUP BY 1 ORDER BY 1;
+-- Todos los leads passed deben estar en v2 al terminar
+SELECT COUNT(*) FROM leads WHERE passed_filter = true AND scoring_version < 2;
+-- Debe ser 0 al terminar score --all
+
+-- Invariante 5 (activar en la sesión de Fase 22):
+-- Tier X nunca debe ser hot con la nueva fórmula
+SELECT COUNT(*) FROM leads
+WHERE score_breakdown->>'contact_tier' = 'X' AND prospect_score >= 55;
+-- Debe ser < 5 (tolerar mínimas excepciones de datos edge)
 ```
 
 ---
 
-### Fase 20 — `contact_tier` y `pitch_hook` en score_breakdown
+### Fase 22 — Scoring v2 completo
 
-**Por qué:** sin estos dos campos el sistema no puede responder las preguntas más básicas de ventas: ¿cómo contacto este lead? ¿qué le digo?. Ver `ARCHITECTURE_FUTURE.md § Pitch generation` y `§ Tiers de contacto`.
+**Por qué:** la fórmula actual tiene 6 problemas concretos con datos: leads incontactables como hot, corroboration inversamente correlacionada, niche "other" invisible, franquicias con mayor score que independientes, calidad del negocio ignorada, max() ignora multi-oferta. Ver `ARCHITECTURE_FUTURE.md § Análisis crítico del scoring actual`.
+
+**Prerequisito:** Fase 22-pre (`scoring_version` field) debe estar aplicada antes.
+
+**Fórmula v2:**
+```
+commercial_score = min(100,
+  floor((gap_depth + commercial_breadth + business_quality_pts)
+        × accessibility_factor × timing_factor)
+  + urgency_bonus
+)
+```
 
 **Implementación:**
-1. Función `computeContactTier(lead): 'A'|'B'|'C'|'D'|'X'` en `scoring/index.ts`
-   - A: email verificado | B: whatsapp | C: phone | D: address | X: nada
-2. Función `computePitchHook(primary_offer, inferred_state, niche): string` en nuevo archivo `scoring/pitch.ts`
-   - Mapa configurable en `config/scoring.yaml` bajo `pitch_hooks`
-3. Persistir ambos en `score_breakdown.contact_tier` y `score_breakdown.pitch_hook`
-4. Agregar invariante: `SELECT COUNT(*) FROM leads WHERE passed_filter=true AND score_breakdown->>'contact_tier' IS NULL` debe ser 0
+1. Agregar `scoring_version = 'v2'` en cada row al re-scorear
+2. `gap_depth`: `min(60, max(sub_scores) + source_quality_bonus)`
+3. `source_quality_bonus`: mintur=+20, pedidosya=+15, yelu=+10, osm=+8, google_places=0 (en `config/scoring.yaml`)
+4. `commercial_breadth`: +8 si 2ª oferta ≥ 30, +4 si 3ª ≥ 30
+5. `business_quality_pts`: rating + reviews + data_confidence + corroboration, cap 15
+6. `accessibility_factor`: X=0.30, D=0.65, C=0.90, B=1.15, A=1.30, A+B=1.40
+7. `timing_factor`: urgency + new_business + competitive_pressure + franchise_penalty
+8. `urgency_bonus`: high=+5, medium=+2
+9. Sub-score nuevo `contacto_directo` (cap 40) en `scoring/sub-scores.ts`: phone verificado + niche activo + sin plataformas digitales conocidas
+10. **`computeContactTier(lead)` → 'A'|'B'|'C'|'D'|'X'** — INCLUIDO EN ESTA FASE (Fase 20 eliminada como fase separada):
+    - A: email en `canonical_fields.email.value` O `digital_footprint.contact_emails` (no vacío)
+    - B: whatsapp confirmado (y no A) — C: phone (y no A ni B) — D: address — X: nada
+11. **`computePitchHook(primary_offer, inferred_state, niche): string`** — nuevo `scoring/pitch.ts`, mapa en `config/scoring.yaml → pitch_hooks`
+12. Persistir en `score_breakdown`: `contact_tier`, `pitch_hook`, `source_quality_bonus`, `inferred_state_summary`
+13. `scoring_version = 2` en cada row actualizada (leads + lead_buyer_scores)
+14. Thresholds nuevos en `config/scoring.yaml`: hot=55, pitcheable=40, pool=25
+15. Correr `score --all`
 
-**Archivos:** `src/modules/scoring/index.ts`, nuevo `src/modules/scoring/pitch.ts`, `config/scoring.yaml`
+**Archivos:** `src/modules/scoring/index.ts`, `src/modules/scoring/sub-scores.ts`, nuevo `src/modules/scoring/pitch.ts`, `config/scoring.yaml`
+
+**Verificación post-implementación:**
+```sql
+-- Tier X nunca debe aparecer como hot (< 5 excepciones)
+SELECT COUNT(*) FROM leads
+WHERE score_breakdown->>'contact_tier' = 'X' AND prospect_score >= 55;
+
+-- Car dealers deben subir: avg > 40 post-v2
+SELECT ROUND(AVG(prospect_score),1) FROM leads WHERE niche = 'car_dealer';
+
+-- Franquicias deben bajar a < 20 de promedio (por sus gaps bajos, no solo el penalty)
+SELECT ROUND(AVG(prospect_score),1) FROM leads WHERE 'franchise-detected' = ANY(tags);
+
+-- Todos los leads passed deben estar en v2
+SELECT COUNT(*) FROM leads WHERE passed_filter = true AND scoring_version < 2;
+-- Debe ser 0
+
+-- contact_tier y pitch_hook en todos los leads passed
+SELECT COUNT(*) FROM leads WHERE passed_filter=true AND score_breakdown->>'contact_tier' IS NULL;
+-- Debe ser 0
+```
+
+---
+
+### Fase 20 — ✅ Absorbida por Fase 22
+
+`contact_tier` y `pitch_hook` se implementan dentro del engine de scoring v2 (Fase 22, steps 10-12). No es una fase separada.
+
+---
+
+### Fase 6 — Cross-source deduplication activo (MOVIDA A URGENTE)
+
+**Por qué:** `findCrossSourceMatch` está implementado pero no se llama al insertar leads externos. Resultado: un mismo negocio existe como 3 leads separados en lugar de 1 lead con 3 fuentes corroborantes. `corroborating_sources` queda siempre vacío. `data_confidence_score` nunca sube. Cada nueva fuente que se agrega sin este fix multiplica el ruido. Ver `ARCHITECTURE_FUTURE.md § Cross-source como motor de confianza`.
+
+**Implementación en `src/cli/commands/discover-external.ts`:**
+```
+// Antes de insertExternalLead(candidate):
+const match = findCrossSourceMatch(candidate, allLeads, 0.85)
+if (match) {
+  await addCorroboratingSource(match.id, { source: candidate.source, external_id: candidate.external_id, ... })
+  // reconciliar canonical_fields: phone, email, website
+  // recalcular data_confidence_score
+} else {
+  await insertExternalLead(candidate)
+}
+```
+
+**Archivos:** `src/cli/commands/discover-external.ts`, `src/storage/external-leads.ts`, `src/modules/discovery/deduplication.ts`
+
+**Paso crítico post-implementación — reconciliación retroactiva:**
+El fix solo deduplica runs NUEVOS. Los ~4.800 leads existentes siguen siendo duplicados hasta que se re-corra discovery sobre las fuentes existentes. Al terminar la implementación:
+```bash
+# Re-correr discovery para cada fuente activa para consolidar duplicados existentes
+blindspot discover-external --source mintur --dry-run   # verificar antes
+blindspot discover-external --source osm --location montevideo --niche restaurant
+blindspot discover-external --source yelu --location montevideo
+# ... resto de fuentes y zonas
+# Después re-scorear para actualizar contact_tier con canonical_fields ahora poblados:
+blindspot score --all
+```
+
+**Verificación:**
+```sql
+-- Debe haber leads con corroborating_sources no vacío post-reconciliación
+SELECT COUNT(*) FROM leads WHERE jsonb_array_length(corroborating_sources) > 0;
+-- El COUNT(*) total de leads debe haber BAJADO (duplicados fusionados)
+SELECT COUNT(*) FROM leads;
+-- contact_tier debe estar más preciso post canonical_fields
+SELECT contact_tier, COUNT(*) FROM leads
+CROSS JOIN LATERAL jsonb_extract_path_text(score_breakdown, 'contact_tier') contact_tier
+WHERE passed_filter = true GROUP BY 1 ORDER BY 1;
+```
+
+---
+
+### Fase — `inferred_state` → columna propia (DEUDA ALTA → ejecutar antes de UI)
+
+**Por qué:** la UI filtrará por `digitalization_level`, `has_delivery`, `has_pos`. Sin columna propia, cada query hace JSON parsing en tabla completa. Con columna propia se puede indexar. Hacerlo antes de escribir cualquier endpoint de filtrado. Ver `ARCHITECTURE_FUTURE.md § inferred_state como columna propia`.
+
+**Implementación:**
+1. `ALTER TABLE leads ADD COLUMN inferred_state jsonb;`
+2. `UPDATE leads SET inferred_state = digital_footprint->'inferred_state' WHERE digital_footprint->'inferred_state' IS NOT NULL;`
+3. Índices:
+   ```sql
+   CREATE INDEX leads_digitalization_level ON leads ((inferred_state->>'digitalization_level'));
+   CREATE INDEX leads_has_delivery ON leads ((inferred_state->'has_delivery'->>'value'));
+   CREATE INDEX leads_has_pos ON leads ((inferred_state->'has_pos'->>'value'));
+   ```
+4. Actualizar todos los accesos en código: `digital_footprint->'inferred_state'` → `inferred_state`
+5. Eliminar `inferred_state` del JSONB `digital_footprint` (UPDATE por lotes de 500)
+
+**Verificación:**
+```sql
+SELECT COUNT(*) FROM leads WHERE inferred_state IS NOT NULL;
+-- Debe coincidir con el count anterior de digital_footprint->'inferred_state' IS NOT NULL
+```
 
 ---
 
@@ -58,7 +177,9 @@ FROM leads WHERE source = 'mintur' GROUP BY 1 ORDER BY 1;
 **Por qué:** tenemos coordenadas GPS en prácticamente todos los leads de OSM, muchos de MINTUR y Google Places. Sin PostGIS son columnas decorativas. Con PostGIS se habilitan: competitive density (único sin web en 500m), hot zone clustering (mapa de zonas), turismo proximity (urgency signal automático). Ver `ARCHITECTURE_FUTURE.md § Sub-niche detection` y `§ Señales de valor no capturadas`.
 
 **Implementación:**
-1. Activar extensión: `CREATE EXTENSION IF NOT EXISTS postgis;` en Supabase local y cloud
+1. Activar extensión:
+   - **Local:** `CREATE EXTENSION IF NOT EXISTS postgis;` (funciona con `psql` directo)
+   - **Cloud Supabase:** via Dashboard → Database → Extensions → buscar "postgis" → Enable. El SQL `CREATE EXTENSION` falla en cloud por permisos — usar solo el Dashboard.
 2. Migrar: `ALTER TABLE leads ADD COLUMN gps geography(Point, 4326);`
 3. Backfill: `UPDATE leads SET gps = ST_MakePoint(lng, lat)::geography WHERE lat IS NOT NULL AND lng IS NOT NULL;`
 4. Índice: `CREATE INDEX leads_gps_gist ON leads USING GIST(gps);`
@@ -110,52 +231,118 @@ SELECT ROUND(AVG(prospect_score),1) FROM leads WHERE 'franchise-detected' = ANY(
 
 ## API HTTP y frontend
 
-> El sistema está compuesto por dos proyectos separados:
-> - `blindspot` (este repo) — backend pipeline + API HTTP + cron
-> - `blindspot-ui` (repo separado) — frontend Next.js que consume la API
->
-> Ver `context/ARCHITECTURE_FUTURE.md § Arquitectura de dos proyectos` y
-> `context/ARCHITECTURE_FRONTEND.md` para el diseño completo del frontend.
+> El sistema usa un **repo único** con tres directorios: `src/` (core pipeline), `api/` (Fastify), `ui/` (Next.js).
+> Dos procesos en el servidor: core pipeline + API HTTP.
+> Ver `context/ARCHITECTURE_FUTURE.md § Arquitectura: un repo, dos procesos` para el diseño completo.
 
-### Fase API — Nuevo repo `blindspot-api` (prerequisito de la UI)
+### Fase API-0 — Tabla `users` + roles (PREREQUISITO de la API)
 
-**Por qué:** el frontend necesita una API REST para consumir leads, configurar el pipeline y registrar outreach. Esta API vive en un **repo separado** (`blindspot-api`), no en este proyecto. Razón: el core pipeline (Playwright, scoring masivo, discovery) es CPU-bound — mezclarlo con el API server degrada la latencia de la UI cuando el pipeline está corriendo. La separación es total: dos repos, dos procesos, comunicación exclusiva via PostgreSQL.
+**Por qué:** la API tiene múltiples usuarios con roles diferentes (admin, cm). El schema debe existir antes del primer endpoint. Ver `ARCHITECTURE_FUTURE.md § Autenticación y roles`.
 
-**Ver:** `ARCHITECTURE_FUTURE.md § Arquitectura de tres proyectos` y `§ Mecanismo de trigger: DB como bus de mensajes` para el diseño completo.
+**Implementación:**
+1. Migración: tabla `users` (id, email, password_hash, role, lead_filter, active, created_at, updated_at, last_login_at) — ver schema completo en `ARCHITECTURE_FUTURE.md § Autenticación y roles`
+2. Migración: `ALTER TABLE lead_outreach ADD COLUMN user_id uuid REFERENCES users(id) NOT NULL;`
+   — si la tabla no existe todavía, `user_id` entra desde el CREATE inicial (Fase 25)
+3. Insertar usuario admin inicial:
+   ```sql
+   INSERT INTO users (email, password_hash, role)
+   VALUES ('admin@blindspot.local', '<bcrypt_hash_cost12>', 'admin');
+   ```
+4. Índice: `CREATE UNIQUE INDEX users_email ON users(email);`
+5. Trigger `updated_at`:
+   ```sql
+   CREATE OR REPLACE FUNCTION set_updated_at()
+   RETURNS TRIGGER LANGUAGE plpgsql AS $$
+   BEGIN NEW.updated_at = now(); RETURN NEW; END $$;
+   CREATE TRIGGER users_updated_at BEFORE UPDATE ON users
+   FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+   ```
 
-**Prerequisitos:** Scoring v2 estable (Fase 22) + `contact_tier` y `pitch_hook` en score_breakdown.
+**`lead_filter` null/empty behavior:** si `lead_filter IS NULL` → admin (ve todo). Si `lead_filter = '{}'` → CM sin restricciones (igual que admin, úsese solo para testing). Si `lead_filter = '{"primary_offer":[]}'` → CM sin leads visibles (configuración de error, validar en API antes de guardar).
 
-**Qué hace `blindspot-api` (nuevo repo):**
-1. Fastify server · TypeScript · Puerto 3001
-2. Todos los endpoints REST `/api/v1/leads`, `/api/v1/outreach`, `/api/v1/pipeline/*`, etc.
-3. Lee de la misma DB (Supabase) que este proyecto — mismo `SUPABASE_URL` + `SUPABASE_SERVICE_KEY`
-4. Escribe `pipeline_config`, `discovery_jobs`, `lead_outreach`, `outreach_campaigns`
-5. Dispara pipeline via `pg_notify('pipeline_trigger', run_id)` + insert en `pipeline_runs`
-6. Nunca importa módulos de `blindspot` — no conoce providers ni scoring logic
+**Sin self-registration** — admin crea cuentas CM vía `POST /api/v1/users` o query directa.
 
-**Qué hace `blindspot` (este repo) para soportar la API:**
-1. `LISTEN pipeline_trigger` al arrancar — ejecuta run cuando llega NOTIFY
-2. Poll de `pipeline_config.updated_at` cada 60s para reconfigurar cron si cambió
-3. Poll de `discovery_jobs` cada 30s para ejecutar jobs encolados
-4. Verifica `pipeline_runs.abort_requested` entre cada lead para soportar abort limpio
-5. Vista `lead_dashboard` (MATERIALIZED VIEW) creada en la DB — blindspot-api la consulta directamente
+---
 
-**Lo que NUNCA va en blindspot-api:**
+### Fase API — Servidor Fastify en `api/` (mismo repo)
+
+**Por qué:** el frontend necesita una API REST. La API vive en `api/` dentro de este repo — mismo servidor, mismo deploy, sin coordinación cross-repo. Core pipeline (Playwright, scoring, discovery) sigue siendo proceso separado.
+
+**Prerequisitos:** Fase 22 estable + `contact_tier` + `pitch_hook` + `inferred_state` como columna + Fase API-0 (users).
+
+**Estructura `api/`:**
+```
+api/
+├── src/
+│   ├── server.ts          ← Fastify instance + plugins
+│   ├── auth/
+│   │   ├── middleware.ts  ← JWT verify + role check
+│   │   └── routes.ts      ← POST /auth/login, POST /auth/refresh
+│   ├── routes/
+│   │   ├── leads.ts       ← GET /leads, GET /leads/:id, PATCH /leads/:id/contact
+│   │   ├── outreach.ts    ← GET/POST/PATCH /outreach, POST /outreach/generate-offer
+│   │   ├── pipeline.ts    ← GET/PUT /pipeline/config, POST /pipeline/run, GET /pipeline/runs
+│   │   ├── discovery.ts   ← GET/POST /discovery/jobs
+│   │   ├── stats.ts       ← GET /stats/overview, /stats/outreach, /stats/pipeline
+│   │   ├── users.ts       ← GET/POST/PATCH /users (solo admin)
+│   │   └── health.ts      ← GET /health (público)
+│   └── db/
+│       └── client.ts      ← createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+└── package.json
+```
+
+**Lo que NUNCA va en `api/`:**
 - Playwright, Puppeteer, o cualquier browser automation
 - Lógica de scoring (`computeContactTier`, `calculateSubScores`, etc.)
 - Discovery providers (`YeluProvider`, `OSMProvider`, etc.)
 - Enrichment parsers
 
+**Configuración Fastify (plugins obligatorios):**
+```typescript
+// server.ts
+app.register(import('@fastify/cors'), {
+  origin: process.env.CORS_ORIGIN || 'http://localhost:3000',
+  credentials: true,
+})
+app.register(import('@fastify/helmet'))  // headers de seguridad
+app.register(import('@fastify/rate-limit'), { max: 100, timeWindow: '1 minute' })
+```
+
+**Vista `lead_dashboard`:** VIEW normal (no MATERIALIZED) — suficiente para 2-5 usuarios. Crear como paso explícito antes del primer endpoint de leads:
+```sql
+-- Ejecutar como migración al deployar la API
+CREATE VIEW lead_dashboard AS
+SELECT ... -- ver definición completa en ARCHITECTURE_FUTURE.md § View lead_dashboard
+```
+
+**Paginación cursor-based en todos los list endpoints:**
+- Todos los GET de colecciones aceptan `limit` (default 50, max 200) y `cursor` (último `id` de la página anterior)
+- Respuesta siempre incluye `{ data: T[], next_cursor: string | null, total: number }`
+- Aplica a: `GET /leads`, `GET /outreach`, `GET /stats/outreach`, `GET /pipeline/runs`
+
+**Validación de filtros de CM en endpoints individuales:**
+- `GET /leads/:id` → si el lead no pasa el `lead_filter` del CM → 403 (no 404, para no revelar existencia)
+- `PATCH /outreach/:id` → CM solo puede actualizar sus propios registros (`user_id = req.user.id`)
+- `GET /stats/overview` → para CM, retorna solo sus métricas de outreach (no globales)
+
+**Endpoint de password reset (admin only):**
+- `PATCH /api/v1/users/:id` body: `{ password?: string, active?: boolean, lead_filter?: object }`
+- Solo admin puede cambiar la password de otro usuario
+- No hay "forgot password" email — uso interno, admin lo resetea directamente
+
+**Trigger de pipeline:** `api/` escribe `pipeline_runs` row + `pg_notify('pipeline_trigger', run_id)`. Core escucha `LISTEN pipeline_trigger` + pollea `pipeline_runs WHERE status='pending'` cada 60s como fallback.
+
 **Verificación post-setup:**
 ```bash
-# blindspot-api corriendo en puerto 3001:
-curl http://localhost:3001/api/v1/leads?contact_tier=A,B&prospect_score_gte=40&limit=5
-# → array de LeadCard con todos los campos del contrato
+# API corriendo en puerto 3001:
+curl -H "Authorization: Bearer <token>" \
+  http://localhost:3001/api/v1/leads?contact_tier=A,B&prospect_score_gte=40&limit=5
+# → { data: LeadCard[], next_cursor: string|null, total: number }
 
-# blindspot core corriendo y escuchando:
-curl -X POST http://localhost:3001/api/v1/pipeline/run
+# Trigger de pipeline:
+curl -X POST -H "Authorization: Bearer <token>" http://localhost:3001/api/v1/pipeline/run
 # → { run_id: "uuid" }
-# → blindspot core debe recibir el pg_notify y empezar a ejecutar
+# → core debe recibir el pg_notify y empezar a ejecutar
 ```
 
 ---
@@ -378,30 +565,7 @@ Ver ARCHITECTURE.md — sección Scoring para detalles de implementación.
 > Antes de implementar una fase sin MD → correr Gemini DeepSearch primero (ver flujo en PROJECT_MASTER.md).
 > PedidosYa (Fase 10) es especialmente importante: confirma `has_delivery` en `inferred_state` con alta confianza.
 
-### Fase 6 — Cross-source deduplication activo (BLOQUEANTE para modelo de evidencias)
-
-**Por qué:** `findCrossSourceMatch` está implementado pero no se llama al insertar leads externos. Resultado: un mismo negocio existe como 3 leads separados en lugar de 1 lead con 3 fuentes corroborantes. `corroborating_sources` queda siempre vacío. `data_confidence_score` nunca sube. Ver `ARCHITECTURE_FUTURE.md § Cross-source como motor de confianza`.
-
-**Implementación en `src/cli/commands/discover-external.ts`:**
-```
-// Antes de insertExternalLead(candidate):
-const match = findCrossSourceMatch(candidate, allLeads, 0.85)
-if (match) {
-  await addCorroboratingSource(match.id, { source: candidate.source, external_id: candidate.external_id, ... })
-  // reconciliar canonical_fields: phone, email, website
-  // recalcular data_confidence_score
-} else {
-  await insertExternalLead(candidate)
-}
-```
-
-**Archivos:** `src/cli/commands/discover-external.ts`, `src/storage/external-leads.ts`, `src/modules/discovery/deduplication.ts`
-
-**Verificación:**
-```sql
--- Después de re-discovery: debe haber leads con corroborating_sources no vacío
-SELECT COUNT(*) FROM leads WHERE jsonb_array_length(corroborating_sources) > 0;
-```
+### Fase 6 — ✅ Movida al bloque Urgente (ver arriba)
 
 ---
 
@@ -444,11 +608,13 @@ Ver ARCHITECTURE.md — tabla `lead_buyer_scores`, 7 buyer types, CLI `score --b
 
 ---
 
-### Fase 15 — Clasificación de calidad de email
+### Fase 15 — Clasificación de calidad de email + tipo de teléfono
 
-**Por qué:** hoy detectamos emails pero no diferenciamos `info@dominio.com` (genérico, responde el que atiende) de `juan@dominio.com` (personal, decide el dueño). El email del dueño vale 3× para prospecting.
+**Por qué (email):** hoy detectamos emails pero no diferenciamos `info@dominio.com` (genérico, responde el que atiende) de `juan@dominio.com` (personal, decide el dueño). El email del dueño vale 3× para prospecting.
 
-**Clasificación:**
+**Por qué (teléfono):** en Uruguay `09x` es móvil — llega directo al dueño. `02x` es fijo Montevideo (recepción). `04x` son fijos del interior. El pitch por llamada tiene probabilidad de éxito completamente distinta según tipo.
+
+**Clasificación de email:**
 
 | Tipo | Patrón | `contact_reliability` |
 |---|---|---|
@@ -462,7 +628,12 @@ Ver ARCHITECTURE.md — tabla `lead_buyer_scores`, 7 buyer types, CLI `score --b
 - Si no hay MX válido → tag `email-no-mx`, reducir `contact_reliability` en 0.2
 - Solo para emails en footprint, no para emails de fuentes externas
 
-**Archivos:** nuevo parser `src/modules/enrichment/parsers/email-quality.ts`, ajuste en `src/modules/enrichment/index.ts`.
+**Clasificación de teléfono:**
+- Regex: `09\d{7}` → celular → tag `mobile-phone`, `contact_reliability += 0.15`
+- Regex: `0[2-4]\d{7,8}` → fijo → tag `landline-phone`
+- Aplica a todos los teléfonos en `canonical_fields.phone.value` y `digital_footprint.contact_phones`
+
+**Archivos:** nuevo `src/modules/enrichment/parsers/email-quality.ts`, nuevo `src/shared/phone.ts`, ajuste en `src/modules/enrichment/index.ts`.
 
 ---
 
@@ -554,29 +725,51 @@ Ejecutar solo después de confirmar invariantes en 0.
 
 ---
 
+## Pre-producción — antes de dar acceso a otros usuarios
+
+> Estos items deben estar resueltos antes de compartir la URL con cualquier CM.
+
+| Item | Por qué | Cómo |
+|------|---------|------|
+| **HTTPS + reverse proxy Nginx** | Sin HTTPS, JWT viaja en claro | Nginx + Let's Encrypt (certbot) |
+| **Anti-detección scraping** | Yelu y PedidosYa pueden banear la IP con runs semanales desde la misma IP | User-agent rotation + delays aleatorios (200-800ms) + config en `config/discovery.yaml → scraping` |
+| **DB backup automatizado** | Un solo servidor, pérdida = pérdida total de leads | `pg_dump` en cron diario → comprimido → carpeta local + sync a Backblaze B2 o similar |
+| **Rate limiting en API** | Evitar hammering accidental | Fastify `@fastify/rate-limit`: 100 req/min por token, 10 req/min en `/auth/login` |
+| **pm2 para gestión de procesos** | Reinicio automático si core o api crashean | `pm2 start` para ambos procesos + `pm2 startup` |
+
+---
+
 ## Infraestructura y operaciones
 
-### Fase 31 — Preparar `blindspot` (core) para modo long-running
+### Fase 31 — DIFERIDA (no aplica al modelo de un repo)
 
-**Por qué:** con la nueva arquitectura de tres proyectos, `blindspot` deja de tener un HTTP server y pasa a ser un proceso long-running que escucha instrucciones de la DB. Esta fase adapta el repo actual a ese modelo.
+~~Preparar `blindspot` (core) para modo long-running~~ — el core ya corre como proceso separado (`pnpm --filter core run start`) con `LISTEN pipeline_trigger` + poll fallback. No requiere una fase adicional.
 
-**Implementación en este repo (`blindspot`):**
-1. `src/core/runner.ts` — entry point long-running: `LISTEN pipeline_trigger` via pg_notify + poll config cada 60s + poll discovery_jobs cada 30s
-2. `pnpm run core` — inicia el proceso long-running (reemplaza `pnpm run api` que ya no existe aquí)
-3. Verificar `pipeline_runs.abort_requested` entre cada lead en `enrich` y `score`
-4. Poll de `pipeline_config.updated_at` → `reconfigureCron(expression)` si cambió
-5. Eliminar cualquier referencia a Fastify/HTTP de este repo — no corresponde acá
+### Fase 32 — DIFERIDA (VIEW normal es suficiente para 2-5 usuarios)
 
-**Qué NO implementar aquí:** el HTTP server va en `blindspot-api` (repo separado).
+~~MATERIALIZED VIEW~~ — `lead_dashboard` como VIEW normal con índices correctos maneja sin problema la carga de 2-5 usuarios. Revisar si y cuando aparezca latencia real.
 
-**Verificación:**
-```bash
-pnpm run core
-# → "[core] LISTEN pipeline_trigger — esperando instrucciones"
-# → "[core] Cron configurado: 0 2 * * 0 (domingo 02:00)"
-# Luego desde blindspot-api: POST /api/v1/pipeline/run
-# → "[core] Recibido trigger run_id=uuid — iniciando pipeline"
+### Fase 33 — DIFERIDA (sin consumidores externos)
+
+~~API versionado~~ — un solo equipo, un solo repo, sin consumidores externos de la API. No hay breaking changes que coordinar con terceros.
+
+### Fase 35 — SIMPLIFICADA
+
+~~Detección de cron missed runs~~ — pm2 reinicia el proceso si cae. El poll de `pipeline_runs WHERE status='pending'` cada 60s recupera runs que llegaron mientras el proceso estaba reiniciando. Suficiente para uso personal.
+
+---
+
+### Fase 34 — Endpoint `/api/v1/health`
+
+**Por qué:** sin un health endpoint no hay forma de monitorear el servidor sin abrir la UI. Crítico antes de dar acceso a CMs.
+
+**Implementación en `api/src/routes/health.ts`:**
+```typescript
+// GET /api/v1/health — sin autenticación (público para monitors externos)
+// → { status, db: 'ok'|'error', pipeline_running, leads_count, hot_leads_count, version }
 ```
+
+**Verificación:** `curl http://localhost:3001/api/v1/health` → JSON con `status: 'ok'`.
 
 ---
 
@@ -802,15 +995,16 @@ curl /api/v1/leads?q=veterinaria&contact_tier=A,B
 
 ---
 
-## Proyecto frontend — blindspot-ui (repo separado)
+## Proyecto frontend — `ui/` (directorio en este repo)
 
-El frontend es un proyecto Next.js separado que consume la API REST de este proyecto.
+El frontend es un workspace Next.js en `ui/` dentro de este mismo repo.
 Todo el diseño de pantallas, componentes y UX está en `context/ARCHITECTURE_FRONTEND.md`.
 
-**Prerequisitos para iniciar blindspot-ui:**
-- Fase API completada (API HTTP activa en este proyecto)
+**Prerequisitos para iniciar `ui/`:**
+- Fase API completada (API en `api/` corriendo en puerto 3001)
 - Scoring v2 estable (`contact_tier` + `pitch_hook` en score_breakdown)
 - Vista `lead_dashboard` creada en DB
+- Tabla `users` + JWT funcionando
 
 **Orden de construcción** (ver detalle en ARCHITECTURE_FRONTEND.md):
 1. Lead Explorer básico (lista con filtros)
