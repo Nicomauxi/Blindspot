@@ -5,6 +5,7 @@ import {
   normalizeName,
   nameSimilarity,
   findCrossSourceMatch,
+  isFranchise,
 } from "../../src/modules/discovery/deduplication.js";
 
 function makeLead(overrides: Partial<Lead> & { name: string; source: Lead["source"] }): Lead {
@@ -231,5 +232,29 @@ describe("findCrossSourceMatch", () => {
     const candidate = makeCandidate({ name: "Hotel Asociación", source: "mintur" });
     const lead = makeLead({ name: "Farmacia del Centro", source: "google_places" });
     expect(findCrossSourceMatch(candidate, [lead])).toBeNull();
+  });
+});
+
+describe("isFranchise", () => {
+  const franchises = new Set(["Abitab", "McDonald's", "Hertz Rent A Car"]);
+
+  it("matches exact name (case-insensitive)", () => {
+    expect(isFranchise("ABITAB", franchises)).toBe(true);
+  });
+
+  it("matches with levenshtein ≤ 2 (typo — distancia 1)", () => {
+    expect(isFranchise("Abita", franchises)).toBe(true);
+  });
+
+  it("does not match name too far from any franchise", () => {
+    expect(isFranchise("Abitab Montevideo", franchises)).toBe(false);
+  });
+
+  it("returns false for non-franchise", () => {
+    expect(isFranchise("Peluquería María", franchises)).toBe(false);
+  });
+
+  it("returns false for empty franchise set", () => {
+    expect(isFranchise("Abitab", new Set())).toBe(false);
   });
 });

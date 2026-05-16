@@ -55,6 +55,26 @@ describe("evaluateRule — field conditions", () => {
     expect(evaluateRule(r, lead).matched).toBe(false);
   });
 
+  it("neq matches when field differs from value", () => {
+    const lead = makeLead({ source: "mintur" } as Partial<Lead>);
+    const r = rule({ name: "ext_src", condition: { field: "source", op: "neq", value: "google_places" } });
+    const { matched, value } = evaluateRule(r, lead);
+    expect(matched).toBe(true);
+    expect(value).toBe("mintur");
+  });
+
+  it("neq does not match when field equals value", () => {
+    const lead = makeLead({ source: "google_places" } as Partial<Lead>);
+    const r = rule({ name: "ext_src", condition: { field: "source", op: "neq", value: "google_places" } });
+    expect(evaluateRule(r, lead).matched).toBe(false);
+  });
+
+  it("neq devuelve matched:false cuando el campo es null (limitación conocida: null-guard en evaluateRule:23)", () => {
+    const lead = makeLead();
+    const r = rule({ name: "ext_src", condition: { field: "source", op: "neq", value: "google_places" } });
+    expect(evaluateRule(r, lead).matched).toBe(false);
+  });
+
   it("gte matches at exact boundary (inclusive)", () => {
     const lead = makeLead({ rating: 4.5 });
     const r = rule({ name: "rating_excellent", condition: { field: "rating", op: "gte", value: 4.5 } });

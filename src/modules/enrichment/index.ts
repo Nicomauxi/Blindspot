@@ -1,3 +1,4 @@
+import { computeInferredState } from "./inferred-state.js";
 import { getLogger } from "../../shared/logger.js";
 import { isSocialOrMissingWeb } from "../discovery/filters.js";
 import { getDiscoveryConfig } from "../discovery/config.js";
@@ -17,6 +18,7 @@ import {
 } from "./directory-discovery.js";
 import {
   discoverHeuristicSources,
+  getHeuristicConfig,
   type HeuristicListsCtx,
   isHeuristicStale,
 } from "./heuristic-discovery.js";
@@ -39,7 +41,7 @@ import { parseEmails } from "./parsers/email.js";
 import type { EmailParseCtx } from "./parsers/email.js";
 import { parseWebPhones } from "./parsers/phone-web.js";
 import { parseHoursOnWeb } from "./parsers/hours-web.js";
-import { OUTDATED_YEAR_THRESHOLD, parseCopyrightYear } from "./parsers/copyright-year.js";
+import { parseCopyrightYear } from "./parsers/copyright-year.js";
 import { parseSsl } from "./parsers/ssl.js";
 import { whoisLookup, normalizeDomain } from "./whois.js";
 import type { GeoCtx } from "../social-enrich/geo-penalty.js";
@@ -140,7 +142,8 @@ function isWhoisCacheFresh(footprint: DigitalFootprint | null): boolean {
 
 function deriveTags(
   footprint: DigitalFootprintEnriched,
-  lead: Pick<Lead, "phone">
+  lead: Pick<Lead, "phone">,
+  outdatedYearThreshold: number
 ): string[] {
   const tags: string[] = [];
 
@@ -186,7 +189,7 @@ function deriveTags(
   if (
     footprint.copyright_year !== undefined &&
     footprint.copyright_year !== null &&
-    footprint.copyright_year <= OUTDATED_YEAR_THRESHOLD
+    footprint.copyright_year <= outdatedYearThreshold
   ) {
     tags.push("web-outdated");
   }
@@ -429,6 +432,7 @@ export async function enrichLead(
   const log = getLogger();
   const start = Date.now();
   const fetchedAtIso = new Date().toISOString();
+  const outdatedYearThreshold = getHeuristicConfig().outdated_year_threshold;
   const originalWebsite = lead.website?.trim() ?? "";
   const isSocialWebsite =
     !!originalWebsite &&
@@ -568,7 +572,7 @@ export async function enrichLead(
         Promise.resolve(parseWhatsapp(html)),
         Promise.resolve(parseSocialLinks(html)),
         Promise.resolve(parseOperationalSystems(html, ctx?.operationalCtx)),
-        Promise.resolve(parseCopyrightYear(html)),
+        Promise.resolve(parseCopyrightYear(html, outdatedYearThreshold)),
         Promise.resolve(parseEmails(html, ctx?.emailCtx)),
         Promise.resolve(parseWebPhones(html, lead.phone)),
         Promise.resolve(parseHoursOnWeb(html)),
@@ -622,8 +626,10 @@ export async function enrichLead(
     }
   }
 
+  footprint.inferred_state = computeInferredState(footprint, lead);
+
   const tags_to_add = [
-    ...deriveTags(footprint, lead),
+    ...deriveTags(footprint, lead, outdatedYearThreshold),
     ...heuristicTags(heuristicDiscovery),
     ...socialSearchTags(socialSearch),
   ];

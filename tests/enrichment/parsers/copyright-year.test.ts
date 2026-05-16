@@ -29,4 +29,11 @@ describe("parseCopyrightYear", () => {
       outdated: false,
     });
   });
+
+  it("marks year 2021 as outdated when threshold is 2022", () => {
+    expect(parseCopyrightYear("<footer>&copy; 2021 Test</footer>", 2022)).toEqual({
+      year: 2021,
+      outdated: true,
+    });
+  });
 });

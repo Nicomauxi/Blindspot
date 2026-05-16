@@ -1,7 +1,7 @@
 # Blindspot — Project Master
 
 > Sos el Tech Lead de Blindspot. Este archivo es tu runbook operativo.
-> Leé este archivo + `ARCHITECTURE.md` + `FUTURE.md` al iniciar cada sesión.
+> Leé este archivo + `ARCHITECTURE.md` + `ARCHITECTURE_FUTURE.md` + `FUTURE.md` al iniciar cada sesión.
 > `LEADS_DATA.md` solo cuando el trabajo involucra análisis de datos concretos.
 > Nicolás es el Product Owner — supervisa y decide. Vos ejecutás.
 >
@@ -156,6 +156,7 @@ Para lograrlo: **siempre adjuntar `ARCHITECTURE.md` al prompt** como contexto ba
 **Estructura de prompt para Claude Code:**
 ```
 [Adjuntar ARCHITECTURE.md como contexto]
+[Adjuntar ARCHITECTURE_FUTURE.md como contexto de diseño objetivo]
 
 Contexto del sistema: [referencia al módulo relevante según ARCHITECTURE.md]
 
@@ -183,11 +184,13 @@ Archivos probablemente relevantes: [listar según ARCHITECTURE.md]
 **Reglas para prompts:**
 - Una tarea por prompt — atómico
 - El prompt debe funcionar en un chat sin contexto previo — no asumir que CC recuerda nada
+- **Adjuntar siempre `ARCHITECTURE_FUTURE.md` junto con `ARCHITECTURE.md`** — CC debe verificar que su implementación sea coherente con el diseño objetivo antes de escribir código
 - Siempre pedir old/new antes de aplicar
 - Siempre incluir verificación en el prompt
 - Siempre incluir la instrucción de actualizar context/ al final del prompt
 - Si el plan de Claude Code toca más archivos de los esperados → revisar antes de aprobar
 - Si Claude Code modifica tests: corrección de fixture de input (ok) vs cambio de aserción (no ok)
+- Si CC propone algo que contradiga `ARCHITECTURE_FUTURE.md` → rechazar el plan y pedir alineación
 
 **Flujo de aprobación de planes:**
 Cuando Nicolás trae de vuelta un bloque "Plan: …" a esta sesión, ese plan fue propuesto por CC
@@ -225,65 +228,49 @@ docker exec supabase_db_gap-radar psql -U postgres -d postgres -c "..."
 
 > Reescribir completamente al cerrar cada sesión. Solo el snapshot necesario para arrancar la siguiente — sin narrativa histórica (eso vive en git log).
 
-**Tests:** 865 passing, 7 skipped, 68 files | **Typecheck:** limpio
+**Tests:** 882 passing, 7 skipped, 69 files | **Typecheck:** limpio
 
-**Fases completadas: F, C, 9 (Yelu), 10 (PedidosYa), B (sub-scores), E (franquicias), 12 (buyer-type scoring), 14 (review count multiplicador).**
+**Fases completadas: F, C, 9 (Yelu), 10 (PedidosYa), B (sub-scores), E (franquicias), 12 (buyer-type scoring), 14 (review count multiplicador), 16 (urgency signals).**
 
-### Pipeline en background (iniciado 21:18 del 2026-05-15 — corre overnight)
+### Estado de DB (snapshot 2026-05-16 — pipeline completo)
 
-PIDs activos: 1175901 (enrich yelu --with-heuristic) y 1175902 (enrich osm --with-heuristic).
+| Fuente | Total | Passed | Hot (≥55) | Pitcheable (≥40) | Contactable | Avg score |
+|--------|-------|--------|-----------|-----------------|-------------|-----------|
+| google_places | 1474 | 172 | 113 | 140 | 165 | 55.7 |
+| osm | 622 | 622 | 217 | 229 | 187 | 24.7 |
+| yelu | 672 | 672 | 96 | 150 | 639 | 15.1 |
+| mintur | 2027 | 2027 | 0 | 2 | 1857 | 17.7 |
 
-Cuando terminen → corren `score --all` + `infer-state --all` automáticamente.
+**Nota scores altos OSM/Yelu:** los 217 hot OSM y 96 hot Yelu son pre-scoring v2. Con la fórmula v2 (Fase 22) los leads tier X colapsarán — estos números son inflados. La Fase 22 es la prioridad inmediata.
 
-**Al arrancar la próxima sesión, verificar si terminó:**
-```bash
-ps aux | grep "node.*enrich" | grep -v grep
-```
-Si no hay procesos → el pipeline terminó. Entonces correr:
-```bash
-# Refrescar buyer scores con sub_scores post-heuristic y nuevos multiplicadores
-LOG_LEVEL=warn node --env-file=.env --import tsx/esm src/cli/index.ts score --buyer-types > /tmp/buyer-types-refresh.log 2>&1 &
-echo "PID: $!"
-```
+**lead_buyer_scores:** 24,451 filas (3,493 leads × 7 tipos). Buyer type scores bajos (avg 0–6) — refleja que la fórmula actual no alimenta bien los buyer types para fuentes externas. Se corrige con Fase 22.
 
-**Nota Fase 14:** los scores en DB reflejan la fórmula vieja. Después de que el pipeline termine, correr `score --all` (sin `--dry-run`) para refrescar con el multiplicador de review_count y el rating bonus.
+**inferred_state:** 2163 leads procesados. 1330 con `digital_footprint.skipped=true` (enrich no encontró contenido — todos serían `digitalization_level: none`). Comportamiento correcto, no es bug.
 
-### Fase 16 — Urgency signals (próxima — prompt listo en `context/prompts/fase-16-urgency.md`)
-
-Agrega `urgency_signal: "high" | "medium" | "low"` dentro de `score_breakdown` JSONB.
-Archivos: `src/modules/scoring/urgency.ts` (nuevo), `types.ts`, `index.ts`, `tests/scoring/urgency.test.ts`.
-
-**Señales:**
-- `copyright_year <= 2020` → high
-- niche restaurant/hospedaje + address contiene zona turística → high
-- `created_at < 90 días` → medium
-- `review_count < 20 AND rating >= 4.0` → medium
-
-### Estado de DB (snapshot 2026-05-15 — scores pre-heuristic para yelu/osm)
-
-| Fuente | Total | Passed | Hot (≥50) | Notas |
-|--------|-------|--------|-----------|-------|
-| google_places | 1474 | 172 | 13 | Enrich + score completo |
-| mintur | 2027 | 2027 | 0 | Sin teléfono → sin contactabilidad |
-| osm | 622 | 622 | 46 | Score pre-heuristic (pipeline running) |
-| yelu | 672 | 672 | 8 | Score pre-heuristic (pipeline running) |
-
-**lead_buyer_scores:** 24,451 filas (3,493 leads × 7 tipos). Scores provisorios — refrescar con `score --buyer-types` cuando pipeline termine.
-
-**Invariantes (verificados 2026-05-15):**
+**Invariantes (verificados 2026-05-16):**
 - `passed_not_enriched`: 0 ✅
 - `tags_contradictorios`: 0 ✅
-- `email_found_sin_data`: 0 ✅
 - `passed_sin_score`: 0 ✅
-- `sin_inferred_state`: 1785 — se resuelve cuando pipeline termine
+
+### Trabajo de planificación realizado esta sesión
+
+Se creó `context/ARCHITECTURE_FUTURE.md` (2148 líneas) con:
+- Análisis crítico del scoring actual (6 problemas con datos concretos)
+- Fórmula commercial_score v2 completa (5 dimensiones)
+- Flujos detallados de cada etapa del pipeline
+- 8 señales de valor no capturadas
+- Diseño UI completo (4 pantallas + wireframes + API contract)
+- Pipeline de contacto automatizado + LLM genérico (Gemini/Ollama)
+- Feedback loop de outreach (tabla lead_outreach)
+- Automatización completa con cron (orden: refresh → discover → enrich → score)
+- DGI + RUT estrategia por etapas
+- Sub-niche detection para niche "other" (2034 leads invisibles)
+
+Se actualizó `context/FUTURE.md` con fases 21–30 ordenadas por impacto.
 
 ### Próximas acciones — en este orden
 
-1. **Enviar prompt Fase 16** a CC (`context/prompts/fase-16-urgency.md`).
-2. **Cuando pipeline 21:18 termine** (verificar con `ps aux | grep "node.*enrich"`):
-   - Correr `score --all` para aplicar multiplicadores Fase 14 a todos los leads
-   - Correr `score --buyer-types` para refrescar buyer scores
-   - Verificar invariantes + auditoría de datos
-   - Hacer commit checkpoint
-3. **Fase 13 — PedidosYa escape** (desbloqueada en FUTURE.md, depende de `delivery_propio` scores).
-4. **Fase 15 — Email quality** (parser nuevo, requiere re-enrich para ver resultados en DB).
+1. **Commit checkpoint** de toda la documentación generada esta sesión
+2. **Fase 22 — Scoring v2** (crítico — scores actuales inflados, leads tier X como hot)
+3. **Fase 21 — PostGIS** (30 min de infra, desbloquea competitive density + hot zones)
+4. **Fase 28 — Sub-niche detection** (2034 leads "other" invisibles, costo ~0 con Gemini free)

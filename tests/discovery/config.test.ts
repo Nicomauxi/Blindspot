@@ -4,6 +4,7 @@ import {
   getDiscoveryConfig,
   resetDiscoveryConfigCache,
   getProfileConfig,
+  getSourceRefreshDays,
 } from "../../src/modules/discovery/config.js";
 import type { ProfileConfig } from "../../src/shared/types.js";
 
@@ -117,5 +118,44 @@ describe("getProfileConfig", () => {
 
   it("throws for unknown profile name", () => {
     expect(() => getProfileConfig("z")).toThrow(/"z"/);
+  });
+});
+
+describe("getSourceRefreshDays", () => {
+  it("returns configured days for a known source", () => {
+    const days = getSourceRefreshDays("google_places");
+    expect(days).toBe(30);
+  });
+
+  it("returns fallback for unknown source", () => {
+    const days = getSourceRefreshDays("nonexistent_source");
+    expect(days).toBe(30);
+  });
+
+  it("returns custom fallback when provided", () => {
+    const days = getSourceRefreshDays("nonexistent_source", 60);
+    expect(days).toBe(60);
+  });
+
+  it("parses YAML with source_refresh block correctly", () => {
+    const yaml = `
+version: 1
+profiles:
+  a:
+    min_rating: 4.0
+    min_reviews: 10
+    max_reviews: null
+    web_requirement: any
+social_domains: []
+persist_rejected: false
+source_refresh:
+  google_places: 30
+  mintur: 90
+  osm: 90
+`;
+    const config = parseDiscoveryConfig(yaml);
+    expect(config.source_refresh?.["google_places"]).toBe(30);
+    expect(config.source_refresh?.["mintur"]).toBe(90);
+    expect(config.source_refresh?.["osm"]).toBe(90);
   });
 });

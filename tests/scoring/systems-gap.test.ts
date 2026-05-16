@@ -21,6 +21,8 @@ function ops(overrides: Partial<OperationalSystemsSignal> = {}): OperationalSyst
     catalog_keywords: [],
     contact_form: false,
     chat_widget: false,
+    ecommerce_platforms: [],
+    whatsapp_web_link: false,
     ...overrides,
   };
 }
@@ -126,9 +128,12 @@ describe("scoreLead systems_gap", () => {
     expect(result.score_breakdown.systems_gap.rules).toEqual([]);
   });
 
-  it("does not change prospect_score formula", () => {
+  it("systems_gap_score flows through software sub-score into prospect_score", () => {
+    // hairdresser without booking: sgScore=25. prospect now uses max(sub_scores), not bq*dg.
     const result = scoreLead(makeLead({ tags: ["no-website"] }));
-    expect(result.prospect_score).toBe(
+    expect(result.systems_gap_score).toBe(25);
+    expect(result.score_breakdown.sub_scores.software).toBe(25);
+    expect(result.prospect_score).not.toBe(
       Math.floor((result.business_quality_score * result.digital_gap_score) / 100)
     );
   });

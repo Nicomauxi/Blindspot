@@ -1,13 +1,14 @@
 import { getSupabase } from "../shared/supabase.js";
 import type { CorroboratingSource, DiscoveryCandidate, Lead } from "../shared/types.js";
 
-interface DryRunOpts {
+interface InsertExternalLeadOpts {
   dryRun?: boolean;
+  extraTags?: string[];
 }
 
 export async function insertExternalLead(
   candidate: DiscoveryCandidate,
-  opts: DryRunOpts = {}
+  opts: InsertExternalLeadOpts = {}
 ): Promise<Lead | null> {
   if (opts.dryRun) return null;
 
@@ -31,7 +32,7 @@ export async function insertExternalLead(
         state: "discovered",
         passed_filter: true,
         rejection_reasons: [],
-        tags: [],
+        tags: opts.extraTags ?? [],
       },
       { onConflict: "place_id", ignoreDuplicates: false }
     )
@@ -39,13 +40,23 @@ export async function insertExternalLead(
     .single();
 
   if (error) throw new Error(`insertExternalLead failed: ${error.message}`);
-  return data as Lead;
+  const lead = data as Lead;
+
+  if (candidate.email) {
+    const existing = (lead.canonical_fields ?? {}) as Record<string, unknown>;
+    await db
+      .from("leads")
+      .update({ canonical_fields: { ...existing, email: candidate.email } })
+      .eq("id", lead.id);
+  }
+
+  return lead;
 }
 
 export async function addCorroboratingSource(
   leadId: string,
   candidate: DiscoveryCandidate,
-  opts: DryRunOpts = {}
+  opts: { dryRun?: boolean } = {}
 ): Promise<void> {
   if (opts.dryRun) return;
 

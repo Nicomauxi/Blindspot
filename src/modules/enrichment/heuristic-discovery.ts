@@ -18,6 +18,7 @@ import { fetchHtml } from "./http.js";
 const HeuristicConfigSchema = z.object({
   heuristic_discovery: z.object({
     enabled: z.boolean(),
+    outdated_year_threshold: z.number().int().default(2022),
     thresholds: z.object({
       website: z.number().min(0).max(1),
       website_single_word: z.number().min(0).max(1).default(0.35),

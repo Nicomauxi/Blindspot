@@ -26,6 +26,7 @@ const DiscoveryConfigSchema: z.ZodType<DiscoveryConfig> = z.object({
   profiles: z.record(z.string(), ProfileConfigSchema),
   social_domains: z.array(z.string()),
   persist_rejected: z.boolean(),
+  source_refresh: z.record(z.string(), z.number().int().positive()).optional(),
 });
 
 let cached: DiscoveryConfig | null = null;
@@ -52,6 +53,10 @@ export function getDiscoveryConfig(): DiscoveryConfig {
 
 export function resetDiscoveryConfigCache(): void {
   cached = null;
+}
+
+export function getSourceRefreshDays(source: string, fallback = 30): number {
+  return getDiscoveryConfig().source_refresh?.[source] ?? fallback;
 }
 
 export function getProfileConfig(

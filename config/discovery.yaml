@@ -39,3 +39,10 @@ social_domains:
   - bio.link
 
 persist_rejected: true
+
+source_refresh:
+  google_places: 30   # re-enrich mensual
+  mintur: 90          # re-enrich trimestral
+  osm: 90
+  yelu: 90
+  pedidosya: 90

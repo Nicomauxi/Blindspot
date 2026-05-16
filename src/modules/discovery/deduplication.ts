@@ -66,3 +66,15 @@ export function findCrossSourceMatch(
 
   return best;
 }
+
+export function isFranchise(
+  name: string,
+  franchiseNames: ReadonlySet<string>
+): boolean {
+  if (franchiseNames.size === 0) return false;
+  const normalized = normalizeName(name);
+  for (const franchise of franchiseNames) {
+    if (levenshtein(normalized, normalizeName(franchise)) <= 2) return true;
+  }
+  return false;
+}

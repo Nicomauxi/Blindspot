@@ -1,5 +1,6 @@
 heuristic_discovery:
   enabled: true
+  outdated_year_threshold: 2022
   thresholds:
     website: 0.7
     website_single_word: 0.35

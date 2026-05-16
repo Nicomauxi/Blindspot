@@ -14,7 +14,7 @@
 - **HTTP:** undici ^7
 - **DB:** Supabase PostgreSQL — Docker local (`supabase_db_gap-radar`) + cloud
 - **Scraping:** Playwright
-- **Tests:** Vitest — 865 passing, 7 skipped, 68 files
+- **Tests:** Vitest — 882 passing, 7 skipped, 69 files
 - **Dev:** tsx/esm
 - **Config:** YAML en `config/` — fuente de verdad para parámetros de discovery y scoring
 - **Repo:** https://github.com/Nicomauxi/Blindspot
@@ -132,6 +132,9 @@ src/
 │   │   │                              Configurados en config/scoring.yaml → buyer_types
 │   │   ├── review-multiplier.ts     — getReviewCountMultiplier(lead, config): 0.75×–1.4× según review_count
 │   │   │                              getRatingBonus(lead, config): +5 si rating ≥ 4.3
+│   │   ├── urgency.ts               — computeUrgencySignal(lead): UrgencySignal ("high"|"medium"|"low")
+│   │   │                              high: copyright_year ≤ 2020 | niche+zona turística
+│   │   │                              medium: created_at < 90d | review_count < 20 AND rating ≥ 4.0
 │   │   └── confidence.ts            — calculateDataConfidence(), calculateContactReliability()
 │   │
 │   └── social-enrich/
@@ -305,6 +308,7 @@ prospect_score = min(100, floor(max(sub_scores) * contactabilityMultiplier * rev
 Penalizaciones por `inferred_state` (Fase F): **activas** — `has_ecommerce` × 0.3 en `web_nuevo`; `has_reservations` × 0.7 y `has_delivery` × 0.8 en `software`.
 
 `score_breakdown.sub_scores: SubScores` — persiste los 5 valores + `primary_offer` en DB.
+`score_breakdown.urgency_signal: UrgencySignal` — campo `"high" | "medium" | "low"` calculado por `computeUrgencySignal(lead)` en `urgency.ts`. Persiste en el JSONB `score_breakdown`, sin columna nueva en la tabla.
 
 ### InferredState (Fase F — activa)
 

@@ -26,6 +26,8 @@ export function evaluateRule(
   switch (op) {
     case "eq":
       return { matched: raw === value, value: raw };
+    case "neq":
+      return { matched: raw !== value, value: raw };
     case "gte":
       return { matched: (raw as number) >= (value as number), value: raw };
     case "lte":
