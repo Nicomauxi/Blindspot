@@ -1,7 +1,7 @@
 # Blindspot — Frontend Architecture
 
-> Este archivo define el diseño del proyecto frontend `blindspot-ui`.
-> Es un proyecto separado que consume la API REST expuesta por el proyecto `blindspot` (este repo).
+> Este archivo define el diseño del directorio `ui/` — Next.js 15 dentro del repo único `blindspot`.
+> `ui/` consume la API REST expuesta por `api/` (mismo repo, proceso separado).
 > No documenta código implementado — para el estado actual del backend ver `ARCHITECTURE.md`.
 > Para el diseño objetivo del backend ver `ARCHITECTURE_FUTURE.md`.
 

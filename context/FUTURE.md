@@ -54,7 +54,7 @@ commercial_score = min(100,
 ```
 
 **Implementación:**
-1. Agregar `scoring_version = 'v2'` en cada row al re-scorear
+1. `scoring_version = 2` (smallint, no string) en cada row al re-scorear — ver step 13 para la ubicación exacta
 2. `gap_depth`: `min(60, max(sub_scores) + source_quality_bonus)`
 3. `source_quality_bonus`: mintur=+20, pedidosya=+15, yelu=+10, osm=+8, google_places=0 (en `config/scoring.yaml`)
 4. `commercial_breadth`: +8 si 2ª oferta ≥ 30, +4 si 3ª ≥ 30
@@ -148,7 +148,7 @@ WHERE passed_filter = true GROUP BY 1 ORDER BY 1;
 
 ---
 
-### Fase — `inferred_state` → columna propia (DEUDA ALTA → ejecutar antes de UI)
+### Fase — `inferred_state` → columna propia (DEUDA ALTA → ejecutar antes de UI, después de Fase 6)
 
 **Por qué:** la UI filtrará por `digitalization_level`, `has_delivery`, `has_pos`. Sin columna propia, cada query hace JSON parsing en tabla completa. Con columna propia se puede indexar. Hacerlo antes de escribir cualquier endpoint de filtrado. Ver `ARCHITECTURE_FUTURE.md § inferred_state como columna propia`.
 
@@ -162,12 +162,23 @@ WHERE passed_filter = true GROUP BY 1 ORDER BY 1;
    CREATE INDEX leads_has_pos ON leads ((inferred_state->'has_pos'->>'value'));
    ```
 4. Actualizar todos los accesos en código: `digital_footprint->'inferred_state'` → `inferred_state`
-5. Eliminar `inferred_state` del JSONB `digital_footprint` (UPDATE por lotes de 500)
+5. Eliminar `inferred_state` del JSONB `digital_footprint` (UPDATE en lotes de 500 — destructivo, sin rollback):
+   ```sql
+   -- Verificar ANTES de eliminar:
+   SELECT COUNT(*) FROM leads WHERE inferred_state IS NOT NULL; -- debe ser > 0
+   -- Luego eliminar en lotes:
+   WITH batch AS (SELECT id FROM leads WHERE digital_footprint->'inferred_state' IS NOT NULL LIMIT 500)
+   UPDATE leads SET digital_footprint = digital_footprint - 'inferred_state'
+   WHERE id IN (SELECT id FROM batch);
+   -- Repetir hasta: SELECT COUNT(*) FROM leads WHERE digital_footprint->'inferred_state' IS NOT NULL; = 0
+   ```
 
 **Verificación:**
 ```sql
 SELECT COUNT(*) FROM leads WHERE inferred_state IS NOT NULL;
 -- Debe coincidir con el count anterior de digital_footprint->'inferred_state' IS NOT NULL
+SELECT COUNT(*) FROM leads WHERE digital_footprint->'inferred_state' IS NOT NULL;
+-- Debe ser 0 cuando terminen los lotes
 ```
 
 ---
@@ -186,46 +197,6 @@ SELECT COUNT(*) FROM leads WHERE inferred_state IS NOT NULL;
 5. Agregar función `computeCompetitiveDensity(lead)` en scoring/index.ts — llama a query PostGIS y retorna tag `gap-cluster-high` o `gap-cluster-isolated`
 
 **Verificación:** `SELECT COUNT(*) FROM leads WHERE gps IS NOT NULL;` debe ser > 3000.
-
----
-
-### Fase 22 — Scoring v2 completo (reemplaza y expande Fase 19)
-
-**Por qué:** Fase 19 parchea la fórmula actual. Fase 22 implementa la fórmula v2 completa diseñada en `ARCHITECTURE_FUTURE.md § Diseño objetivo — fórmula de scoring comercial (v2)`. El análisis de datos mostró 6 problemas concretos: leads incontactables como hot, corroboration inversamente correlacionada, niche "other" invisible, franquicias con mayor score que independientes, calidad del negocio ignorada, max() ignora multi-oferta.
-
-**Fórmula v2:**
-```
-commercial_score = min(100,
-  floor((gap_depth + commercial_breadth + business_quality_pts)
-        × accessibility_factor × timing_factor)
-  + urgency_bonus
-)
-```
-
-**Componentes nuevos vs Fase 19:**
-- `gap_depth` = max(sub_scores) + source_quality_bonus, cap 60 (Fase 19 ya lo tiene)
-- `commercial_breadth`: bonus +8 si 2ª oferta ≥ 30, +4 si 3ª ≥ 30 — **NUEVO**
-- `business_quality_pts`: rating + reviews + data_confidence + corroboration, cap 15 — **NUEVO**
-- `accessibility_factor`: X=0.30, D=0.65, C=0.90, B=1.15, A=1.30, A+B=1.40 — **más agresivo que Fase 19**
-- `timing_factor`: urgency + new_business + competitive_pressure + franchise_penalty — **NUEVO**
-- `urgency_bonus`: high=+5, medium=+2 — **NUEVO**
-
-**Thresholds nuevos:** hot=55 (sube de 50), pitcheable=40, pool=25.
-
-**Archivos:** `src/modules/scoring/index.ts`, `src/modules/scoring/sub-scores.ts`, `config/scoring.yaml`
-
-**Verificación esperada post-implementación:**
-```sql
--- Leads tier X deben desaparecer de hot (< 5 excepciones permitidas)
-SELECT COUNT(*) FROM leads
-WHERE score_breakdown->>'contact_tier' = 'X' AND prospect_score >= 55;
-
--- Car dealers deben subir: avg > 40 post-v2
-SELECT ROUND(AVG(prospect_score),1) FROM leads WHERE niche = 'car_dealer';
-
--- Franquicias deben bajar a < 20 de promedio
-SELECT ROUND(AVG(prospect_score),1) FROM leads WHERE 'franchise-detected' = ANY(tags);
-```
 
 ---
 
@@ -248,7 +219,7 @@ SELECT ROUND(AVG(prospect_score),1) FROM leads WHERE 'franchise-detected' = ANY(
    INSERT INTO users (email, password_hash, role)
    VALUES ('admin@blindspot.local', '<bcrypt_hash_cost12>', 'admin');
    ```
-4. Índice: `CREATE UNIQUE INDEX users_email ON users(email);`
+4. Índice lookup: no crear índice adicional — `email text UNIQUE NOT NULL` ya crea el índice automáticamente.
 5. Trigger `updated_at`:
    ```sql
    CREATE OR REPLACE FUNCTION set_updated_at()
@@ -608,7 +579,9 @@ Ver ARCHITECTURE.md — tabla `lead_buyer_scores`, 7 buyer types, CLI `score --b
 
 ---
 
-### Fase 15 — Clasificación de calidad de email + tipo de teléfono
+### Fase 15 — Clasificación de calidad de email + tipo de teléfono (PRIORIDAD ALTA — ejecutar después de Fase 6)
+
+> Ver `PROJECT_MASTER.MD § Próximas acciones` — esta fase está en el camino crítico antes de UI.
 
 **Por qué (email):** hoy detectamos emails pero no diferenciamos `info@dominio.com` (genérico, responde el que atiende) de `juan@dominio.com` (personal, decide el dueño). El email del dueño vale 3× para prospecting.
 

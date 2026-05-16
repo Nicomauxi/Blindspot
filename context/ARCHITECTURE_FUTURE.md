@@ -35,10 +35,15 @@ packages:
   - 'ui'         # Next.js
 ```
 
+**Requisito crítico:** `pnpm --filter <name>` filtra por el campo `name` del `package.json`, NO por el nombre del directorio. Para que los comandos funcionen:
+- `src/package.json` debe tener `"name": "core"` (no "blindspot" u otro)
+- `api/package.json` debe tener `"name": "api"`
+- `ui/package.json` debe tener `"name": "ui"`
+
 **Comandos cross-workspace:**
 ```bash
-pnpm --filter api run start      # arranca API
-pnpm --filter core run start     # arranca core pipeline (long-running)
+pnpm --filter api run start      # arranca API (api/package.json "name": "api")
+pnpm --filter core run start     # arranca core pipeline (src/package.json "name": "core")
 pnpm --filter ui run dev         # Next.js dev server
 pnpm --filter ui run build       # build estático para Nginx
 ```
@@ -125,7 +130,8 @@ Si `lead_filter` es null (admin), el CM ve todos los leads.
 - Payload: `{ user_id, email, role, lead_filter }`
 - Expiración: 24h
 - Sin self-registration — admin crea cuentas vía `POST /api/v1/users`
-- Revocación: `UPDATE users SET active=false` invalida el token en el siguiente middleware check
+- Revocación: `UPDATE users SET active=false`. El middleware verifica `active` en la DB en cada request para que la revocación sea inmediata. Para 2-5 usuarios este hit a la DB es aceptable.
+- **`lead_filter` en payload es stale hasta expiración:** si admin cambia el `lead_filter` de un CM, el token actual del CM (hasta 24h de vida restante) usa el filtro viejo. Decisión de diseño: aceptable para uso interno de baja concurrencia. Si se necesita propagación inmediata, agregar `token_version smallint DEFAULT 1` a `users` e incrementarlo al cambiar `lead_filter`; el middleware rechaza tokens con versión menor a la actual.
 
 ### Mapa de acceso por rol
 
@@ -144,6 +150,9 @@ Si `lead_filter` es null (admin), el CM ve todos los leads.
 | GET /api/v1/discovery/jobs | ✅ | ❌ |
 | POST /api/v1/discovery/jobs | ✅ | ❌ |
 | GET+POST /api/v1/users | ✅ | ❌ |
+| GET /api/v1/campaigns | ✅ todas | ✅ solo propias |
+| POST /api/v1/campaigns | ✅ | ✅ (user_id = suyo) |
+| GET /api/v1/campaigns/:id/stats | ✅ | ✅ solo propia |
 | GET /api/v1/health | ✅ público | ✅ público |
 
 ---
@@ -173,7 +182,7 @@ GET  /api/v1/leads
      &urgency_signal=high  &primary_offer=web_nuevo  &contacted=false
      &q=veterinaria  &source=google_places,mintur
      &order=prospect_score:desc  &limit=50&cursor=<id>
-     → LeadCard[] desde lead_dashboard MATERIALIZED VIEW
+     → LeadCard[] desde lead_dashboard VIEW
 
 GET  /api/v1/leads/:id
      → Lead completo con score_breakdown + buyer_type_scores + corroborating_sources
@@ -217,9 +226,9 @@ GET  /api/v1/pipeline/runs/:id/log?since=<iso>
 GET  /api/v1/health
 ```
 
-### View `lead_dashboard` (materializada en DB)
+### View `lead_dashboard` (VIEW normal — no MATERIALIZED)
 
-Desnormaliza todos los campos de `LeadCard` para evitar joins en cada request de la UI:
+Desnormaliza todos los campos de `LeadCard` para evitar joins en cada request de la UI. Ver decisión en `§ lead_dashboard — VIEW normal` de este mismo archivo.
 
 ```sql
 CREATE VIEW lead_dashboard AS
@@ -249,7 +258,8 @@ LEFT JOIN LATERAL (
   WHERE lead_id = l.id ORDER BY score DESC LIMIT 1
 ) lbs_top ON true
 WHERE l.passed_filter = true
-  AND l.score_breakdown->>'contact_tier' != 'X';
+  -- Incluir leads sin score_breakdown (NULL != 'X' = NULL = false en SQL, ocultaría leads válidos):
+  AND (l.score_breakdown IS NULL OR l.score_breakdown->>'contact_tier' != 'X');
 ```
 
 ---
@@ -275,9 +285,14 @@ Hoy el sistema recopila datos de 5 fuentes, calcula scores, pero tiene tres inco
 
 ---
 
-## Diseño objetivo — scoring
+## Diseño objetivo — scoring (ANÁLISIS — superado por la fórmula v2)
 
-### Fórmula corregida
+> **Esta sección documenta el análisis que llevó al diseño de la fórmula v2.**
+> La fórmula de implementación es la **fórmula comercial v2** que está en la sección
+> `§ Diseño objetivo — fórmula de scoring comercial (v2)` de este archivo.
+> Lo que sigue es el razonamiento de por qué se cambió cada componente, no el código a implementar.
+
+### Fórmula de transición (v1.5 — NO implementar)
 
 ```
 prospect_score = min(100,
@@ -554,15 +569,25 @@ contact_ready = (contact_tier IN ('A', 'B', 'C'))
 
 ```sql
 -- Migración para leads
-ALTER TABLE leads ADD COLUMN contact_ready boolean GENERATED ALWAYS AS (
-  score_breakdown->>'contact_tier' IN ('A', 'B', 'C')
-  AND prospect_score >= 30
-  AND NOT ('franchise-detected' = ANY(tags))
-) STORED;
+ALTER TABLE leads ADD COLUMN contact_ready boolean;
+-- NO usar GENERATED ALWAYS AS: la expresión mezcla JSONB (score_breakdown->>'contact_tier'),
+-- integer (prospect_score) y array (tags) — puede fallar en Supabase según versión de PostgreSQL.
+-- Se calcula como columna regular, actualizada por el scoring engine en el mismo upsert
+-- que actualiza prospect_score y score_breakdown.
 
 ALTER TABLE leads ADD COLUMN contacted_by uuid REFERENCES users(id);
 -- null = nunca contactado. SET al crear el primer lead_outreach para este lead.
 CREATE INDEX leads_contacted_by ON leads(contacted_by) WHERE contacted_by IS NOT NULL;
+CREATE INDEX leads_contact_ready ON leads(contact_ready) WHERE contact_ready = true;
+```
+
+**Lógica de `contact_ready` en el scoring engine (TypeScript):**
+```typescript
+const contactTier = computeContactTier(lead)
+const isFranchise = lead.tags.includes('franchise-detected')
+const contactReady = ['A','B','C'].includes(contactTier) && lead.prospectScore >= 30 && !isFranchise
+// Incluir en el upsert al actualizar prospect_score:
+// UPDATE leads SET ..., contact_ready = $contactReady WHERE id = $leadId
 ```
 
 `contacted_by` no reemplaza `lead_outreach` (historial completo) — es una referencia rápida al usuario propietario del lead para la UI de CM (filtra "mis leads"). `passed_filter` se mantiene para compatibilidad.
@@ -1027,7 +1052,9 @@ value:         "Los gimnasios y peluquerías que implementan esto reducen el aus
 cta:           "¿Les muestro cómo quedó para una peluquería similar en Montevideo?"
 ```
 
-### Tabla `lead_outreach` (nueva)
+### Tabla `lead_outreach` (borrador — ver diseño final en `§ Tabla lead_outreach — diseño final`)
+
+> Este schema es un borrador conceptual. El diseño definitivo está en la sección "Tabla lead_outreach — diseño final" más abajo. Usar ese schema para la implementación.
 
 ```sql
 CREATE TABLE lead_outreach (
@@ -1277,6 +1304,11 @@ lead_outreach.lead_quality_feedback = -1 → el lead no era tan bueno como prome
 
 ```
 blindspot discover-external --source <fuente> --location <ciudad> --niche <niche>
+
+  [Google Places únicamente] ANTES de llamar al provider:
+    Leer pipeline_config.google_places_budget_spent + google_places_budget_total
+    Si (budget_total - budget_spent) < 5.00 USD → abortar con error claro:
+    "Google Places budget crítico: quedan $X.XX de $200.00. Usar otra fuente."
 
   Provider.discover(query: DiscoveryQuery)
     │
@@ -2307,7 +2339,7 @@ Vista agregada para identificar oportunidades de campaña, no leads individuales
 
 La UI no necesita API propia en primera versión. PostgREST expone las tablas directamente con filtros.
 
-**View `lead_dashboard`** (materializada o vista): desnormaliza todos los campos del LeadCard para evitar joins en cada request.
+**View `lead_dashboard`** (VIEW normal — no MATERIALIZED para 2-5 usuarios): desnormaliza todos los campos del LeadCard para evitar joins en cada request.
 
 ```sql
 CREATE VIEW lead_dashboard AS
@@ -2736,6 +2768,12 @@ CREATE TABLE pipeline_config (
     }
   }',
 
+  -- Presupuesto Google Places
+  google_places_budget_total     numeric(8,2) DEFAULT 200.00,  -- crédito total disponible USD
+  google_places_budget_spent     numeric(8,2) DEFAULT 5.16,    -- acumulado gastado
+  google_places_alert_threshold  numeric(8,2) DEFAULT 20.00,   -- alerta cuando queda menos de esto
+  -- Worker incrementa budget_spent += 0.02 × requests_made al terminar cada discovery run de Google Places
+
   -- Notificaciones
   notify_ui_badge boolean DEFAULT true,
   notify_email    text                          -- null = deshabilitado
@@ -2770,10 +2808,14 @@ CREATE TABLE pipeline_runs (
   --   score:   { leads_scored: 3141, new_hot: 3, score_changes_up: 28, score_changes_down: 12 }
   -- }
 
+  -- Control de ejecución
+  abort_requested    boolean DEFAULT false,   -- true = terminar limpiamente después del lead actual
+  dashboard_stale    boolean DEFAULT false,   -- true = la VIEW lead_dashboard necesita refresh
+
   -- Estado en tiempo real
   current_phase   integer,                -- 1..4, null si no está corriendo
   current_job     jsonb,                  -- { source, location, niche, progress, leads_found }
-  log_lines       jsonb DEFAULT '[]',     -- array de { ts, message } — últimas 200 líneas
+  log_lines       jsonb DEFAULT '[]',     -- array de { ts, message } — rotar a máximo 200 entradas en el worker
 
   -- Invariantes post-run
   invariants_ok      boolean,
