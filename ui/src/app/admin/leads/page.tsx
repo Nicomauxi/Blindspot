@@ -108,7 +108,7 @@ export default function LeadsPage() {
       <div className="flex flex-wrap gap-2 mb-4">
         <input
           type="search"
-          placeholder="Buscar por nombre..."
+          placeholder="Buscar nombre, dirección, niche..."
           value={q}
           onChange={(e) => setQ(e.target.value)}
           className="border rounded px-3 py-1.5 text-sm w-56 focus:outline-none focus:ring-1 focus:ring-brand-500"

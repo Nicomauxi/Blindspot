@@ -52,6 +52,7 @@ function makeLeadQueryChain() {
   chain["eq"] = leaf;
   chain["gte"] = leaf;
   chain["ilike"] = leaf;
+  chain["textSearch"] = leaf;
   chain["lt"] = leaf;
   chain["filter"] = leaf;
   chain["order"] = leaf;
@@ -233,6 +234,21 @@ describe("GET /api/v1/leads", () => {
     const body = res.json();
     // intersection of filter [A] and request [B] = empty
     expect(body.data).toEqual([]);
+    await app.close();
+  });
+
+  it("returns 200 with q param (FTS search)", async () => {
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/leads?q=veterinaria",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(Array.isArray(body.data)).toBe(true);
     await app.close();
   });
 

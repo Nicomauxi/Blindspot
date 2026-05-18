@@ -122,7 +122,7 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
         query = query.eq("source", source);
       }
       if (q) {
-        query = query.ilike("name", `%${q}%`);
+        query = query.textSearch("search_vector", q, { type: "plain", config: "spanish" });
       }
 
       // Cursor-based pagination using id ordering
