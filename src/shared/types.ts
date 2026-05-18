@@ -400,6 +400,7 @@ export interface Lead {
   contact_reliability_score: number | null;
   canonical_fields: Record<string, unknown> | null;
   corroborating_sources: CorroboratingSource[];
+  canonical_source: string | null;
   lead_company_data: LeadCompanyData | null;
   niche: string | null;
   name: string;
