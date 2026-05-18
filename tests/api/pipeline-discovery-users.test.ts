@@ -128,6 +128,28 @@ vi.mock("../../api/src/db/client.js", () => ({
           }),
         };
       }
+      if (table === "outreach_campaigns") {
+        return {
+          select: () => ({
+            order: () => Promise.resolve({ data: [], error: null }),
+            eq: (_col: string, _val: string) => ({
+              single: async () => ({ data: null, error: { code: "PGRST116" } }),
+              order: () => Promise.resolve({ data: [], error: null }),
+            }),
+          }),
+          insert: () => ({
+            select: () => ({
+              single: async () => ({ data: null, error: { message: "not used in this test" } }),
+            }),
+          }),
+          update: () => ({
+            eq: () => ({
+              select: () => ({ single: async () => ({ data: null, error: null }) }),
+              then: (cb: (r: unknown) => void) => cb({ error: null }),
+            }),
+          }),
+        };
+      }
       if (table === "audit_log") {
         return {
           insert: () => Promise.resolve({ error: null }),
@@ -274,7 +296,7 @@ describe("Discovery routes", () => {
   });
 });
 
-describe("Campaigns routes — stub 501", () => {
+describe("Campaigns routes — implemented (Fase 43)", () => {
   beforeEach(() => {
     process.env["API_JWT_SECRET"] = "test-secret-at-least-32-chars-long-1234";
     _mockUser = {
@@ -286,7 +308,7 @@ describe("Campaigns routes — stub 501", () => {
     };
   });
 
-  it("GET /campaigns returns 501 not_implemented_until_phase_43", async () => {
+  it("GET /campaigns returns 200 with data array", async () => {
     const { buildServer } = await import("../../api/src/server.js");
     const app = await buildServer();
     const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
@@ -295,9 +317,9 @@ describe("Campaigns routes — stub 501", () => {
       url: "/api/v1/campaigns",
       headers: { authorization: `Bearer ${token}` },
     });
-    expect(res.statusCode).toBe(501);
+    expect(res.statusCode).toBe(200);
     const body = res.json();
-    expect(body.error_code).toBe("not_implemented_until_phase_43");
+    expect(Array.isArray(body.data)).toBe(true);
     await app.close();
   });
 });

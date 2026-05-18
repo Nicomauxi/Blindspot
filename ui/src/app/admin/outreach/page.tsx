@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { listOutreach, patchOutreach, type OutreachEntry } from "@/lib/api";
+import { listOutreach, listCampaigns, patchOutreach, type OutreachEntry, type Campaign } from "@/lib/api";
 import { useAuthStore } from "@/lib/auth-store";
 import { cn, formatRelative } from "@/lib/utils";
 
@@ -39,8 +39,15 @@ export default function OutreachPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState("");
+  const [campaignFilter, setCampaignFilter] = useState("");
+  const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [editing, setEditing] = useState<EditState | null>(null);
   const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!token) return;
+    listCampaigns(token).then((r) => setCampaigns(r.data)).catch(() => {/* non-blocking */});
+  }, [token]);
 
   const load = useCallback(
     async (cursor?: string) => {
@@ -49,6 +56,7 @@ export default function OutreachPage() {
       try {
         const res = await listOutreach(token, {
           lead_id: leadIdFilter,
+          campaign_id: campaignFilter || undefined,
           status: statusFilter || undefined,
           cursor,
           limit: 50,
@@ -67,7 +75,7 @@ export default function OutreachPage() {
         setLoading(false);
       }
     },
-    [token, leadIdFilter, statusFilter]
+    [token, leadIdFilter, statusFilter, campaignFilter]
   );
 
   useEffect(() => {
@@ -75,7 +83,7 @@ export default function OutreachPage() {
     setNextCursor(null);
     load();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [statusFilter, leadIdFilter, token]);
+  }, [statusFilter, campaignFilter, leadIdFilter, token]);
 
   function startEdit(e: OutreachEntry) {
     setEditing({
@@ -123,7 +131,7 @@ export default function OutreachPage() {
         <span className="text-sm text-gray-500">{total} registros</span>
       </div>
 
-      <div className="flex gap-2 mb-4">
+      <div className="flex gap-2 mb-4 flex-wrap">
         <select
           value={statusFilter}
           onChange={(e) => setStatusFilter(e.target.value)}
@@ -134,6 +142,31 @@ export default function OutreachPage() {
             <option key={s} value={s}>{s}</option>
           ))}
         </select>
+        <select
+          value={campaignFilter}
+          onChange={(e) => setCampaignFilter(e.target.value)}
+          className="border rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-brand-500"
+        >
+          <option value="">Todas las campañas</option>
+          {campaigns.filter((c) => c.status !== "closed").map((c) => (
+            <option key={c.id} value={c.id}>{c.name}</option>
+          ))}
+          {campaigns.filter((c) => c.status === "closed").length > 0 && (
+            <optgroup label="Cerradas">
+              {campaigns.filter((c) => c.status === "closed").map((c) => (
+                <option key={c.id} value={c.id}>{c.name}</option>
+              ))}
+            </optgroup>
+          )}
+        </select>
+        {campaignFilter && (
+          <button
+            onClick={() => setCampaignFilter("")}
+            className="text-xs text-brand-600 hover:underline px-2"
+          >
+            × limpiar campaña
+          </button>
+        )}
       </div>
 
       {error && (
