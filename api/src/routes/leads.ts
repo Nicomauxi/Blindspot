@@ -219,6 +219,64 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
       return reply.status(200).send({ data: lead });
     }
   );
+
+  // GET /api/v1/leads/:id/owner-group — list sibling leads sharing the same owner
+  app.get(
+    "/leads/:id/owner-group",
+    { preHandler: requireAuth },
+    async (request, reply) => {
+      const authUser = getAuthUser(request);
+      const { id } = request.params as { id: string };
+
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
+        return reply.status(404).send({ error: "Lead not found", error_code: "not_found" });
+      }
+
+      const db = getDb();
+
+      const { data: lead, error: leadErr } = await db
+        .from("lead_dashboard")
+        .select("id, owner_group_id, contact_tier")
+        .eq("id", id)
+        .single();
+
+      if (leadErr || !lead) {
+        return reply.status(404).send({ error: "Lead not found", error_code: "not_found" });
+      }
+
+      if (authUser.role === "cm") {
+        if (!authUser.lead_filter || !passesLeadFilter(lead as Record<string, unknown>, authUser.lead_filter)) {
+          return reply.status(404).send({ error: "Lead not found", error_code: "not_found" });
+        }
+      }
+
+      const groupId = (lead as Record<string, unknown>)["owner_group_id"];
+      if (!groupId) {
+        return reply.status(200).send({ data: [] });
+      }
+
+      const { data: siblings, error: siblingsErr } = await db
+        .from("lead_dashboard")
+        .select("id, name, niche, contact_tier, prospect_score, owner_group_id")
+        .eq("owner_group_id", groupId)
+        .neq("id", id);
+
+      if (siblingsErr) {
+        request.log.error({ error: siblingsErr }, "owner-group query error");
+        return reply.status(500).send({ error: "Database error", error_code: "db_error" });
+      }
+
+      let results = siblings ?? [];
+
+      if (authUser.role === "cm" && authUser.lead_filter) {
+        results = results.filter((s) =>
+          passesLeadFilter(s as Record<string, unknown>, authUser.lead_filter as Record<string, unknown>)
+        );
+      }
+
+      return reply.status(200).send({ data: results });
+    }
+  );
 }
 
 function passesLeadFilter(
