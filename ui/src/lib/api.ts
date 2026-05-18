@@ -148,6 +148,48 @@ export type AuditLogEntry = {
   user_agent: string | null;
 };
 
+// Pipeline config
+export type PipelineConfig = {
+  id: string;
+  enabled: boolean;
+  cron_expression: string | null;
+  scheduled_for: string | null;
+  last_completed_at: string | null;
+  phases: Record<string, unknown> | null;
+  notify_webhook_url: string | null;
+  notify_webhook_secret: string | null;
+  notify_webhook_events: string[];
+  updated_at: string;
+};
+
+export async function getPipelineConfig(token: string) {
+  return request<SingleResponse<PipelineConfig>>("/api/v1/pipeline/config", {}, token);
+}
+
+export async function patchPipelineConfig(
+  token: string,
+  data: Partial<{
+    enabled: boolean;
+    cron_expression: string;
+    notify_webhook_url: string | null;
+    notify_webhook_secret: string | null;
+    notify_webhook_events: ("run_completed" | "new_hot_leads")[];
+  }>
+) {
+  return request<SingleResponse<PipelineConfig>>("/api/v1/pipeline/config", {
+    method: "PATCH",
+    body: JSON.stringify(data),
+  }, token);
+}
+
+export async function testWebhook(token: string) {
+  return request<SingleResponse<{ status: string; http_status?: number; url: string; error?: string }>>(
+    "/api/v1/pipeline/webhook/test",
+    { method: "POST" },
+    token
+  );
+}
+
 export async function listAuditLog(
   token: string,
   params: {

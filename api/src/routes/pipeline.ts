@@ -14,6 +14,9 @@ const configPutSchema = z.object({
   enabled: z.boolean().optional(),
   cron_expression: z.string().min(1).optional(),
   phases: z.record(z.string(), z.unknown()).optional(),
+  notify_webhook_url: z.string().url().nullable().optional(),
+  notify_webhook_secret: z.string().min(8).nullable().optional(),
+  notify_webhook_events: z.array(z.enum(["run_completed", "new_hot_leads"])).optional(),
 });
 
 const runBodySchema = z.object({
@@ -77,6 +80,9 @@ export async function pipelineRoutes(app: FastifyInstance): Promise<void> {
       }
     }
     if (body.phases !== undefined) update["phases"] = body.phases;
+    if (body.notify_webhook_url !== undefined) update["notify_webhook_url"] = body.notify_webhook_url;
+    if (body.notify_webhook_secret !== undefined) update["notify_webhook_secret"] = body.notify_webhook_secret;
+    if (body.notify_webhook_events !== undefined) update["notify_webhook_events"] = body.notify_webhook_events;
 
     const db = getDb();
     const { data, error } = await db
@@ -122,6 +128,9 @@ export async function pipelineRoutes(app: FastifyInstance): Promise<void> {
       }
     }
     if (body.phases !== undefined) update["phases"] = body.phases;
+    if (body.notify_webhook_url !== undefined) update["notify_webhook_url"] = body.notify_webhook_url;
+    if (body.notify_webhook_secret !== undefined) update["notify_webhook_secret"] = body.notify_webhook_secret;
+    if (body.notify_webhook_events !== undefined) update["notify_webhook_events"] = body.notify_webhook_events;
 
     const db = getDb();
     const { data, error } = await db
@@ -337,6 +346,65 @@ export async function pipelineRoutes(app: FastifyInstance): Promise<void> {
     }
 
     return reply.status(200).send({ data });
+  });
+
+  // POST /pipeline/webhook/test — admin only
+  app.post("/pipeline/webhook/test", { preHandler: requireAdmin }, async (request, reply) => {
+    const db = getDb();
+    const { data } = await db
+      .from("pipeline_config")
+      .select("notify_webhook_url, notify_webhook_secret, notify_webhook_events")
+      .eq("id", "singleton")
+      .single();
+
+    const url = (data?.notify_webhook_url as string | null) ?? null;
+    if (!url) {
+      return reply.status(400).send({
+        error: "No webhook URL configured",
+        error_code: "webhook_not_configured",
+      });
+    }
+
+    const { createHmac } = await import("crypto");
+    const { fetch } = await import("undici");
+
+    const secret = (data?.notify_webhook_secret as string | null) ?? null;
+    const body = JSON.stringify({
+      event: "test",
+      run_id: null,
+      ts: new Date().toISOString(),
+      message: "Blindspot webhook test",
+    });
+
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      "X-Blindspot-Event": "test",
+    };
+    if (secret) {
+      const sig = createHmac("sha256", secret).update(body, "utf8").digest("hex");
+      headers["X-Blindspot-Signature"] = `sha256=${sig}`;
+    }
+
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers,
+        body,
+        signal: AbortSignal.timeout(10_000),
+      });
+      return reply.status(200).send({
+        data: {
+          status: res.ok ? "sent" : "failed",
+          http_status: res.status,
+          url,
+        },
+      });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return reply.status(200).send({
+        data: { status: "failed", error: msg, url },
+      });
+    }
   });
 
   // GET /pipeline/runs/:id/log — admin only

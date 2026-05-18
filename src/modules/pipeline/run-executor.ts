@@ -1,6 +1,7 @@
 import { getSupabase } from "../../shared/supabase.js";
 import { getLogger } from "../../shared/logger.js";
 import { appendRunLog } from "./crash-recovery.js";
+import { notifyWebhook, loadWebhookConfig } from "./webhook.js";
 import type { PipelineRun, PhaseResults, PhaseResult, LogLine } from "./types.js";
 
 const logger = getLogger();
@@ -62,6 +63,18 @@ export async function executeRun(run: PipelineRun): Promise<RunResult> {
     .eq("id", run.id);
 
   await appendRunLog(run.id, `Run finished with status=${finalStatus}`, finalStatus === "completed" ? "info" : "warn");
+
+  // Notify webhook (best-effort — don't let it fail the run)
+  try {
+    const webhookCfg = await loadWebhookConfig();
+    await notifyWebhook(run.id, "run_completed", webhookCfg, {
+      status: finalStatus,
+      phase_results: phaseResults,
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.warn({ runId: run.id, err: msg }, "Webhook notification error (ignored)");
+  }
 
   logger.info({ runId: run.id, status: finalStatus }, "Run execution finished");
   return { status: finalStatus, phase_results: phaseResults };

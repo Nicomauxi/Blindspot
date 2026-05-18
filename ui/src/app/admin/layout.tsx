@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils";
 const navLinks = [
   { href: "/admin/users", label: "Usuarios" },
   { href: "/admin/health", label: "Estado del sistema" },
+  { href: "/admin/pipeline", label: "Pipeline Manager" },
   { href: "/admin/audit-log", label: "Audit Log" },
 ];
 
