@@ -17,6 +17,7 @@ import { inferStateCommand } from "./commands/infer-state.js";
 import { reconcileRetroactiveCommand } from "./commands/reconcile-retroactive.js";
 import { pipelineCommand } from "./commands/pipeline.js";
 import { outreachCommand } from "./commands/outreach.js";
+import { enrichSubNicheCommand } from "./commands/enrich-sub-niche.js";
 
 const program = new Command();
 
@@ -354,6 +355,15 @@ program
   });
 
 program.addCommand(pipelineCommand);
+
+program
+  .command("enrich-sub-niche")
+  .description("Detect sub-niches for leads with niche=other using keyword matching or LLM")
+  .option("--dry-run", "Report what would be detected without writing to DB", false)
+  .option("--concurrency <number>", "Parallel workers", "5")
+  .action(async (opts: { dryRun: boolean; concurrency: string }) => {
+    await enrichSubNicheCommand({ dryRun: opts.dryRun, concurrency: Number(opts.concurrency) });
+  });
 
 program
   .command("outreach")
