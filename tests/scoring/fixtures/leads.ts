@@ -33,11 +33,15 @@ function base(overrides: Partial<Lead> = {}): Lead {
     digital_gap_score: null,
     systems_gap_score: null,
     prospect_score: null,
+    scoring_version: null,
+    contact_ready: null,
+    prospect_score_v1: null,
     score_breakdown: null,
+    score_breakdown_v1: null,
     systems_gap_breakdown: null,
     contacted_at: null,
-    created_at: "2024-01-01T00:00:00Z",
-    updated_at: "2024-01-01T00:00:00Z",
+    created_at: "2026-04-18T00:00:00Z",
+    updated_at: "2026-04-18T00:00:00Z",
     ...overrides,
   };
 }

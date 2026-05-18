@@ -64,6 +64,13 @@ export interface AccessibilityConfig {
   };
 }
 
+export interface DaysInPoolConfig {
+  fresh_threshold_days: number;
+  fresh_bonus: number;
+  stale_threshold_days: number;
+  stale_penalty: number;
+}
+
 export interface TimingConfig {
   urgency_high: number;
   new_business_window: number;
@@ -71,6 +78,7 @@ export interface TimingConfig {
   franchise_penalty: number;
   cap: number;
   floor: number;
+  days_in_pool?: DaysInPoolConfig;
 }
 
 export interface UrgencyBonusConfig {
@@ -183,6 +191,7 @@ export interface ScoreBreakdown {
   accessibility_factor: number;
   timing_factor: number;
   urgency_bonus: number;
+  days_in_pool: number;
   inferred_state_summary: InferredStateSummary;
 }
 

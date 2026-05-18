@@ -1,7 +1,12 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { computeUrgencySignal } from "../../src/modules/scoring/urgency.js";
 import type { Lead } from "../../src/shared/types.js";
 import { empty_lead } from "./fixtures/leads.js";
+
+// Freeze time: fixture created_at="2026-04-18" → 91 days before 2026-07-18 → not "recently_discovered" (< 90d).
+const FAKE_NOW = new Date("2026-07-18T00:00:00.000Z").getTime();
+beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(FAKE_NOW); });
+afterEach(() => { vi.useRealTimers(); });
 
 function lead(overrides: Partial<Lead> = {}): Lead {
   return { ...empty_lead, ...overrides };

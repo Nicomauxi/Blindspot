@@ -2,12 +2,10 @@ import type { Lead } from "../../shared/types.js";
 import { getScoringConfig } from "./config.js";
 import { evaluateRule, resolveField } from "./evaluator.js";
 import { applyMutualExclusions } from "./exclusions.js";
-import { computeContactTier } from "./contact.js";
 import { calculateSubScores } from "./sub-scores.js";
 import { scoreSystemsGap } from "./systems-gap.js";
 import type { EvaluatedRule, ScoreResult, ScoringRule } from "./types.js";
-import { computeCommercialScore } from "./v2.js";
-export { scoreLeadV1 } from "./v1.js";
+import { computeUrgencySignal } from "./urgency.js";
 
 function scaleHeuristicWeight(baseWeight: number, lead: Lead): number {
   const score = resolveField(lead, "digital_footprint.heuristic_discovery.selected.website.score");
@@ -42,7 +40,13 @@ function scoreDimension(
   return { total: Math.max(0, Math.min(sum, cap)), breakdown: filtered };
 }
 
-export function scoreLead(lead: Lead): ScoreResult {
+function contactabilityMultiplier(lead: Lead): number {
+  const emailFromFootprint = (lead.digital_footprint?.contact_emails ?? []).length > 0;
+  const emailFromCanonical = !!lead.canonical_fields?.["email"];
+  return emailFromFootprint || emailFromCanonical ? 1.2 : 1.0;
+}
+
+export function scoreLeadV1(lead: Lead): ScoreResult {
   const config = getScoringConfig();
   const computedAt = new Date().toISOString();
 
@@ -64,40 +68,54 @@ export function scoreLead(lead: Lead): ScoreResult {
   const bqScore = Math.floor(bq.total);
   const dgScore = Math.floor(dg.total);
   const sgScore = Math.floor(sg.total);
-
-  const subScores = calculateSubScores(lead, sgScore, {
-    contactTier: computeContactTier(lead),
-  });
-  const commercial = computeCommercialScore(lead, subScores);
+  const subScores = calculateSubScores(lead, sgScore, { includeDirectContact: false });
+  const maxSubScore = Math.max(
+    subScores.web_nuevo,
+    subScores.rediseno,
+    subScores.marketing,
+    subScores.software,
+    subScores.catalogo,
+  );
+  const prospectScore = Math.min(
+    100,
+    Math.floor(maxSubScore * contactabilityMultiplier(lead))
+  );
+  const urgencySignal = computeUrgencySignal(lead);
 
   return {
     business_quality_score: bqScore,
     digital_gap_score: dgScore,
     systems_gap_score: sgScore,
-    prospect_score: commercial.prospect_score,
-    scoring_version: 2,
-    contact_ready: commercial.contact_ready,
+    prospect_score: prospectScore,
+    scoring_version: 1,
+    contact_ready: false,
     score_breakdown: {
       computed_at: computedAt,
       config_version: config.version,
       business_quality: { total: bqScore, rules: bq.breakdown },
       digital_gap: { total: dgScore, rules: dg.breakdown },
       systems_gap: { total: sgScore, rules: sg.breakdown },
-      prospect: { formula: config.prospect_formula, total: commercial.prospect_score },
+      prospect: { formula: "max(sub_scores) * contactabilityMultiplier", total: prospectScore },
       sub_scores: subScores,
-      primary_offer: commercial.primary_offer,
-      source_quality_bonus: commercial.source_quality_bonus,
-      contact_tier: commercial.contact_tier,
-      pitch_hook: commercial.pitch_hook,
-      urgency_signal: commercial.urgency_signal,
-      gap_depth: commercial.gap_depth,
-      commercial_breadth: commercial.commercial_breadth,
-      business_quality_pts: commercial.business_quality_pts,
-      accessibility_factor: commercial.accessibility_factor,
-      timing_factor: commercial.timing_factor,
-      urgency_bonus: commercial.urgency_bonus,
-      days_in_pool: commercial.days_in_pool,
-      inferred_state_summary: commercial.inferred_state_summary,
+      primary_offer: subScores.primary_offer,
+      source_quality_bonus: 0,
+      contact_tier: "X",
+      pitch_hook: "",
+      urgency_signal: urgencySignal,
+      gap_depth: 0,
+      commercial_breadth: 0,
+      business_quality_pts: 0,
+      accessibility_factor: 0,
+      timing_factor: 0,
+      urgency_bonus: 0,
+      days_in_pool: 0,
+      inferred_state_summary: {
+        has_delivery: false,
+        has_pos: false,
+        has_reservations: false,
+        has_ecommerce: false,
+        digitalization_level: null,
+      },
     },
     systems_gap_breakdown: { total: sgScore, rules: sg.breakdown },
   };
