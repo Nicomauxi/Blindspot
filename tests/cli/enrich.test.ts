@@ -15,6 +15,10 @@ vi.mock("../../src/storage/leads.js", () => ({
   updateLeadEnrichment: vi.fn(),
 }));
 
+vi.mock("../../src/storage/pipeline-errors.js", () => ({
+  recordPipelineError: vi.fn(),
+}));
+
 vi.mock("../../src/storage/vocabulary.js", () => ({
   loadFilterWordsForNiche: vi.fn(),
 }));
@@ -33,6 +37,7 @@ vi.mock("../../src/modules/enrichment/index.js", () => ({
 import { enrichCommand } from "../../src/cli/commands/enrich.js";
 import { getRunById, createEnrichmentRun, completeRun } from "../../src/storage/runs.js";
 import { loadLeadsByRunId, loadLeadsBySource, loadAllPassedLeads, updateLeadEnrichment } from "../../src/storage/leads.js";
+import { recordPipelineError } from "../../src/storage/pipeline-errors.js";
 import { loadFilterWordsForNiche } from "../../src/storage/vocabulary.js";
 import { detectAndSeedEmailProviders, loadAllRuntime, retroactiveEmailCleanup, detectAndSeedHeuristicDomains } from "../../src/storage/system-lists.js";
 import { enrichLead } from "../../src/modules/enrichment/index.js";
@@ -124,7 +129,12 @@ beforeEach(() => {
   vi.mocked(getRunById).mockResolvedValue({ id: RUN_ID } as never);
   vi.mocked(createEnrichmentRun).mockResolvedValue({ id: ENRICH_RUN_ID } as never);
   vi.mocked(completeRun).mockResolvedValue(undefined);
-  vi.mocked(updateLeadEnrichment).mockResolvedValue(undefined);
+  vi.mocked(updateLeadEnrichment).mockResolvedValue({
+    last_change_diff: null,
+    critical_change: false,
+    rescored: false,
+  } as never);
+  vi.mocked(recordPipelineError).mockResolvedValue({ id: "err-1" } as never);
   vi.mocked(enrichLead).mockResolvedValue(baseEnrichResult);
   vi.mocked(loadFilterWordsForNiche).mockResolvedValue(new Set());
   vi.mocked(loadAllRuntime).mockResolvedValue(baseRuntime);
@@ -307,5 +317,59 @@ describe("enrichCommand — mode routing", () => {
     expect(loadAllPassedLeads).toHaveBeenCalled();
     expect(loadLeadsByRunId).not.toHaveBeenCalled();
     expect(loadLeadsBySource).not.toHaveBeenCalled();
+  });
+});
+
+describe("enrichCommand — change detection and pipeline errors", () => {
+  it("tracks significant changes in completeRun stats", async () => {
+    vi.mocked(loadLeadsByRunId).mockResolvedValue([
+      makeLead({ id: "l1" }),
+      makeLead({ id: "l2", name: "Salon Norte", place_id: "place-2" }),
+    ]);
+    vi.mocked(updateLeadEnrichment)
+      .mockResolvedValueOnce({
+        last_change_diff: {
+          lead_id: "l1",
+          changed_at: "2026-05-18T00:00:00.000Z",
+          changes: [
+            { field: "has_website", from: false, to: true, significance: "critical" },
+          ],
+        },
+        critical_change: true,
+        rescored: true,
+      } as never)
+      .mockResolvedValueOnce({
+        last_change_diff: null,
+        critical_change: false,
+        rescored: false,
+      } as never);
+
+    await enrichCommand({ run: RUN_ID, forceRefresh: false, withHeuristic: false, concurrency: 1 });
+
+    expect(completeRun).toHaveBeenCalledWith(
+      ENRICH_RUN_ID,
+      expect.objectContaining({
+        leads_processed: 2,
+        significant_changes: 1,
+      })
+    );
+  });
+
+  it("records recovered pipeline errors per lead crash", async () => {
+    vi.mocked(loadLeadsByRunId).mockResolvedValue([makeLead({ id: "l1", source: "google_places" })]);
+    vi.mocked(enrichLead).mockRejectedValueOnce(new Error("timeout while fetching website"));
+
+    await enrichCommand({ run: RUN_ID, forceRefresh: false, withHeuristic: false, concurrency: 1 });
+
+    expect(recordPipelineError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        run_id: ENRICH_RUN_ID,
+        phase: "enrich",
+        source: "google_places",
+        lead_id: "l1",
+        error_type: "timeout",
+        recovered: true,
+      })
+    );
   });
 });

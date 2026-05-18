@@ -13,6 +13,7 @@ import {
   loadAllPassedLeads,
   updateLeadEnrichment,
 } from "../../storage/leads.js";
+import { recordPipelineError, type PipelineErrorType } from "../../storage/pipeline-errors.js";
 import { loadFilterWordsForNiche } from "../../storage/vocabulary.js";
 import { enrichLead } from "../../modules/enrichment/index.js";
 import type { EnrichmentCtx } from "../../modules/enrichment/index.js";
@@ -80,6 +81,17 @@ function unionSets<T>(...sets: Array<ReadonlySet<T> | undefined>): ReadonlySet<T
     for (const value of set ?? []) merged.add(value);
   }
   return merged.size > 0 ? merged : undefined;
+}
+
+function classifyPipelineError(message: string): PipelineErrorType {
+  const normalized = message.toLowerCase();
+  if (normalized.includes("timeout")) return "timeout";
+  if (normalized.includes("429")) return "http_429";
+  if (normalized.includes("captcha")) return "captcha";
+  if (normalized.includes("blocked")) return "blocked";
+  if (normalized.includes("parse")) return "parse_failed";
+  if (normalized.includes("db")) return "db_error";
+  return "other";
 }
 
 function buildRuntimeCtx(runtime: AllRuntime, niche: string | null): EnrichmentCtx {
@@ -200,8 +212,10 @@ export async function enrichCommand(rawArgs: RawEnrichArgs): Promise<void> {
     }
     process.exit(1);
   };
-  process.once("SIGTERM", () => void cleanup("SIGTERM"));
-  process.once("SIGINT", () => void cleanup("SIGINT"));
+  const onSigterm = () => void cleanup("SIGTERM");
+  const onSigint = () => void cleanup("SIGINT");
+  process.once("SIGTERM", onSigterm);
+  process.once("SIGINT", onSigint);
 
   try {
     const runtime = await loadAllRuntime();
@@ -225,6 +239,7 @@ export async function enrichCommand(rawArgs: RawEnrichArgs): Promise<void> {
         command: "enrich",
         ...(mode === "run" ? { source_run_id: sourceRun!.id } : {}),
         leads_processed: 0,
+        significant_changes: 0,
         skipped_no_website: 0,
         skipped_social_only: 0,
         skipped_cache_hit: 0,
@@ -263,6 +278,7 @@ export async function enrichCommand(rawArgs: RawEnrichArgs): Promise<void> {
     let fetched_error = 0;
     let whois_errors = 0;
     let leads_processed = 0;
+    let significant_changes = 0;
 
     await Promise.all(
       leads.map((lead) =>
@@ -277,12 +293,15 @@ export async function enrichCommand(rawArgs: RawEnrichArgs): Promise<void> {
               withHeuristic: opts.withHeuristic,
               ...(extraStopWords.size > 0 ? { extraStopWords } : {}),
             }, undefined, leadRuntimeCtx);
-            await updateLeadEnrichment(
+            const enrichmentUpdate = await updateLeadEnrichment(
               lead.id,
               result.digital_footprint,
               result.tags_to_add,
               result.whatsapp_from_site
             );
+            if (enrichmentUpdate?.critical_change) {
+              significant_changes += 1;
+            }
 
             switch (result.outcome) {
               case "skipped-no-website":
@@ -327,6 +346,21 @@ export async function enrichCommand(rawArgs: RawEnrichArgs): Promise<void> {
           } catch (err: unknown) {
             const msg = err instanceof Error ? err.message : String(err);
             log.error({ leadId: lead.id, err: msg }, "lead enrichment crashed");
+            try {
+              await recordPipelineError({
+                run_id: enrichRun.id,
+                phase: "enrich",
+                source: lead.source,
+                lead_id: lead.id,
+                error_type: classifyPipelineError(msg),
+                message: msg,
+                stack: err instanceof Error ? err.stack ?? null : null,
+                recovered: true,
+              });
+            } catch (pipelineErr: unknown) {
+              const pipelineMsg = pipelineErr instanceof Error ? pipelineErr.message : String(pipelineErr);
+              log.warn({ leadId: lead.id, err: pipelineMsg }, "pipeline_errors insert failed");
+            }
           }
         })
       )
@@ -343,6 +377,7 @@ export async function enrichCommand(rawArgs: RawEnrichArgs): Promise<void> {
       command: "enrich",
       ...(mode === "run" ? { source_run_id: sourceRun!.id } : {}),
       leads_processed,
+      significant_changes,
       skipped_no_website,
       skipped_social_only,
       skipped_cache_hit,
@@ -379,6 +414,9 @@ export async function enrichCommand(rawArgs: RawEnrichArgs): Promise<void> {
     log.error({ runId: enrichRun.id, err: msg }, "Enrich command failed");
     await failRun(enrichRun.id, msg, duration_ms);
     throw err;
+  } finally {
+    process.removeListener("SIGTERM", onSigterm);
+    process.removeListener("SIGINT", onSigint);
   }
 }
 
@@ -407,6 +445,7 @@ function printSummary(runId: string, stats: EnrichmentRunStats): void {
   console.log(`
 Enrichment run ${runId} completado.
 Procesados:           ${stats.leads_processed}
+Cambios significativos: ${stats.significant_changes}
 Skipped (sin web):    ${stats.skipped_no_website}
 Skipped (social):     ${stats.skipped_social_only}
 Skipped (cache hit):  ${stats.skipped_cache_hit}

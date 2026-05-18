@@ -14,6 +14,10 @@ vi.mock("../../src/shared/supabase.js", () => ({
   getSupabase: vi.fn(() => supabaseRef.current),
 }));
 
+vi.mock("../../src/storage/service-pricing.js", () => ({
+  getAdminServicePricing: vi.fn(async () => null),
+}));
+
 function socialSearch(source: "playwright" | "duckduckgo", confirmed: boolean): SocialSearch {
   if (source === "playwright") {
     return {
@@ -332,7 +336,15 @@ describe("updateLeadEnrichment", () => {
     const update = vi.fn(() => ({
       eq: vi.fn(() => ({ select: vi.fn(() => ({ single: updateSingle })) })),
     }));
-    supabaseRef.current = { from: vi.fn(() => ({ select, update })) };
+    supabaseRef.current = {
+      from: vi.fn((table: string) => {
+        if (table === "leads") return { select, update };
+        if (table === "lead_buyer_scores") {
+          return { upsert: vi.fn(async () => ({ error: null })) };
+        }
+        return { select, update };
+      }),
+    };
 
     await expect(updateLeadEnrichment("lead-2", { fetched_at: "now" }, [], null))
       .rejects.toThrow("Supabase returned no row for leadId=lead-2");
@@ -340,22 +352,158 @@ describe("updateLeadEnrichment", () => {
 
   it("keeps existing normalized whatsapp before whatsappFromSite", async () => {
     const single = vi.fn(async () => ({
-      data: { tags: [], whatsapp: "094123456", digital_footprint: null },
+      data: {
+        tags: [],
+        whatsapp: "094123456",
+        phone: null,
+        canonical_fields: null,
+        digital_footprint: null,
+      },
       error: null,
     }));
     const select = vi.fn(() => ({ eq: vi.fn(() => ({ single })) }));
     let updatePayload: Record<string, unknown> | null = null;
-    const updateSingle = vi.fn(async () => ({ data: { id: "lead-3" }, error: null }));
+    const updateSingle = vi.fn(async () => ({
+      data: {
+        id: "lead-3",
+        source: "google_places",
+        tags: [],
+        whatsapp: "+59894123456",
+        phone: null,
+        canonical_fields: null,
+        digital_footprint: { fetched_at: "now" },
+      },
+      error: null,
+    }));
     const update = vi.fn((payload: Record<string, unknown>) => {
-      updatePayload = payload;
+      if ("contact_reliability_score" in payload) {
+        updatePayload = payload;
+      }
       return { eq: vi.fn(() => ({ select: vi.fn(() => ({ single: updateSingle })) })) };
     });
-    supabaseRef.current = { from: vi.fn(() => ({ select, update })) };
+    supabaseRef.current = {
+      from: vi.fn((table: string) => {
+        if (table === "leads") return { select, update };
+        if (table === "lead_buyer_scores") {
+          return { upsert: vi.fn(async () => ({ error: null })) };
+        }
+        return { select, update };
+      }),
+    };
 
     await updateLeadEnrichment("lead-3", { fetched_at: "now" }, [], "099999999");
 
     expect(updatePayload?.whatsapp).toBe("+59894123456");
     expect(updatePayload?.tags).toEqual(expect.arrayContaining(["whatsapp-derived"]));
+  });
+
+  it("persists contact_reliability_score and email-no-mx tags from enrichment data", async () => {
+    const single = vi.fn(async () => ({
+      data: {
+        tags: [],
+        whatsapp: null,
+        phone: "+59824087679",
+        canonical_fields: null,
+        digital_footprint: null,
+      },
+      error: null,
+    }));
+    const select = vi.fn(() => ({ eq: vi.fn(() => ({ single })) }));
+    let updatePayload: Record<string, unknown> | null = null;
+    const updateSingle = vi.fn(async () => ({
+      data: {
+        id: "lead-4",
+        place_id: "place-4",
+        source: "google_places",
+        external_id: "place-4",
+        source_confidence: 0.9,
+        source_data: null,
+        data_confidence_score: 0.8,
+        contact_reliability_score: 0.23,
+        canonical_fields: null,
+        corroborating_sources: [],
+        lead_company_data: null,
+        niche: "restaurant",
+        name: "Negocio",
+        address: null,
+        rating: 4.1,
+        review_count: 20,
+        website: "https://negocio.uy",
+        whatsapp: null,
+        phone: "+59824087679",
+        business_status: null,
+        tags: ["email-found", "email-no-mx", "landline-phone"],
+        notes: null,
+        state: "discovered",
+        first_seen_run_id: "run-1",
+        last_seen_run_id: "run-1",
+        google_data: null,
+        digital_footprint: {
+          fetched_at: "now",
+          contact_emails: ["info@negocio.uy"],
+          email_quality: [{
+            email: "info@negocio.uy",
+            quality: "generic",
+            domain_match: false,
+            mx_valid: false,
+            reliability_multiplier: 0.5,
+          }],
+        },
+        inferred_state: null,
+        gps: null,
+        reviews_sample: null,
+        business_quality_score: 20,
+        digital_gap_score: 20,
+        systems_gap_score: 10,
+        prospect_score: 35,
+        scoring_version: 2,
+        contact_ready: true,
+        prospect_score_v1: null,
+        passed_filter: true,
+        rejection_reasons: [],
+        score_breakdown: { contact_tier: "B" },
+        score_breakdown_v1: null,
+        systems_gap_breakdown: null,
+        contacted_at: null,
+        created_at: "2026-01-01T00:00:00.000Z",
+        updated_at: "2026-01-01T00:00:00.000Z",
+      },
+      error: null,
+    }));
+    const update = vi.fn((payload: Record<string, unknown>) => {
+      if ("contact_reliability_score" in payload) {
+        updatePayload = payload;
+      }
+      return { eq: vi.fn(() => ({ select: vi.fn(() => ({ single: updateSingle })) })) };
+    });
+    supabaseRef.current = {
+      from: vi.fn((table: string) => {
+        if (table === "leads") return { select, update };
+        if (table === "lead_buyer_scores") {
+          return { upsert: vi.fn(async () => ({ error: null })) };
+        }
+        return { select, update };
+      }),
+    };
+
+    await updateLeadEnrichment("lead-4", {
+      fetched_at: "now",
+      contact_emails: ["info@negocio.uy"],
+      email_quality: [{
+        email: "info@negocio.uy",
+        quality: "generic",
+        domain_match: false,
+        mx_valid: false,
+        reliability_multiplier: 0.5,
+      }],
+    }, ["email-found"], null);
+
+    expect(updatePayload?.contact_reliability_score).toBe(0.23);
+    expect(updatePayload?.tags).toEqual(expect.arrayContaining([
+      "email-found",
+      "email-no-mx",
+      "landline-phone",
+    ]));
   });
 });
 

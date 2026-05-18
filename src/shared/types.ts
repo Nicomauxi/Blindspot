@@ -79,6 +79,7 @@ export interface EnrichmentRunStats extends RunStats {
   command: "enrich";
   source_run_id?: string;
   leads_processed: number;
+  significant_changes: number;
   skipped_no_website: number;
   skipped_social_only: number;
   skipped_cache_hit: number;
@@ -166,6 +167,19 @@ export interface DirectoryDiscovery {
   candidates: DirectoryCandidate[];
   best_website: string | null;
   error?: string;
+}
+
+export interface EnrichmentChange {
+  field: string;
+  from: unknown;
+  to: unknown;
+  significance: "critical" | "high" | "low";
+}
+
+export interface EnrichmentDiff {
+  lead_id: string;
+  changed_at: string;
+  changes: EnrichmentChange[];
 }
 
 export type SocialSearchPlatform = "facebook" | "instagram";
@@ -269,6 +283,7 @@ export type DigitalFootprintSkipped = {
   directory_discovery?: DirectoryDiscovery;
   social_search?: SocialSearch;
   social_enrich_status?: "ok" | "blocked";
+  last_change_diff?: EnrichmentDiff;
 };
 
 export interface InferredStateField {
@@ -357,6 +372,7 @@ export interface DigitalFootprintEnriched {
   };
   inferred_state?: InferredState;
   social_enrich_status?: "ok" | "blocked";
+  last_change_diff?: EnrichmentDiff;
 }
 
 export type DigitalFootprint = DigitalFootprintSkipped | DigitalFootprintEnriched;
