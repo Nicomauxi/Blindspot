@@ -6,6 +6,7 @@ import jwt from "@fastify/jwt";
 import { authRoutes } from "./auth/routes.js";
 import { healthRoutes } from "./routes/health.js";
 import { leadsRoutes } from "./routes/leads.js";
+import { outreachRoutes } from "./routes/outreach.js";
 
 const PORT = Number(process.env["PORT"] ?? 3001);
 const CORS_ORIGIN = process.env["CORS_ORIGIN"] ?? "http://localhost:3000";
@@ -24,6 +25,7 @@ export async function buildServer() {
   await app.register(authRoutes);
   await app.register(healthRoutes, { prefix: "/api/v1" });
   await app.register(leadsRoutes, { prefix: "/api/v1" });
+  await app.register(outreachRoutes, { prefix: "/api/v1" });
 
   return app;
 }

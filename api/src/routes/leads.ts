@@ -3,6 +3,13 @@ import { z } from "zod";
 import { getDb } from "../db/client.js";
 import { requireAuth, getAuthUser } from "../auth/middleware.js";
 
+const permissiveUuid = z
+  .string()
+  .regex(
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+    "Invalid UUID"
+  );
+
 const CONTACT_TIERS = ["A", "B", "C", "D", "X"] as const;
 type ContactTier = (typeof CONTACT_TIERS)[number];
 
@@ -28,7 +35,7 @@ const listQuerySchema = z.object({
   niche: z.string().optional(),
   source: z.string().optional(),
   q: z.string().optional(),
-  cursor: z.string().uuid().optional(),
+  cursor: permissiveUuid.optional(),
   limit: z
     .string()
     .optional()
