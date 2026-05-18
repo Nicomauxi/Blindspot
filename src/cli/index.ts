@@ -16,6 +16,7 @@ import { discoverExternalCommand } from "./commands/discover-external.js";
 import { inferStateCommand } from "./commands/infer-state.js";
 import { reconcileRetroactiveCommand } from "./commands/reconcile-retroactive.js";
 import { pipelineCommand } from "./commands/pipeline.js";
+import { outreachCommand } from "./commands/outreach.js";
 
 const program = new Command();
 
@@ -346,6 +347,14 @@ program
   });
 
 program.addCommand(pipelineCommand);
+
+program
+  .command("outreach")
+  .description("Outreach management and reporting")
+  .option("--stats", "Show outreach statistics (total, by status/channel/outcome, conversion/response rates)", false)
+  .action(async (opts: { stats: boolean }) => {
+    await outreachCommand({ stats: opts.stats });
+  });
 
 try {
   getScoringConfig();
