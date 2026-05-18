@@ -401,6 +401,7 @@ export interface Lead {
   canonical_fields: Record<string, unknown> | null;
   corroborating_sources: CorroboratingSource[];
   canonical_source: string | null;
+  owner_group_id: string | null;
   lead_company_data: LeadCompanyData | null;
   niche: string | null;
   name: string;

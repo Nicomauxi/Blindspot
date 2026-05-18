@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
-import { getLead, listOutreach, generateOffer, type LeadDetail, type OutreachEntry, type OfferPackage } from "@/lib/api";
+import { getLead, listOutreach, generateOffer, getOwnerGroup, type LeadDetail, type OutreachEntry, type OfferPackage, type OwnerGroupMember } from "@/lib/api";
 import { useAuthStore } from "@/lib/auth-store";
 import { cn, formatRelative } from "@/lib/utils";
 
@@ -49,6 +49,7 @@ export default function LeadDetailPage() {
 
   const [lead, setLead] = useState<LeadDetail | null>(null);
   const [outreach, setOutreach] = useState<OutreachEntry[]>([]);
+  const [ownerGroup, setOwnerGroup] = useState<OwnerGroupMember[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [offer, setOffer] = useState<OfferPackage | null>(null);
@@ -59,10 +60,15 @@ export default function LeadDetailPage() {
   useEffect(() => {
     if (!token || !id) return;
     setLoading(true);
-    Promise.all([getLead(token, id), listOutreach(token, { lead_id: id, limit: 20 })])
-      .then(([leadRes, outreachRes]) => {
+    Promise.all([
+      getLead(token, id),
+      listOutreach(token, { lead_id: id, limit: 20 }),
+      getOwnerGroup(token, id),
+    ])
+      .then(([leadRes, outreachRes, ownerGroupRes]) => {
         setLead(leadRes.data);
         setOutreach(outreachRes.data);
+        setOwnerGroup(ownerGroupRes.data ?? []);
         setError(null);
       })
       .catch((err) => setError(err instanceof Error ? err.message : "Error al cargar lead"))
@@ -95,6 +101,11 @@ export default function LeadDetailPage() {
         {lead.prospect_score != null && (
           <span className="text-sm font-mono font-semibold text-gray-700">
             Score {lead.prospect_score}
+          </span>
+        )}
+        {ownerGroup.length > 0 && (
+          <span className="px-2 py-0.5 rounded text-xs font-medium bg-orange-50 text-orange-700 border border-orange-200">
+            {ownerGroup.length + 1} negocios del mismo propietario
           </span>
         )}
       </div>
@@ -235,6 +246,30 @@ export default function LeadDetailPage() {
           </div>
         )}
       </Section>
+
+      {/* Owner group */}
+      {ownerGroup.length > 0 && (
+        <Section title={`Mismo propietario (${ownerGroup.length} lead${ownerGroup.length > 1 ? "s" : ""})`}>
+          <div className="space-y-1">
+            {ownerGroup.map((m) => (
+              <div key={m.id} className="flex items-center gap-3 text-sm">
+                <Link href={`/admin/leads/${m.id}`} className="text-brand-600 hover:underline font-medium flex-1 truncate">
+                  {m.name}
+                </Link>
+                {m.niche && <span className="text-gray-400 text-xs">{m.niche}</span>}
+                {m.contact_tier && (
+                  <span className={cn("px-1.5 py-0.5 rounded text-xs font-semibold", TIER_COLORS[m.contact_tier] ?? "bg-gray-100")}>
+                    {m.contact_tier}
+                  </span>
+                )}
+                {m.prospect_score != null && (
+                  <span className="text-xs font-mono text-gray-600">{m.prospect_score}</span>
+                )}
+              </div>
+            ))}
+          </div>
+        </Section>
+      )}
 
       {/* Outreach history */}
       <Section title={`Outreach (${outreach.length})`}>

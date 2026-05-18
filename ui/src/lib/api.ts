@@ -315,6 +315,7 @@ export type LeadDashboard = {
   corroborating_sources: { source: string; external_id: string; confidence: number }[];
   top_buyer_type: string | null;
   top_buyer_score: number | null;
+  owner_group_id: string | null;
 };
 
 export type LeadDetail = LeadDashboard & {
@@ -352,6 +353,12 @@ export async function listLeads(
 
 export async function getLead(token: string, id: string) {
   return request<SingleResponse<LeadDetail>>(`/api/v1/leads/${id}`, {}, token);
+}
+
+export type OwnerGroupMember = Pick<LeadDashboard, "id" | "name" | "niche" | "contact_tier" | "prospect_score" | "owner_group_id">;
+
+export async function getOwnerGroup(token: string, leadId: string) {
+  return request<{ data: OwnerGroupMember[] }>(`/api/v1/leads/${leadId}/owner-group`, {}, token);
 }
 
 // Outreach
