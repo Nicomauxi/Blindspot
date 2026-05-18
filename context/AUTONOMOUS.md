@@ -372,9 +372,9 @@ Cuando se llega a una stop condition, NO continuar al siguiente paso. En cambio:
 
 **Última actualización:** 2026-05-18
 
-**Sesiones autónomas completadas:** 13 (`Fase 49 — DB backup automatizado`, `Fase 22-pre — campos de versión y rollback de scoring`, `Fase 21 — PostGIS local + columna gps`, `Fase 47 — inferred_state a columna propia`, `Fase 15 — calidad de email + tipo de teléfono`, `Fase 6A — deduplicación cross-source para inserts nuevos`, `Fase 6B — reconciliación retroactiva local`, `Fase 22 — scoring v2 apply`, `Fase API-0 — schemas users/pipeline/outreach/audit_log`, `Fase 23 — core automation scheduler`, `Fase API APIA…APIE — Fastify completo + matriz auth verde`, `Admin MVP UI — User Management + Health + Audit Log Viewer`)
+**Sesiones autónomas completadas:** 14 (`Fase 49 — DB backup automatizado`, `Fase 22-pre — campos de versión y rollback de scoring`, `Fase 21 — PostGIS local + columna gps`, `Fase 47 — inferred_state a columna propia`, `Fase 15 — calidad de email + tipo de teléfono`, `Fase 6A — deduplicación cross-source para inserts nuevos`, `Fase 6B — reconciliación retroactiva local`, `Fase 22 — scoring v2 apply`, `Fase API-0 — schemas users/pipeline/outreach/audit_log`, `Fase 23 — core automation scheduler`, `Fase API APIA…APIE — Fastify completo + matriz auth verde`, `Admin MVP UI — User Management + Health + Audit Log Viewer`, `Fase 46 — Scraping hardening anti-detección`)
 
-**Próxima fase a ejecutar:** Fase 46 — Scraping hardening (Bloque 6). Prerequisitos: Admin MVP UI completa ✓.
+**Próxima fase a ejecutar:** Fase 48 — Producción (Bloque 6). Prerequisitos: Fase 46 completa ✓.
 
 **Orden por bloques (canónico — sincronizado con `ROADMAP_CANONICAL.md § Roadmap ejecutable`, 44 items 0–43):**
 - **Bloque 0:** Fase 49 (backup) — completada y verificada el 2026-05-17.
@@ -394,7 +394,7 @@ Cuando se llega a una stop condition, NO continuar al siguiente paso. En cambio:
 **Intervención humana todavía necesaria:** gasto externo / APIs billables, `pnpm add` o comandos bloqueados, research pendiente (IMM/DGI), revisión humana del reporte post-apply de `Fase 22` si se quiere recalibrar antes de API/UI, validación de data estacional para `Fase 42`, y acciones manuales de producción/cleanup como `Fase 48` y `Cleanup v1`. El resto debe continuar solo.
 
 **Estado conocido:**
-- Tests: 972 passing, 7 skipped, 84 files
+- Tests: 976 passing, 7 skipped, 84 files
 - Typecheck: limpio
 - DB invariantes: todos en 0 (verificado 2026-05-18)
 - Directiva de sesión 2026-05-18: continuar el roadmap sin pausas por etiquetas `approval/manual` aisladas. Frenar solo por bloqueo real de seguridad, gasto externo, research pendiente, contradicción documental o input humano realmente necesario.
@@ -419,6 +419,7 @@ Cuando se llega a una stop condition, NO continuar al siguiente paso. En cambio:
 - Fase API APID: `GET/PUT/PATCH /pipeline/config`, `POST /pipeline/run` (202 + pg_notify), `GET /pipeline/runs*`, `POST /pipeline/abort`. `GET/POST /discovery/jobs`, `PATCH /discovery/jobs/:id` (pause/resume/cancel). `GET/POST/PATCH/DELETE /users` (bcrypt, lead_filter validation, audit_log). `GET /campaigns*` (501 stub). Stats routes. `/admin/audit-log`, `/admin/system/status`, restart stubs (501 dev), costs/performance stubs.
 - Fase API APIE: 8 auth matrix tests — live lead_filter update con mismo JWT, active=false bloqueo inmediato, CM 403 en paths admin-only, intersección de filtros CM, 404 en lead fuera de filtro. Tests: 972 passing, typecheck limpio. Fase API COMPLETA.
 - Admin MVP UI (2026-05-18): `ui/` workspace Next.js 15 completado. Rutas: `/login`, `/admin/users` (CRUD + lead_filter + reset pwd + activate/deactivate), `/admin/health` (polling 10s, estado DB/cron/last_run), `/admin/audit-log` (filtros actor/action/from/to, tabla paginada cursor-based, modal diff before/after, export JSON). Build Next.js limpio. TypeCheck limpio.
+- Fase 46 (2026-05-18): `src/shared/scraping.ts` con `jitter`, `randomBetween`, `pickRandom`, `backoffMs`, `isBlockedStatus`. `ScrapingConfig` en `types.ts` + `config/discovery.yaml` (5 UA discovery, 10 UA social, delays `[800,2500]ms`/`[1500,4000]ms`, max_retries 3/2). `YeluProvider`: `sleepFn` injectable (no-op en tests), delay entre páginas, retry+backoff en 429/403/503. `PedidosYaProvider`: mismo patrón + UA rotation al crear contexto Playwright. `social-enrich/browser.ts`: migrado a `playwright-extra` + stealth, UA rotado desde config. `social-enrich/index.ts`: delay aleatorio entre leads, `blocked` clasificado por señales (`blocked`, `captcha`, `denied`, `403`, `checkpoint`), `updateLeadSocialEnrichStatus` persiste `social_enrich_status: "blocked"` + tag `social-blocked`. `discover-external` pasa `sleepFn` real. Tests: 976 passing, typecheck limpio.
 
 **Contexto de la documentación:** los archivos context/ tienen 19 fixes de auditorías previas + reorganización 2026-05-16 (modelo "uso interno + socios"). Se eliminaron contradicciones C2–C5 detectadas en quinta auditoría:
 - Mono-repo confirmado (un directorio `blindspot/` con `src/`, `api/`, `ui/`) — `AUTONOMOUS.md` alineado.
