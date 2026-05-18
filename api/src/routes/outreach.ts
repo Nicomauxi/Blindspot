@@ -2,6 +2,8 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { getDb } from "../db/client.js";
 import { requireAuth, getAuthUser } from "../auth/middleware.js";
+import { createLLMProvider } from "../llm/factory.js";
+import type { LlmUsageLog } from "../llm/types.js";
 
 // Permissive UUID regex (Zod v4 uuid() is RFC-strict; this matches any 8-4-4-4-12 hex)
 const uuidSchema = z
@@ -332,7 +334,7 @@ export async function outreachRoutes(app: FastifyInstance): Promise<void> {
     }
   );
 
-  // POST /api/v1/outreach/generate-offer — stub until Fase 26
+  // POST /api/v1/outreach/generate-offer
   app.post(
     "/outreach/generate-offer",
     { preHandler: requireAuth },
@@ -350,16 +352,74 @@ export async function outreachRoutes(app: FastifyInstance): Promise<void> {
         });
       }
 
-      // Stub: returns a fixed template. Fase 26 replaces this with LLM call.
-      return reply.status(200).send({
-        data: {
-          text: `Hola, somos Blindspot. Notamos que tu negocio podría beneficiarse de una solución digital personalizada.`,
-          source_llm: "template",
-          generated_at: new Date().toISOString(),
-        },
-        _stub: true,
-        _note: "Fase 26 will replace this with real LLM generation",
+      const db = getDb();
+      const { data: lead, error: leadErr } = await db
+        .from("lead_dashboard")
+        .select("id, name, niche, primary_offer, pitch_hook")
+        .eq("id", body.lead_id)
+        .single();
+
+      if (leadErr || !lead) {
+        return reply.status(404).send({ error: "Lead not found", error_code: "not_found" });
+      }
+
+      const offerType = body.offer_type ?? (lead as Record<string, string | null>)["primary_offer"] ?? "contacto_directo";
+      const channel = body.channel ?? "email";
+
+      if (offerType === "none") {
+        return reply.status(400).send({ error: "Lead has no primary offer", error_code: "no_primary_offer" });
+      }
+
+      const provider = createLLMProvider();
+      const startMs = Date.now();
+      let result;
+      let status: LlmUsageLog["status"] = "success";
+
+      try {
+        result = await provider.generateOffer({
+          lead_id: body.lead_id,
+          lead_name: (lead as Record<string, string | null>)["name"] ?? "",
+          niche: (lead as Record<string, string | null>)["niche"] ?? null,
+          primary_offer: (lead as Record<string, string | null>)["primary_offer"] ?? null,
+          pitch_hook: (lead as Record<string, string | null>)["pitch_hook"] ?? null,
+          offer_type: offerType,
+          channel,
+        });
+        if (result.source_llm === "template") status = "fallback";
+      } catch (err) {
+        request.log.error({ err }, "LLM generate-offer error");
+        const templateProvider = (await import("../llm/template.js")).then(
+          (m) => new m.TemplateProvider()
+        );
+        result = await (await templateProvider).generateOffer({
+          lead_id: body.lead_id,
+          lead_name: (lead as Record<string, string | null>)["name"] ?? "",
+          niche: (lead as Record<string, string | null>)["niche"] ?? null,
+          primary_offer: (lead as Record<string, string | null>)["primary_offer"] ?? null,
+          pitch_hook: (lead as Record<string, string | null>)["pitch_hook"] ?? null,
+          offer_type: offerType,
+          channel,
+        });
+        status = "error";
+      }
+
+      // Log usage (best-effort — don't fail the request if logging fails)
+      const usageRow: LlmUsageLog = {
+        lead_id: body.lead_id,
+        feature: "generate_offer",
+        provider: result.provider ?? provider.name,
+        model: result.model ?? provider.model,
+        tokens_in: result.tokens_in ?? 0,
+        tokens_out: result.tokens_out ?? 0,
+        cost_usd_estimated: result.cost_usd_estimated ?? 0,
+        status,
+        duration_ms: Date.now() - startMs,
+      };
+      db.from("llm_usage_log").insert(usageRow).then(({ error: logErr }) => {
+        if (logErr) request.log.warn({ logErr }, "llm_usage_log insert failed");
       });
+
+      return reply.status(200).send({ data: result });
     }
   );
 }

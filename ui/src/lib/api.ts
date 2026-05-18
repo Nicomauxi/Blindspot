@@ -706,3 +706,22 @@ export async function listAuditLog(
     token
   );
 }
+
+export type OfferPackage = {
+  text: string;
+  source_llm: string;
+  generated_at: string;
+  provider?: string;
+  model?: string;
+};
+
+export function generateOffer(
+  token: string,
+  params: { lead_id: string; offer_type?: string; channel?: string }
+) {
+  return request<SingleResponse<OfferPackage>>(
+    "/api/v1/outreach/generate-offer",
+    { method: "POST", body: JSON.stringify(params) },
+    token
+  );
+}

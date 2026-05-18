@@ -78,6 +78,11 @@ vi.mock("../../api/src/db/client.js", () => ({
           }),
         };
       }
+      if (table === "llm_usage_log") {
+        return {
+          insert: () => Promise.resolve({ error: null }),
+        };
+      }
       if (table === "pipeline_config") {
         return {
           select: () => ({
@@ -391,7 +396,7 @@ describe("POST /api/v1/outreach/generate-offer", () => {
     };
   });
 
-  it("returns stub offer for valid lead_id", async () => {
+  it("returns offer for valid lead_id using template fallback", async () => {
     const { buildServer } = await import("../../api/src/server.js");
     const app = await buildServer();
     const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
@@ -399,13 +404,14 @@ describe("POST /api/v1/outreach/generate-offer", () => {
       method: "POST",
       url: "/api/v1/outreach/generate-offer",
       headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-      body: JSON.stringify({ lead_id: "00000000-0000-0000-0000-000000000001" }),
+      body: JSON.stringify({ lead_id: "00000000-0000-0000-0000-000000000001", channel: "whatsapp" }),
     });
     expect(res.statusCode).toBe(200);
     const body = res.json();
     expect(body.data).toHaveProperty("text");
+    expect(typeof body.data.text).toBe("string");
+    expect(body.data.text.length).toBeGreaterThan(0);
     expect(body.data.source_llm).toBe("template");
-    expect(body._stub).toBe(true);
     await app.close();
   });
 
