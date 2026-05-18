@@ -18,6 +18,7 @@ import { reconcileRetroactiveCommand } from "./commands/reconcile-retroactive.js
 import { pipelineCommand } from "./commands/pipeline.js";
 import { outreachCommand } from "./commands/outreach.js";
 import { enrichSubNicheCommand } from "./commands/enrich-sub-niche.js";
+import { enrichTipoOperadorCommand } from "./commands/enrich-tipo-operador.js";
 
 const program = new Command();
 
@@ -355,6 +356,14 @@ program
   });
 
 program.addCommand(pipelineCommand);
+
+program
+  .command("enrich-tipo-operador")
+  .description("Backfill tipo_operador from MINTUR source_data for MINTUR leads")
+  .option("--dry-run", "Report what would be updated without writing to DB", false)
+  .action(async (opts: { dryRun: boolean }) => {
+    await enrichTipoOperadorCommand({ dryRun: opts.dryRun });
+  });
 
 program
   .command("enrich-sub-niche")
