@@ -960,6 +960,22 @@ export async function updateLeadScore(leadId: string, result: ScoreResult): Prom
   if (error) throw new Error(`Failed to update scores for lead ${leadId}: ${error.message}`);
 }
 
+export async function updateLeadCompanyData(
+  leadId: string,
+  patch: Record<string, unknown>
+): Promise<void> {
+  const db = getSupabase();
+  const { data: current, error: fetchErr } = await db
+    .from("leads")
+    .select("lead_company_data")
+    .eq("id", leadId)
+    .single();
+  if (fetchErr) throw new Error(`Failed to load lead_company_data for ${leadId}: ${fetchErr.message}`);
+  const merged = { ...(current?.lead_company_data as Record<string, unknown> | null ?? {}), ...patch };
+  const { error } = await db.from("leads").update({ lead_company_data: merged }).eq("id", leadId);
+  if (error) throw new Error(`Failed to update lead_company_data for ${leadId}: ${error.message}`);
+}
+
 export async function upsertBuyerScores(
   leadId: string,
   scores: BuyerTypeScore[]

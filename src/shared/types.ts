@@ -482,6 +482,9 @@ export interface LeadCompanyData {
   registro_mintur?: string;
   habilitacion_imm?: string;
   fecha_fundacion?: string;
+  detected_sub_niche?: string;
+  sub_niche_source?: "keyword" | "llm";
+  sub_niche_detected_at?: string;
 }
 
 // ─── Multi-source architecture ────────────────────────────────────────────────
