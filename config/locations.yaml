@@ -1,0 +1,20 @@
+# Blindspot — lista de ubicaciones para discovery batch (Fase 24)
+# Usada por: blindspot discover-external --location-list-file config/locations.yaml
+# Formato: lista plana de strings de ubicación.
+
+locations:
+  - Montevideo
+  - Canelones
+  - Maldonado
+  - Salto
+  - Ciudad de la Costa
+  - Paysandú
+  - Rivera
+  - Melo
+  - Mercedes
+  - Las Piedras
+  - Colonia del Sacramento
+  - Durazno
+  - San José de Mayo
+  - Florida
+  - Trinidad
