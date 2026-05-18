@@ -182,6 +182,38 @@ export async function patchPipelineConfig(
   }, token);
 }
 
+export type PipelineRun = {
+  id: string;
+  status: "pending" | "running" | "completed" | "failed" | "aborted";
+  scope: string;
+  dry_run: boolean;
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+  phase_results: Record<string, unknown> | null;
+  error_message: string | null;
+};
+
+export async function triggerPipelineRun(token: string, dryRun = false) {
+  return request<{ run_id: string; status: string }>(
+    `/api/v1/pipeline/run${dryRun ? "?dry_run=true" : ""}`,
+    { method: "POST" },
+    token
+  );
+}
+
+export async function abortPipelineRun(token: string) {
+  return request<{ aborted: boolean }>("/api/v1/pipeline/abort", { method: "POST" }, token);
+}
+
+export async function listPipelineRuns(token: string, params: { status?: string; cursor?: string; limit?: number } = {}) {
+  const qp = new URLSearchParams();
+  if (params.status) qp.set("status", params.status);
+  if (params.cursor) qp.set("cursor", params.cursor);
+  if (params.limit) qp.set("limit", String(params.limit));
+  return request<PaginatedResponse<PipelineRun>>(`/api/v1/pipeline/runs?${qp}`, {}, token);
+}
+
 export async function testWebhook(token: string) {
   return request<SingleResponse<{ status: string; http_status?: number; url: string; error?: string }>>(
     "/api/v1/pipeline/webhook/test",
