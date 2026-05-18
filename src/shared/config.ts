@@ -16,6 +16,7 @@ const envSchema = z.object({
   SOCIAL_SEARCH_REFRESH_DAYS: z.coerce.number().int().positive().default(30),
   SOCIAL_ENRICH_CONCURRENCY: z.coerce.number().int().positive().default(2),
   PLAYWRIGHT_EXECUTABLEPATH: z.string().optional(),
+  DATABASE_URL: z.string().url().optional(),
 });
 
 export type Config = z.infer<typeof envSchema>;
