@@ -45,12 +45,11 @@
 18. **Discovery Control Center UI** — pantalla `/discovery` consume `/api/v1/discovery/jobs` y `/suggestions`.
 19. **Fase 24** — Batch discovery multi-ciudad (CLI `--location-list` integrado con `pipeline_runs` sub-jobs).
 20. **Fase 44** — Google Places budget tracker (backend + badge UI en Pipeline Manager).
-21. **Cost Dashboard UI** — pantalla `/admin/costs`. Bloqueada por Fase 44-pre + Fase 44.
-22. **Fase 45-pre** — `pipeline_errors`.
-23. **Fase 45** — Change detection en re-enrich.
-24. **Performance Dashboard UI** — pantalla `/admin/performance`. Bloqueada por Fase 45-pre + Fase 45.
-25. **Restart actions UI + endpoints** — `POST /api/v1/admin/system/restart-{core,api}` con códigos tipados; botones en Health. Solo activos en `NODE_ENV='production'` (post-Fase 48).
-26. **Cleanup snapshots v1** — `DROP COLUMN prospect_score_v1, score_breakdown_v1` con backup previo. Manual/aprobación. El admin decide cuándo (ver alerta `scoring_v1_columns_present` en Health).
+21. **Fase 45-pre** — `pipeline_errors`.
+22. **Fase 45** — Change detection en re-enrich.
+23. **Performance Dashboard UI** — pantalla `/admin/performance`. Bloqueada por Fase 45-pre + Fase 45.
+24. **Restart actions UI + endpoints** — `POST /api/v1/admin/system/restart-{core,api}` con códigos tipados; botones en Health. Solo activos en `NODE_ENV='production'` (post-Fase 48).
+25. **Cleanup snapshots v1** — `DROP COLUMN prospect_score_v1, score_breakdown_v1` con backup previo. Manual/aprobación. El admin decide cuándo (ver alerta `scoring_v1_columns_present` en Health).
 
 **Bloque 7 — Enriquecimiento incremental + refinamientos scoring (cierre del producto):**
 27. **Fase 40** — Full-text search.
@@ -610,28 +609,6 @@ La responsabilidad de Fase 23 respecto al Pipeline Manager queda del lado `src/`
 **Fuera de alcance:** ejecutar discovery real desde la UI en modo autónomo (los handlers funcionan, pero el agente autónomo no debe disparar runs reales — `SECURITY.md` lo bloquea).
 
 **Referencias:** `ADMIN_PANEL.md § Pantalla — Discovery Control Center`, `ARCHITECTURE_FRONTEND.md § Discovery Control Center`.
-
----
-
-### Cost Dashboard UI — gasto agregado por mes/fuente/lead (item 26)
-
-**Por qué:** sin esta pantalla, el admin no puede medir costo real del sistema (LLM + Google Places + infra). Las tablas `llm_usage_log` (Fase 44-pre) y los campos `google_places_budget_*` (Fase 44) ya existen.
-
-**Prerequisitos:**
-- Fase 44-pre aplicada (tabla `llm_usage_log` poblándose por `generateOffer` y `detectSubNiche`).
-- Fase 44 aplicada (`google_places_budget_spent` incrementándose por run real).
-- Endpoints `GET /api/v1/admin/costs/overview` y `GET /api/v1/admin/costs/history` **ya implementados en Fase API** (ver `api/src/routes/admin/costs.ts`). Esta fase NO toca `api/`; solo construye el frontend que consume esos endpoints. Si por algún error los endpoints faltaran en Fase API, retroceder a Fase API antes de empezar esta fase — NO crearlos acá.
-
-**Alcance incluido:**
-1. **Overview del mes en curso** — total USD estimado (LLM + GP + infra + backup), desglose por categoría.
-2. **Por fuente** — gráfico de barras con costo por proveedor LLM (gemini, ollama, openai-compatible) + Google Places + infra/backup (campos editables `infra_monthly_cost_usd`, `backup_monthly_cost_usd` en `pipeline_config`).
-3. **Por lead** — top 20 leads con mayor costo de enriquecimiento (suma de `llm_usage_log` por `lead_id` + share de GP del run que lo descubrió).
-4. **Historial** — costo mensual de los últimos 12 meses, línea de tendencia.
-5. **Estado del budget GP** — barra de presupuesto con `budget_remaining = budget_total - budget_spent`, badge rojo si `< alert_threshold`.
-
-**Fuera de alcance:** alertas push/email — la UI muestra el badge; integración con webhook externo entra cuando se active Fase 39.
-
-**Referencias:** `ADMIN_PANEL.md § Pantalla D — Cost Dashboard`.
 
 ---
 

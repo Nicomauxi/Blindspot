@@ -2,6 +2,7 @@
 
 > Fuente de verdad técnica del proyecto. Se adjunta a todos los prompts de Claude Code.
 > Solo documenta lo que está implementado hoy.
+> Para orden de ejecución, dependencias y decisiones consolidadas, ver `context/ROADMAP_CANONICAL.md`.
 > Si algo se elimina del código → se elimina de acá.
 > Si algo cambia → se actualiza antes de cerrar la sesión.
 
@@ -12,12 +13,27 @@
 - **Runtime:** Node.js 20 + TypeScript strict + pnpm
 - **CLI:** Commander
 - **HTTP:** undici ^7
-- **DB:** Supabase PostgreSQL — Docker local (`supabase_db_gap-radar`) + cloud
+- **DB:** Supabase PostgreSQL — Docker local (`supabase_db_gap-radar`). Supabase cloud no está activo en la operación actual; cualquier acción cloud es futura/manual.
 - **Scraping:** Playwright
-- **Tests:** Vitest — 882 passing, 7 skipped, 69 files
+- **Tests:** Vitest — 914 passing, 7 skipped, 75 files
 - **Dev:** tsx/esm
 - **Config:** YAML en `config/` — fuente de verdad para parámetros de discovery y scoring
 - **Repo:** https://github.com/Nicomauxi/Blindspot
+
+## Operación
+
+- `scripts/backup.sh` crea backups gzip de la DB local usando `docker exec supabase_db_gap-radar pg_dump`.
+- El directorio por defecto es `$HOME/blindspot-backups`; puede overridearse con `BLINDSPOT_BACKUP_DIR`.
+- El script valida integridad gzip y tamaño mínimo de `10KB`, elimina archivos parciales si falla y purga backups `blindspot_*.sql.gz` con más de `7` días.
+- `BACKUP_TAG` permite nombrar backups pre-fase (`blindspot_<tag>_<timestamp>.sql.gz`) sin cambiar el script.
+
+## Admin UI
+
+- `ui/src/app/admin/costs/page.tsx` implementa el Cost Dashboard activo.
+- Consume `GET /api/v1/admin/costs/overview` y `GET /api/v1/admin/costs/history`.
+- `overview` entrega el mes activo, totales (`llm`, `google_places`, `infra`, `backup`), estado del budget GP, desglose `per_source`, resumen `per_lead` y `llm.by_provider`.
+- `history` entrega `monthly[12]` con `google_places_usd`, `llm_usd`, `infra_usd`, `backup_usd`, `total_usd` y `hot_leads`.
+- El costo por lead usa solo gasto variable: suma `llm_usage_log.cost_usd` por `lead_id` más el share del costo Google Places del `first_seen_run_id`.
 
 ---
 
@@ -39,10 +55,12 @@ blindspot discover-google-places --niche <text> --location <text> --profile <a|b
 blindspot discover-mintur   --location <text> [--niche <text>] [--limit N] [--dry-run]
 blindspot discover-osm      --location <text> [--niche <text>] [--limit N] [--dry-run]
 blindspot discover-external --source <yelu|pedidosya> --location <text> --niche <text> [--limit N] [--dry-run]
+blindspot reconcile-retroactive [--apply] [--limit N]
 blindspot enrich            --run <uuid> [--force-refresh] [--with-heuristic]
                             --source <source> [--force-refresh] [--with-heuristic]
                             --all [--force-refresh] [--with-heuristic]
 blindspot score             [--run <uuid> | --all] [--buyer-types [--buyer-type <type>]] [--dry-run]
+blindspot score-eval        [--output-dir <path>] [--top N] [--gold-set-size N]
 blindspot social-enrich     [--run <uuid> | --all] [--limit N] [--force]
 blindspot report            --run <uuid> [--format csv|html|md|all]
 blindspot leads list        [--run <uuid>] [--passed-only] [--seen-in <uuid>]
@@ -81,9 +99,13 @@ src/
 │   └── commands/
 │       ├── discover.ts              — orquesta discovery via Google Places
 │       ├── discover-external.ts     — orquesta provider externo → deduplica → persiste
-│       │                              actualiza allLeads en memoria tras cada inserción (fix in-memory bug)
+│       │                              actualiza allLeads en memoria tras cada inserción (fix in-memory bug);
+│       │                              usa `deduplication.name_threshold_online` + `geo_radius_meters`
+│       ├── reconcile-retroactive.ts — dry-run/apply sobre leads ya persistidos; reporta grupos
+│       │                              candidatos y absorbe secundarios cuando existen
 │       ├── enrich.ts                — enrich + llama retroactiveEmailCleanup post-seed
 │       ├── score.ts
+│       ├── score-eval.ts            — simulación v1/v2 sobre snapshot real; genera reportes
 │       ├── social-enrich.ts         — Playwright FB/IG
 │       ├── report.ts
 │       ├── run.ts                   — pipeline completo, RAM-aware concurrency
@@ -93,7 +115,12 @@ src/
 │   ├── discovery/
 │   │   ├── places.ts                — Google Places API (Text Search + Details)
 │   │   ├── filters.ts               — applyProfileFilter, tagCandidate
-│   │   ├── deduplication.ts         — levenshtein, normalizeName, nameSimilarity, findCrossSourceMatch, isFranchise(name, franchiseNames)
+│   │   ├── deduplication.ts         — levenshtein, normalizeName, nameSimilarity,
+│   │   │                              findCrossSourceMatch, isFranchise(name, franchiseNames);
+│   │   │                              guardas por `source`, niche compatible (MINTUR/IMM `other`
+│   │   │                              como wildcard controlado), ciudad/dirección y GPS configurable
+│   │   ├── reconciliation.ts        — planner retroactivo de `Fase 6B`; arma grupos keeper→secondaries,
+│   │   │                              cuenta conflictos phone/email y resume pares por fuente
 │   │   └── providers/
 │   │       ├── google-places.ts     — GooglePlacesProvider: IDiscoveryProvider sobre places.ts
 │   │       ├── mintur.ts            — MINTURProvider: IDiscoveryProvider sobre API CKAN catalogodatos.gub.uy
@@ -116,6 +143,7 @@ src/
 │   │   │                              has_online_catalog, has_pos, has_chat_support, digitalization_level
 │   │   └── parsers/
 │   │       ├── email.ts             — extracción y validación emails
+│   │       ├── email-quality.ts     — clasifica emails (`generic` / `role` / `personal`), dominio y MX
 │   │       ├── whatsapp.ts          — normalización UY; lee mobile_prefixes_uy
 │   │       │                          de getHeuristicConfig() — NO hardcodeado
 │   │       ├── ssl.ts
@@ -123,6 +151,7 @@ src/
 │   │
 │   ├── scoring/
 │   │   ├── index.ts                 — prospect_score = min(100, floor(max(sub_scores) × contactabilityMultiplier × reviewMultiplier) + ratingBonus)
+│   │   ├── eval.ts                  — simulación read-only de scoring v2 para Fase 22-eval
 │   │   ├── sub-scores.ts            — calculateSubScores(lead, sgScore): SubScores
 │   │   │                              5 sub-scores: web_nuevo, rediseno, marketing, software, catalogo
 │   │   │                              primary_offer: oferta con mayor sub-score
@@ -137,6 +166,10 @@ src/
 │   │   │                              medium: created_at < 90d | review_count < 20 AND rating ≥ 4.0
 │   │   └── confidence.ts            — calculateDataConfidence(), calculateContactReliability()
 │   │
+│   ├── reporting/
+│   │   ├── index.ts                 — reportes por run (csv/html/md)
+│   │   └── score-eval.ts            — artefactos Markdown/CSV/JSON para Fase 22-eval
+│   │
 │   └── social-enrich/
 │       └── index.ts
 │
@@ -145,6 +178,9 @@ src/
 │   │                                  tagDuplicates, tagFranchises(leads, franchiseNames)
 │   │                                  importa MAX_CONTACT_EMAILS desde enrichment/index.ts
 │   ├── external-leads.ts            — insertExternalLead(candidate, {dryRun?, extraTags?}), addCorroboratingSource
+│   ├── reconciliation.ts            — merge retroactivo primary←secondary: mueve `lead_source_references`
+│   │                                  y `lead_field_evidences`, recalcula canonical/data/contact scores y
+│   │                                  elimina el lead secundario al final
 │   ├── runs.ts                      — createRun, completeRun
 │   └── system-lists.ts              — loadAllRuntime, loadRuntimeLists, detectAndSeedEmailProviders,
 │                                      retroactiveEmailCleanup (corre post-seed)
@@ -153,11 +189,14 @@ src/
 │
 └── shared/
     ├── types.ts                     — tipos globales
+    ├── phone.ts                     — clasificación de teléfonos UY (`mobile` / `landline`)
     ├── logger.ts                    — pino
     ├── ram.ts                       — RAM-aware concurrency
     └── config/
         ├── discovery.yaml           — perfiles A/B/C/D, mobile_prefixes_uy (fuente canónica)
         │                              source_refresh: días por fuente (google_places:30, mintur:90, osm:90, yelu:90, pedidosya:90)
+        │                              deduplication: `geo_radius_meters`, `name_threshold_online`,
+        │                              `name_threshold_retroactive`
         │                              getSourceRefreshDays(source, fallback=30) en modules/discovery/config.ts
         └── scoring.yaml             — pesos de reglas de scoring
 ```
@@ -191,8 +230,14 @@ docker exec supabase_db_gap-radar psql -U postgres -d postgres -c "..."
 | whatsapp | text | número normalizado +598xx |
 | google_data | jsonb | snapshot raw Google API |
 | digital_footprint | jsonb | resultado del enrich (heuristic, social, emails, etc.) |
+| inferred_state | jsonb | estado operativo derivado e indexable; migrado fuera de `digital_footprint` |
 | prospect_score | smallint | score final |
 | score_breakdown | jsonb | detalle de reglas que matchearon |
+| scoring_version | smallint NOT NULL DEFAULT 1 | versión de scoring persistida; Fase 22 aplicada en local con `2` sobre leads passed |
+| contact_ready | boolean | persistido por scoring v2 (`A/B/C` + `prospect_score >= 30` + no franquicia) |
+| prospect_score_v1 | smallint | snapshot rollback pre-v2; completado justo antes de Fase 22 |
+| score_breakdown_v1 | jsonb | snapshot rollback pre-v2; completado justo antes de Fase 22 |
+| gps | geography(Point, 4326) | coordenada geográfica persistida para fuentes confiables; hoy backfill desde OSM |
 | business_quality_score / digital_gap_score | smallint | componentes del score |
 | systems_gap_score / systems_gap_breakdown | smallint / jsonb | |
 | contacted_at | timestamptz | |
@@ -212,6 +257,11 @@ docker exec supabase_db_gap-radar psql -U postgres -d postgres -c "..."
 | corroborating_sources | jsonb NOT NULL DEFAULT '[]' | fuentes adicionales que corroboran |
 | lead_company_data | jsonb | rut, razon_social, ciiu, etc. |
 
+**GPS persistido actual:**
+- `gps` se backfillea desde `source_data.lat/lon` de filas `source='osm'`.
+- MINTUR queda excluido: no provee GPS confiable.
+- Google Places hoy no se backfillea porque el provider actual persiste `latitude/longitude = null`.
+
 **Constraint de identidad nueva:**
 ```sql
 UNIQUE INDEX leads_source_external_id_uniq ON leads(source, external_id)
@@ -228,6 +278,7 @@ WHERE external_id IS NOT NULL
 | score | smallint | CHECK 0–100 |
 | computed_at | timestamptz | DEFAULT now() |
 | breakdown | jsonb | base, adjustments, applied_modifiers |
+| scoring_version | smallint NOT NULL DEFAULT 1 | versión de scoring del buyer score |
 
 PK: `(lead_id, buyer_type)`. Índice: `(buyer_type, score DESC)`.
 
@@ -277,24 +328,34 @@ Listas activas:
 
 ## Scoring
 
+> **Estado: fórmula v2 aplicada localmente el 2026-05-18.** `score --all` reescribió leads passed y `lead_buyer_scores` con `scoring_version=2`. Ver `ARCHITECTURE_FUTURE.md § Scoring v2` para el racional completo.
+
 ```
-prospect_score = min(100, floor(max(sub_scores) * contactabilityMultiplier * reviewCountMultiplier(lead)) + ratingBonus(lead))
+commercial_score = min(100,
+  floor((gap_depth + commercial_breadth + business_quality_pts)
+        × accessibility_factor × timing_factor)
+  + urgency_bonus
+)
 ```
 
-**reviewCountMultiplier** (`src/modules/scoring/review-multiplier.ts`):
-| review_count | Multiplicador |
-|---|---|
-| null (fuentes externas) | 1.0 — no penaliza |
-| 0–10 | 0.75 |
-| 11–50 | 1.0 |
-| 51–200 | 1.2 |
-| 201+ | 1.4 |
-
-**ratingBonus**: +5 si `lead.rating >= 4.3`, 0 si null o menor. El `min(100)` externo envuelve el bonus.
+Componentes persistidos en `score_breakdown`:
+- `sub_scores` con 6 ofertas (`web_nuevo`, `rediseno`, `marketing`, `software`, `catalogo`, `contacto_directo`)
+- `primary_offer`
+- `source_quality_bonus`
+- `contact_tier`
+- `pitch_hook`
+- `urgency_signal`
+- `gap_depth`
+- `commercial_breadth`
+- `business_quality_pts`
+- `accessibility_factor`
+- `timing_factor`
+- `urgency_bonus`
+- `inferred_state_summary`
 
 ### Sub-scores por tipo de oferta (Fase B)
 
-`src/modules/scoring/sub-scores.ts` — `calculateSubScores(lead, sgScore): SubScores`
+`src/modules/scoring/sub-scores.ts` — `calculateSubScores(lead, sgScore, { contactTier })`
 
 | Sub-score | Señales principales | Cap |
 |-----------|--------------------|----|
@@ -303,18 +364,20 @@ prospect_score = min(100, floor(max(sub_scores) * contactabilityMultiplier * rev
 | `marketing` | `web-only-no-social`(28) + `fb/ig-heuristic`(15 c/u, sin -confirmed/-only) + `pixel-missing`(5) + `analytics-missing`(5) | 68 |
 | `software` | `systems_gap_score` + `whatsapp-missing`(10) + `chat-widget-missing`(3) | 100 |
 | `catalogo` | `hours-missing-on-web`(3) + ausencia de `ecommerce_platforms`(25) + ausencia de `menu_links`(20) + niche bonus(15) | 63 |
+| `contacto_directo` | phone/whatsapp contactable + niche activo + sin activos digitales conocidos | 40 |
 
 `primary_offer: PrimaryOffer` = la oferta con mayor sub-score (`"none"` si todos son 0).
 Penalizaciones por `inferred_state` (Fase F): **activas** — `has_ecommerce` × 0.3 en `web_nuevo`; `has_reservations` × 0.7 y `has_delivery` × 0.8 en `software`.
 
-`score_breakdown.sub_scores: SubScores` — persiste los 5 valores + `primary_offer` en DB.
-`score_breakdown.urgency_signal: UrgencySignal` — campo `"high" | "medium" | "low"` calculado por `computeUrgencySignal(lead)` en `urgency.ts`. Persiste en el JSONB `score_breakdown`, sin columna nueva en la tabla.
+`score_breakdown.sub_scores: SubScores` — persiste los 6 valores + `primary_offer` en DB.
+`score_breakdown.contact_tier: 'A'|'B'|'C'|'D'|'X'` — tiers mutuamente excluyentes priorizados por canal.
+`score_breakdown.pitch_hook: string` — resuelto desde `config/scoring.yaml -> pitch_hooks`.
 
-### InferredState (Fase F — activa)
+### InferredState (Fase 47 — activa)
 
 `src/modules/enrichment/inferred-state.ts` — `computeInferredState(fp, lead): InferredState`
 
-Función pura que corre al final del pipeline de enrichment (post-WHOIS). Resultado persistido en `digital_footprint.inferred_state`.
+Función pura que corre al final del pipeline de enrichment (post-WHOIS). Resultado persistido en `leads.inferred_state`.
 
 ```typescript
 interface InferredStateField { value: boolean; confidence: number; via: string[] }
@@ -342,18 +405,10 @@ Comando retroactivo: `blindspot infer-state --all [--force]` — vía `patchLead
 `src/modules/scoring/evaluator.ts` — soporta: `eq`, `neq`, `gte`, `lte`, `between`.
 Nota: `neq` retorna `matched: false` cuando el campo es null (null-guard en línea 23).
 
-### contactabilityMultiplier
+### Accessibility factor
 
-`src/modules/scoring/index.ts` — función privada que aplica ×1.2 al `prospect_score`
-si el lead tiene al menos un email en `digital_footprint.contact_emails` o en
-`canonical_fields.email`. Aplica a todos los sources. Se combina con `reviewCountMultiplier`
-antes del `min(100)` final.
-
-### Regla external_source_quality
-
-`config/scoring.yaml` — en `business_quality.rules`. Suma 70 puntos a leads con
-`source != google_places` (operador `neq`). Compensa la ausencia de rating/reviews en
-fuentes externas. Sin mutual_exclusion.
+`src/modules/scoring/v2.ts` — `accessibility_factor = tier_base(contact_tier) × (0.75 + 0.25 × contact_reliability_score)`.
+Valores base activos: `A=1.30`, `B=1.15`, `C=0.90`, `D=0.65`, `X=0.30`.
 
 ### Scoring escalonado — regla website_heuristic
 
@@ -371,8 +426,9 @@ Lee `digital_footprint.heuristic_discovery.selected.website.score`:
 
 | Categoría | Score |
 |-----------|-------|
-| Hot lead | ≥ 50 |
+| Hot lead | ≥ 55 |
 | Pitcheable | ≥ 40 |
+| Pool activo | ≥ 25 |
 | Pool activo mínimo | ≥ 40 |
 
 ### Nichos activos / descartados
@@ -482,9 +538,17 @@ email_evidences: [
 |-------|---------|-------|
 | `prospect_score` | `scoreLead()` en scoring/index.ts — sin cambios | 0–100 |
 | `data_confidence_score` | `calculateDataConfidence()` — coverage × source × corroboración | 0.00–1.00 |
-| `contact_reliability_score` | `calculateContactReliability()` — phone + whatsapp + email + alt_phones | 0.00–1.00 |
+| `contact_reliability_score` | `calculateContactReliability()` — phone + whatsapp + email_quality + MX + phone type | 0.00–1.00 |
 
-### Deduplicación cross-source (Fase 5 — implementada)
+### Contact reliability (Fase 15 — activa)
+
+- `src/modules/enrichment/parsers/email-quality.ts` clasifica `contact_emails`, agrega `domain_match` y persiste `mx_valid` por email.
+- `src/shared/phone.ts` clasifica números uruguayos en `mobile` o `landline` (`montevideo` / `interior`) desde `lead.phone`, `canonical_fields.phone` y `phone_alternatives`.
+- `src/modules/enrichment/index.ts` persiste `digital_footprint.email_quality` y `digital_footprint.phone_classification` en cada enrich.
+- `src/storage/leads.ts` recalcula `leads.contact_reliability_score` en `updateLeadEnrichment()` y `updateLeadSocialSearch()`, y sincroniza tags `mobile-phone`, `landline-phone` y `email-no-mx`.
+- `src/modules/scoring/confidence.ts` cuenta `canonical_fields.email`, `canonical_fields.phone` y `canonical_fields.website` como inputs válidos de cobertura/contacto cuando una fuente corroborante aporta mejor dato que el lead primario.
+
+### Deduplicación cross-source (Fases 5 + 6A — activa)
 
 `src/modules/discovery/deduplication.ts` — funciones puras, sin dependencias externas.
 
@@ -493,16 +557,30 @@ email_evidences: [
 | `levenshtein(a, b)` | Distancia Wagner-Fischer O(m·n) |
 | `normalizeName(name)` | NFD + strip diacríticos + colapso de espacios → string ASCII normalizado |
 | `nameSimilarity(a, b)` | `1 - levenshtein(normA, normB) / max(len)` → [0.0, 1.0] |
-| `findCrossSourceMatch(candidate, leads, threshold=0.85)` | Retorna el lead existente con mayor similitud de nombre sobre el threshold; excluye self-match (mismo source + external_id); tiebreak por prospect_score |
+| `findCrossSourceMatch(candidate, leads, threshold=0.85, geoRadiusMeters=500)` | Retorna el lead cross-source con mayor similitud de nombre sobre el threshold; exige guardas por `source`, niche compatible, ciudad/dirección y GPS configurable; tiebreak por prospect_score |
 
-**Uso esperado (Fase 6+):** antes de insertar un `DiscoveryCandidate` de MINTUR u otra fuente, llamar `findCrossSourceMatch` contra leads existentes. Si retorna un lead → agregar corroborating source en lugar de crear lead nuevo.
+**Path activo de inserción (`src/cli/commands/discover-external.ts`):**
+- Antes de insertar un `DiscoveryCandidate`, `discover-external` llama `findCrossSourceMatch()` sobre `loadAllLeads()`.
+- El path online usa `config/discovery.yaml → deduplication.name_threshold_online` (`0.85`) y `geo_radius_meters` (`500`).
+- Si hay match, `src/storage/external-leads.ts` usa el RPC `merge_corroborating_source()` para hacer en una sola transacción:
+  - upsert en `lead_source_references`;
+  - append de `corroborating_sources`;
+  - reconciliación de `canonical_fields.phone|website|email`;
+  - recálculo de `data_confidence_score` y `contact_reliability_score`.
+- Si no hay match, el candidato entra por `insertExternalLead()` como lead nuevo.
+
+**Path retroactivo (`blindspot reconcile-retroactive`):**
+- Carga `loadAllLeads()` y arma un plan keeper→secondary con `config/discovery.yaml → deduplication.name_threshold_retroactive` (`0.90`).
+- Reporta cantidad de grupos candidatos, pares por fuente y conflictos `phone/email` antes de aplicar.
+- En `--apply`, `src/storage/reconciliation.ts` absorbe el secundario en el keeper, mueve `lead_source_references` + `lead_field_evidences`, recalcula `canonical_fields`, `data_confidence_score` y `contact_reliability_score`, y recién después elimina el lead secundario.
+- Resultado real sobre la DB local 2026-05-18: `0` grupos candidatos y `0` leads absorbidos con threshold `0.90`; el path quedó implementado y verificado end-to-end como no-op explícito.
 
 ### Fuentes planificadas
 
 | Fuente | Tipo | Confianza base | Estado |
 |--------|------|---------------|--------|
 | Google Places | API oficial | 0.90 | ✅ Activo |
-| MINTUR | Dataset oficial UY, actualización diaria, incluye email + GPS | 0.80 | ✅ Activo |
+| MINTUR | Dataset oficial UY, actualización diaria, incluye phone/email/web cuando existen; **sin GPS confiable ni RUT público** | 0.80 | ✅ Activo |
 | PedidosYa | Marketplace — confirma delivery activo, Playwright-based, MAX_PAGES=5 | 0.70 | ✅ Activo |
 | IMM Habilitaciones | CSV oficial Montevideo | 0.75 | Planificado |
 | Yelu | Directorio privado UY, 31k+ listings — scraping HTML, sin GPS ni email en listado | 0.65 | ✅ Activo |
