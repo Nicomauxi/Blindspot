@@ -290,24 +290,31 @@ program
   .command("discover-external")
   .description("Fetch leads from an external source (yelu, pedidosya) and persist to DB")
   .requiredOption("--source <string>", "Source provider: yelu|pedidosya")
-  .requiredOption("--location <string>", "Location to search (e.g. 'Montevideo')")
-  .requiredOption("--niche <string>", "Niche to search (restaurant|gym|hairdresser|car_dealer|other)")
-  .option("--limit <number>", "Max candidates to process (useful for smoke tests)")
+  .option("--location <string>", "Location to search (e.g. 'Montevideo')", "Montevideo")
+  .option("--niche <string>", "Niche to search (restaurant|gym|hairdresser|car_dealer|other)", "other")
+  .option("--location-list <locations...>", "Space-separated list of locations for batch mode")
+  .option("--location-list-file <file>", "YAML file with locations list (e.g. config/locations.yaml)")
+  .option("--limit <number>", "Max candidates to process per location (useful for smoke tests)")
   .option("--dry-run", "Simulate without writing to DB", false)
   .action(async (opts: {
     source: string;
     location: string;
     niche: string;
+    locationList?: string[];
+    locationListFile?: string;
     limit?: string;
     dryRun: boolean;
   }) => {
-    await discoverExternalCommand({
+    const discoverOpts: Parameters<typeof discoverExternalCommand>[0] = {
       source: opts.source,
       location: opts.location,
       niche: opts.niche,
-      ...(opts.limit !== undefined ? { limit: Number(opts.limit) } : {}),
       dryRun: opts.dryRun,
-    });
+    };
+    if (opts.locationList) discoverOpts.locationList = opts.locationList;
+    if (opts.locationListFile) discoverOpts.locationListFile = opts.locationListFile;
+    if (opts.limit !== undefined) discoverOpts.limit = Number(opts.limit);
+    await discoverExternalCommand(discoverOpts);
   });
 
 program
