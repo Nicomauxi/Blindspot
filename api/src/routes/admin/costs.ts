@@ -2,103 +2,376 @@ import type { FastifyInstance } from "fastify";
 import { getDb } from "../../db/client.js";
 import { requireAdmin } from "../../auth/middleware.js";
 
-export async function costsRoutes(app: FastifyInstance): Promise<void> {
-  // GET /admin/costs/overview — current budget status + LLM usage totals
-  app.get("/admin/costs/overview", { preHandler: requireAdmin }, async (_request, reply) => {
-    const db = getDb();
+type CostQuery = { month?: string };
 
-    const [configRes, llmRes] = await Promise.all([
+type CostLead = {
+  id: string;
+  name: string | null;
+  source: string | null;
+  first_seen_run_id: string | null;
+  created_at: string;
+  prospect_score: number | null;
+};
+
+type CostRun = {
+  id: string;
+  niche: string | null;
+  location: string | null;
+  stats: Record<string, unknown> | null;
+  finished_at: string | null;
+};
+
+type LlmUsageRow = {
+  provider: string;
+  lead_id: string | null;
+  total_tokens: number | null;
+  cost_usd: number;
+  created_at: string;
+};
+
+const HOT_LEAD_THRESHOLD = 55;
+const MONTH_RE = /^\d{4}-\d{2}$/;
+
+function roundMoney(value: number): number {
+  return Math.round(value * 1_000_000) / 1_000_000;
+}
+
+function asNumber(value: unknown): number {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim() !== "") {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+  return 0;
+}
+
+function parseMonthRange(rawMonth: string | undefined, now = new Date()) {
+  if (rawMonth && MONTH_RE.test(rawMonth)) {
+    const [year, month] = rawMonth.split("-").map(Number);
+    const start = new Date(Date.UTC(year, month - 1, 1));
+    const end = new Date(Date.UTC(year, month, 1));
+    return { month: rawMonth, start, end };
+  }
+
+  const year = now.getUTCFullYear();
+  const month = now.getUTCMonth();
+  const start = new Date(Date.UTC(year, month, 1));
+  const end = new Date(Date.UTC(year, month + 1, 1));
+  return {
+    month: `${year}-${String(month + 1).padStart(2, "0")}`,
+    start,
+    end,
+  };
+}
+
+function isWithinRange(value: string | null | undefined, start: Date, end: Date): boolean {
+  if (!value) return false;
+  const ts = new Date(value);
+  return ts >= start && ts < end;
+}
+
+function toMonthKey(value: string | null | undefined): string | null {
+  return value ? value.slice(0, 7) : null;
+}
+
+function buildMonthKeys(now = new Date(), count = 12): string[] {
+  const keys: string[] = [];
+  const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+  for (let idx = 0; idx < count; idx += 1) {
+    const cursor = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() - idx, 1));
+    keys.push(`${cursor.getUTCFullYear()}-${String(cursor.getUTCMonth() + 1).padStart(2, "0")}`);
+  }
+  return keys;
+}
+
+export async function costsRoutes(app: FastifyInstance): Promise<void> {
+  app.get("/admin/costs/overview", { preHandler: requireAdmin }, async (request, reply) => {
+    const db = getDb();
+    const { month, start, end } = parseMonthRange((request.query as CostQuery | undefined)?.month);
+
+    const [configRes, llmRes, runsRes, leadsRes] = await Promise.all([
       db
         .from("pipeline_config")
-        .select("google_places_budget_total, google_places_budget_spent, google_places_alert_threshold")
+        .select(
+          "google_places_budget_total, google_places_budget_spent, google_places_alert_threshold, infra_monthly_cost_usd, backup_monthly_cost_usd"
+        )
         .limit(1)
         .single(),
       db
         .from("llm_usage_log")
-        .select("cost_usd, created_at")
-        .order("created_at", { ascending: false }),
+        .select("provider, lead_id, total_tokens, cost_usd, created_at")
+        .order("created_at", { ascending: false })
+        .limit(5000),
+      db
+        .from("runs")
+        .select("id, niche, location, status, stats, finished_at")
+        .eq("status", "completed")
+        .order("finished_at", { ascending: false })
+        .limit(200),
+      db
+        .from("leads")
+        .select("id, name, source, first_seen_run_id, created_at, prospect_score")
+        .order("created_at", { ascending: false })
+        .limit(5000),
     ]);
 
     const config = configRes.data as {
       google_places_budget_total: number;
       google_places_budget_spent: number;
       google_places_alert_threshold: number;
+      infra_monthly_cost_usd: number;
+      backup_monthly_cost_usd: number;
     } | null;
 
-    const llmRows = llmRes.data ?? [];
-    const llm_cost_total_usd = llmRows.reduce((sum, r) => sum + ((r as { cost_usd: number }).cost_usd ?? 0), 0);
+    const llmRows = (llmRes.data ?? []) as LlmUsageRow[];
+    const runs = (runsRes.data ?? []) as CostRun[];
+    const leads = (leadsRes.data ?? []) as CostLead[];
+
+    const llmRowsInMonth = llmRows.filter((row) => isWithinRange(row.created_at, start, end));
+    const runsInMonth = runs.filter((run) => isWithinRange(run.finished_at, start, end));
+    const leadsInMonth = leads.filter((lead) => isWithinRange(lead.created_at, start, end));
+
+    const llmByProvider = new Map<
+      string,
+      { source: string; cost_usd: number; calls: number; tokens: number; lead_ids: Set<string> }
+    >();
+    const llmCostByLead = new Map<string, number>();
+    let llmCostUsd = 0;
+
+    for (const row of llmRowsInMonth) {
+      const provider = row.provider || "unknown";
+      const entry = llmByProvider.get(provider) ?? {
+        source: provider,
+        cost_usd: 0,
+        calls: 0,
+        tokens: 0,
+        lead_ids: new Set<string>(),
+      };
+      const rowCost = asNumber(row.cost_usd);
+      entry.cost_usd += rowCost;
+      entry.calls += 1;
+      entry.tokens += asNumber(row.total_tokens);
+      if (row.lead_id) {
+        entry.lead_ids.add(row.lead_id);
+        llmCostByLead.set(row.lead_id, (llmCostByLead.get(row.lead_id) ?? 0) + rowCost);
+      }
+      llmByProvider.set(provider, entry);
+      llmCostUsd += rowCost;
+    }
+
+    const runCostById = new Map<string, number>();
+    let googlePlacesCostUsd = 0;
+    let googlePlacesRequestCount = 0;
+
+    for (const run of runsInMonth) {
+      const stats = run.stats ?? {};
+      const runCost = asNumber(stats["estimated_cost_usd"]);
+      googlePlacesCostUsd += runCost;
+      googlePlacesRequestCount += asNumber(stats["places_requests"]);
+      runCostById.set(run.id, runCost);
+    }
+
+    const sourceLeadCounts = new Map<string, number>();
+    const googlePlacesLeadCountsByRun = new Map<string, number>();
+    const leadsById = new Map<string, CostLead>();
+    let hotLeadsCount = 0;
+
+    for (const lead of leadsInMonth) {
+      leadsById.set(lead.id, lead);
+      const source = lead.source ?? "unknown";
+      sourceLeadCounts.set(source, (sourceLeadCounts.get(source) ?? 0) + 1);
+      if (source === "google_places" && lead.first_seen_run_id && runCostById.has(lead.first_seen_run_id)) {
+        googlePlacesLeadCountsByRun.set(
+          lead.first_seen_run_id,
+          (googlePlacesLeadCountsByRun.get(lead.first_seen_run_id) ?? 0) + 1
+        );
+      }
+      if (asNumber(lead.prospect_score) >= HOT_LEAD_THRESHOLD) {
+        hotLeadsCount += 1;
+      }
+    }
+
+    const gpShareByLead = new Map<string, number>();
+    for (const lead of leadsInMonth) {
+      if (lead.source !== "google_places" || !lead.first_seen_run_id) continue;
+      const runCost = runCostById.get(lead.first_seen_run_id);
+      const runLeadCount = googlePlacesLeadCountsByRun.get(lead.first_seen_run_id) ?? 0;
+      if (!runCost || runLeadCount <= 0) continue;
+      gpShareByLead.set(lead.id, runCost / runLeadCount);
+    }
+
+    const topLeads = Array.from(new Set([...llmCostByLead.keys(), ...gpShareByLead.keys()]))
+      .map((leadId) => {
+        const lead = leadsById.get(leadId);
+        const llmCost = llmCostByLead.get(leadId) ?? 0;
+        const gpCostShare = gpShareByLead.get(leadId) ?? 0;
+        return {
+          lead_id: leadId,
+          name: lead?.name ?? "Lead sin nombre",
+          source: lead?.source ?? null,
+          llm_cost_usd: roundMoney(llmCost),
+          gp_cost_share_usd: roundMoney(gpCostShare),
+          total_cost_usd: roundMoney(llmCost + gpCostShare),
+        };
+      })
+      .sort((left, right) => right.total_cost_usd - left.total_cost_usd)
+      .slice(0, 20);
 
     const budget_remaining = config
       ? config.google_places_budget_total - config.google_places_budget_spent
       : null;
+    const infraUsd = config ? asNumber(config.infra_monthly_cost_usd) : 0;
+    const backupUsd = config ? asNumber(config.backup_monthly_cost_usd) : 0;
+    const variableCostUsd = llmCostUsd + googlePlacesCostUsd;
+    const totalUsd = variableCostUsd + infraUsd + backupUsd;
+
+    const perSource = [
+      ...Array.from(sourceLeadCounts.entries()).map(([source, leads_count]) => ({
+        source,
+        cost_usd: roundMoney(source === "google_places" ? googlePlacesCostUsd : 0),
+        leads_count,
+      })),
+      ...Array.from(llmByProvider.values()).map((entry) => ({
+        source: entry.source,
+        cost_usd: roundMoney(entry.cost_usd),
+        leads_count: entry.lead_ids.size,
+        calls: entry.calls,
+        tokens: entry.tokens,
+      })),
+      { source: "infra", cost_usd: roundMoney(infraUsd), leads_count: 0 },
+      { source: "backup", cost_usd: roundMoney(backupUsd), leads_count: 0 },
+    ].sort((left, right) => {
+      if (right.cost_usd !== left.cost_usd) return right.cost_usd - left.cost_usd;
+      return left.source.localeCompare(right.source);
+    });
 
     return reply.status(200).send({
       data: {
+        month,
+        totals: {
+          llm_usd: roundMoney(llmCostUsd),
+          google_places_usd: roundMoney(googlePlacesCostUsd),
+          infra_usd: roundMoney(infraUsd),
+          backup_usd: roundMoney(backupUsd),
+          total_usd: roundMoney(totalUsd),
+        },
         google_places: config
           ? {
               budget_total: config.google_places_budget_total,
               budget_spent: config.google_places_budget_spent,
-              budget_remaining,
+              budget_remaining: roundMoney(budget_remaining ?? 0),
               alert_threshold: config.google_places_alert_threshold,
+              request_count: googlePlacesRequestCount,
               over_alert: budget_remaining != null && budget_remaining < config.google_places_alert_threshold,
             }
           : null,
         llm: {
-          total_calls: llmRows.length,
-          total_cost_usd: Math.round(llm_cost_total_usd * 1_000_000) / 1_000_000,
+          total_calls: llmRowsInMonth.length,
+          total_cost_usd: roundMoney(llmCostUsd),
+          by_provider: Array.from(llmByProvider.values())
+            .map((entry) => ({
+              provider: entry.source,
+              calls: entry.calls,
+              tokens: entry.tokens,
+              leads_count: entry.lead_ids.size,
+              cost_usd: roundMoney(entry.cost_usd),
+            }))
+            .sort((left, right) => right.cost_usd - left.cost_usd),
         },
+        infra: {
+          infra_monthly_cost_usd: roundMoney(infraUsd),
+          backup_monthly_cost_usd: roundMoney(backupUsd),
+          total_monthly_cost_usd: roundMoney(infraUsd + backupUsd),
+        },
+        per_lead: {
+          hot_leads_count: hotLeadsCount,
+          total_cost_usd: roundMoney(variableCostUsd),
+          cost_per_hot_usd: hotLeadsCount > 0 ? roundMoney(variableCostUsd / hotLeadsCount) : null,
+          top_leads: topLeads,
+        },
+        per_source: perSource,
         ts: new Date().toISOString(),
       },
     });
   });
 
-  // GET /admin/costs/history — LLM usage by month + Google Places by run
   app.get("/admin/costs/history", { preHandler: requireAdmin }, async (_request, reply) => {
     const db = getDb();
 
-    const [llmRes, runsRes] = await Promise.all([
+    const [configRes, llmRes, runsRes, leadsRes] = await Promise.all([
+      db
+        .from("pipeline_config")
+        .select("infra_monthly_cost_usd, backup_monthly_cost_usd")
+        .limit(1)
+        .single(),
       db
         .from("llm_usage_log")
-        .select("provider, model, operation, cost_usd, total_tokens, created_at")
+        .select("provider, lead_id, total_tokens, cost_usd, created_at")
         .order("created_at", { ascending: false })
-        .limit(200),
+        .limit(5000),
       db
         .from("runs")
         .select("id, niche, location, status, stats, finished_at")
         .eq("status", "completed")
         .order("finished_at", { ascending: false })
-        .limit(50),
+        .limit(500),
+      db
+        .from("leads")
+        .select("id, name, source, first_seen_run_id, created_at, prospect_score")
+        .order("created_at", { ascending: false })
+        .limit(5000),
     ]);
 
-    // Group LLM by month
-    const byMonth: Record<string, { cost_usd: number; calls: number; tokens: number }> = {};
-    for (const row of llmRes.data ?? []) {
-      const r = row as { cost_usd: number; total_tokens: number; created_at: string };
-      const month = r.created_at.slice(0, 7);
-      if (!byMonth[month]) byMonth[month] = { cost_usd: 0, calls: 0, tokens: 0 };
-      byMonth[month].cost_usd += r.cost_usd ?? 0;
-      byMonth[month].calls++;
-      byMonth[month].tokens += r.total_tokens ?? 0;
+    const config = configRes.data as {
+      infra_monthly_cost_usd: number;
+      backup_monthly_cost_usd: number;
+    } | null;
+    const llmRows = (llmRes.data ?? []) as LlmUsageRow[];
+    const runs = (runsRes.data ?? []) as CostRun[];
+    const leads = (leadsRes.data ?? []) as CostLead[];
+    const monthKeys = buildMonthKeys(new Date(), 12);
+    const trackedMonths = new Set(monthKeys);
+
+    const llmByMonth = new Map<string, number>();
+    for (const row of llmRows) {
+      const month = toMonthKey(row.created_at);
+      if (!month || !trackedMonths.has(month)) continue;
+      llmByMonth.set(month, (llmByMonth.get(month) ?? 0) + asNumber(row.cost_usd));
     }
 
-    const gp_runs = (runsRes.data ?? []).map((r) => {
-      const row = r as { id: string; niche: string; location: string; stats: Record<string, unknown> | null; finished_at: string };
+    const gpByMonth = new Map<string, number>();
+    for (const run of runs) {
+      const month = toMonthKey(run.finished_at);
+      if (!month || !trackedMonths.has(month)) continue;
+      gpByMonth.set(month, (gpByMonth.get(month) ?? 0) + asNumber(run.stats?.["estimated_cost_usd"]));
+    }
+
+    const hotLeadsByMonth = new Map<string, number>();
+    for (const lead of leads) {
+      const month = toMonthKey(lead.created_at);
+      if (!month || !trackedMonths.has(month) || asNumber(lead.prospect_score) < HOT_LEAD_THRESHOLD) continue;
+      hotLeadsByMonth.set(month, (hotLeadsByMonth.get(month) ?? 0) + 1);
+    }
+
+    const infraUsd = config ? asNumber(config.infra_monthly_cost_usd) : 0;
+    const backupUsd = config ? asNumber(config.backup_monthly_cost_usd) : 0;
+    const monthly = monthKeys.map((month) => {
+      const googlePlacesUsd = roundMoney(gpByMonth.get(month) ?? 0);
+      const llmUsd = roundMoney(llmByMonth.get(month) ?? 0);
       return {
-        id: row.id,
-        niche: row.niche,
-        location: row.location,
-        cost_usd: (row.stats?.["estimated_cost_usd"] as number | undefined) ?? 0,
-        places_requests: (row.stats?.["places_requests"] as number | undefined) ?? 0,
-        finished_at: row.finished_at,
+        month,
+        google_places_usd: googlePlacesUsd,
+        llm_usd: llmUsd,
+        infra_usd: roundMoney(infraUsd),
+        backup_usd: roundMoney(backupUsd),
+        total_usd: roundMoney(googlePlacesUsd + llmUsd + infraUsd + backupUsd),
+        hot_leads: hotLeadsByMonth.get(month) ?? 0,
       };
     });
 
     return reply.status(200).send({
       data: {
-        llm_by_month: Object.entries(byMonth)
-          .map(([month, s]) => ({ month, ...s }))
-          .sort((a, b) => b.month.localeCompare(a.month)),
-        google_places_runs: gp_runs,
+        monthly,
       },
     });
   });
