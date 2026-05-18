@@ -7,6 +7,15 @@ import { authRoutes } from "./auth/routes.js";
 import { healthRoutes } from "./routes/health.js";
 import { leadsRoutes } from "./routes/leads.js";
 import { outreachRoutes } from "./routes/outreach.js";
+import { pipelineRoutes } from "./routes/pipeline.js";
+import { discoveryRoutes } from "./routes/discovery.js";
+import { campaignsRoutes } from "./routes/campaigns.js";
+import { usersRoutes } from "./routes/users.js";
+import { statsRoutes } from "./routes/stats.js";
+import { auditLogRoutes } from "./routes/admin/audit-log.js";
+import { systemRoutes } from "./routes/admin/system.js";
+import { costsRoutes } from "./routes/admin/costs.js";
+import { performanceRoutes } from "./routes/admin/performance.js";
 
 const PORT = Number(process.env["PORT"] ?? 3001);
 const CORS_ORIGIN = process.env["CORS_ORIGIN"] ?? "http://localhost:3000";
@@ -26,6 +35,15 @@ export async function buildServer() {
   await app.register(healthRoutes, { prefix: "/api/v1" });
   await app.register(leadsRoutes, { prefix: "/api/v1" });
   await app.register(outreachRoutes, { prefix: "/api/v1" });
+  await app.register(pipelineRoutes, { prefix: "/api/v1" });
+  await app.register(discoveryRoutes, { prefix: "/api/v1" });
+  await app.register(campaignsRoutes, { prefix: "/api/v1" });
+  await app.register(usersRoutes, { prefix: "/api/v1" });
+  await app.register(statsRoutes, { prefix: "/api/v1" });
+  await app.register(auditLogRoutes, { prefix: "/api/v1" });
+  await app.register(systemRoutes, { prefix: "/api/v1" });
+  await app.register(costsRoutes, { prefix: "/api/v1" });
+  await app.register(performanceRoutes, { prefix: "/api/v1" });
 
   return app;
 }
