@@ -15,7 +15,7 @@ function withSubScores(scores: { web_nuevo?: number; rediseno?: number; marketin
   return {
     score_breakdown: {
       computed_at: "2026-01-01T00:00:00Z",
-      config_version: 1,
+      config_version: 2,
       business_quality: { total: 0, rules: [] },
       digital_gap: { total: 0, rules: [] },
       systems_gap: { total: 0, rules: [] },
@@ -26,7 +26,26 @@ function withSubScores(scores: { web_nuevo?: number; rediseno?: number; marketin
         marketing: scores.marketing ?? 0,
         software: scores.software ?? 0,
         catalogo: scores.catalogo ?? 0,
+        contacto_directo: 0,
         primary_offer: "none" as const,
+      },
+      primary_offer: "none" as const,
+      source_quality_bonus: 0,
+      contact_tier: "X" as const,
+      pitch_hook: "",
+      urgency_signal: "low" as const,
+      gap_depth: 0,
+      commercial_breadth: 0,
+      business_quality_pts: 0,
+      accessibility_factor: 0,
+      timing_factor: 0,
+      urgency_bonus: 0,
+      inferred_state_summary: {
+        has_delivery: false,
+        has_pos: false,
+        has_reservations: false,
+        has_ecommerce: false,
+        digitalization_level: null,
       },
     },
   };
@@ -46,6 +65,19 @@ function withInferredState(state: Partial<Record<string, boolean>>): Partial<Lea
       inferred_state,
     },
   } as unknown as Partial<Lead>;
+}
+
+function withTopLevelInferredState(state: Partial<Record<string, boolean>>): Partial<Lead> {
+  const fields = ["has_delivery", "has_reservations", "has_online_catalog", "has_ecommerce", "has_pos", "has_chat_support"];
+  const inferred_state: Record<string, object | string> = {};
+  for (const f of fields) {
+    inferred_state[f] = { value: state[f] ?? false, confidence: 0.9, via: [] };
+  }
+  inferred_state["digitalization_level"] = "none";
+  inferred_state["computed_at"] = "2026-01-01T00:00:00Z";
+  return {
+    inferred_state: inferred_state as Lead["inferred_state"],
+  };
 }
 
 // ─── agencia_web ────────────────────────────────────────────────────────────
@@ -89,6 +121,15 @@ describe("software_pos", () => {
     const s = computeAllBuyerScores(l).find((x) => x.buyer_type === "software_pos")!;
     // base = 60*0.50 = 30; penalty = -50; result = max(0, -20) = 0
     expect(s.score).toBe(0);
+  });
+
+  it("reads inferred_state from top-level lead column", () => {
+    const l = lead({
+      ...withSubScores({ software: 40, catalogo: 20 }),
+      ...withTopLevelInferredState({ has_delivery: true }),
+    });
+    const s = computeAllBuyerScores(l).find((x) => x.buyer_type === "software_pos")!;
+    expect(s.score).toBe(44);
   });
 });
 
@@ -171,6 +212,91 @@ describe("whatsapp_business", () => {
     const s = computeAllBuyerScores(l).find((x) => x.buyer_type === "whatsapp_business")!;
     expect(s.score).toBe(0);
     expect(s.breakdown.applied_modifiers[0]).toMatch(/blocked:tag/);
+  });
+});
+
+// ─── delivery_propio commission_estimate ─────────────────────────────────────
+
+describe("delivery_propio commission_estimate", () => {
+  function pedidosYaLead(overrides: Partial<Lead> = {}): Lead {
+    return lead({
+      source: "pedidosya" as const,
+      review_count: 50,
+      niche: "restaurant",
+      ...withSubScores({ software: 50, catalogo: 30 }),
+      ...withInferredState({ has_delivery: true }),
+      ...overrides,
+    });
+  }
+
+  it("attaches commission_estimate when source=pedidosya and deliverySystemCostUyu provided", () => {
+    const l = pedidosYaLead();
+    const scores = computeAllBuyerScores(l, { deliverySystemCostUyu: 3000 });
+    const s = scores.find((x) => x.buyer_type === "delivery_propio")!;
+    expect(s.breakdown.commission_estimate).toBeDefined();
+    const ce = s.breakdown.commission_estimate!;
+    // monthly_orders_est = 50 * 2 = 100
+    expect(ce.monthly_orders_est).toBe(100);
+    // avg_ticket_uyu for restaurant = 350
+    expect(ce.avg_ticket_uyu).toBe(350);
+    // commission = 100 * 350 * 0.30 = 10500
+    expect(ce.commission_monthly_uyu).toBe(10500);
+    expect(ce.system_cost_monthly_uyu).toBe(3000);
+    expect(ce.monthly_savings_est).toBe(7500);
+  });
+
+  it("uses corroborating_sources pedidosya if primary source is not pedidosya", () => {
+    const l = pedidosYaLead({
+      source: "yelu" as const,
+      corroborating_sources: [{ source: "pedidosya" as const, external_id: "abc", confidence: 0.9 }],
+    });
+    const scores = computeAllBuyerScores(l, { deliverySystemCostUyu: 3000 });
+    const s = scores.find((x) => x.buyer_type === "delivery_propio")!;
+    expect(s.breakdown.commission_estimate).toBeDefined();
+  });
+
+  it("uses default avg_ticket when niche not in map", () => {
+    const l = pedidosYaLead({ niche: "auto_repair" });
+    const scores = computeAllBuyerScores(l, { deliverySystemCostUyu: 2000 });
+    const s = scores.find((x) => x.buyer_type === "delivery_propio")!;
+    const ce = s.breakdown.commission_estimate!;
+    // default avg_ticket = 300
+    expect(ce.avg_ticket_uyu).toBe(300);
+    expect(ce.commission_monthly_uyu).toBe(100 * 300 * 0.3); // 9000
+  });
+
+  it("no commission_estimate when deliverySystemCostUyu is not provided", () => {
+    const l = pedidosYaLead();
+    const scores = computeAllBuyerScores(l);
+    const s = scores.find((x) => x.buyer_type === "delivery_propio")!;
+    expect(s.breakdown.commission_estimate).toBeUndefined();
+  });
+
+  it("no commission_estimate when lead is not from pedidosya", () => {
+    const l = pedidosYaLead({ source: "yelu" as const, corroborating_sources: [] });
+    const scores = computeAllBuyerScores(l, { deliverySystemCostUyu: 3000 });
+    const s = scores.find((x) => x.buyer_type === "delivery_propio")!;
+    expect(s.breakdown.commission_estimate).toBeUndefined();
+  });
+
+  it("no commission_estimate when delivery_propio score is 0 (not eligible)", () => {
+    const l = pedidosYaLead({
+      ...withInferredState({ has_delivery: false }),
+    } as Partial<Lead>);
+    const scores = computeAllBuyerScores(l, { deliverySystemCostUyu: 3000 });
+    const s = scores.find((x) => x.buyer_type === "delivery_propio")!;
+    expect(s.score).toBe(0);
+    expect(s.breakdown.commission_estimate).toBeUndefined();
+  });
+
+  it("review_count=null defaults to 0 orders", () => {
+    const l = pedidosYaLead({ review_count: null });
+    const scores = computeAllBuyerScores(l, { deliverySystemCostUyu: 3000 });
+    const s = scores.find((x) => x.buyer_type === "delivery_propio")!;
+    const ce = s.breakdown.commission_estimate!;
+    expect(ce.monthly_orders_est).toBe(0);
+    expect(ce.commission_monthly_uyu).toBe(0);
+    expect(ce.monthly_savings_est).toBe(-3000);
   });
 });
 

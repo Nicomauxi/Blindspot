@@ -25,14 +25,92 @@ export interface MutualExclusions {
   digital_gap: string[][];
 }
 
-export interface ReviewCountMultiplierRule {
+export interface RangePointsRule {
+  min: number;
   max: number | null;
-  multiplier: number;
+  points: number;
 }
 
-export interface RatingBonusConfig {
-  threshold: number;
-  bonus: number;
+export interface SourceQualityBonusConfig {
+  google_places?: number;
+  osm?: number;
+  yelu?: number;
+  pedidosya?: number;
+  mintur?: number;
+  [key: string]: number | undefined;
+}
+
+export interface CommercialBreadthConfig {
+  secondary_threshold: number;
+  secondary_bonus: number;
+  tertiary_threshold: number;
+  tertiary_bonus: number;
+}
+
+export interface BusinessQualityPointsConfig {
+  rating_tiers: RangePointsRule[];
+  review_tiers: RangePointsRule[];
+  data_confidence_multiplier: number;
+  contact_reliability_multiplier: number;
+  corroboration_bonus: number;
+  cap: number;
+}
+
+export interface AccessibilityConfig {
+  tier_base: Record<ContactTier, number>;
+  reliability_adjustment: {
+    base: number;
+    weight: number;
+  };
+}
+
+export interface TimingConfig {
+  urgency_high: number;
+  new_business_window: number;
+  competitive_pressure_isolated: number;
+  franchise_penalty: number;
+  cap: number;
+  floor: number;
+}
+
+export interface UrgencyBonusConfig {
+  high: number;
+  medium: number;
+  low: number;
+}
+
+export interface CommercialScoreConfig {
+  gap_depth_cap: number;
+  source_quality_bonus: SourceQualityBonusConfig;
+  commercial_breadth: CommercialBreadthConfig;
+  business_quality: BusinessQualityPointsConfig;
+  accessibility: AccessibilityConfig;
+  timing: TimingConfig;
+  urgency_bonus: UrgencyBonusConfig;
+}
+
+export interface ThresholdsConfig {
+  hot: number;
+  pitcheable: number;
+  pool: number;
+}
+
+export interface PitchHookOverrideWhen {
+  has_delivery?: boolean;
+  has_pos?: boolean;
+  has_reservations?: boolean;
+  has_ecommerce?: boolean;
+  niche?: string;
+}
+
+export interface PitchHookOverride {
+  when: PitchHookOverrideWhen;
+  text: string;
+}
+
+export interface PitchHookConfig {
+  default: string;
+  overrides?: PitchHookOverride[];
 }
 
 export interface ScoringConfig {
@@ -43,9 +121,10 @@ export interface ScoringConfig {
   mutual_exclusions: MutualExclusions;
   cap: number;
   prospect_formula: string;
+  commercial_score: CommercialScoreConfig;
+  thresholds: ThresholdsConfig;
+  pitch_hooks: Record<Exclude<PrimaryOffer, "none">, PitchHookConfig>;
   buyer_types?: BuyerTypesConfig;
-  review_count_multiplier?: ReviewCountMultiplierRule[];
-  rating_bonus?: RatingBonusConfig;
 }
 
 export interface EvaluatedRule {
@@ -60,7 +139,10 @@ export type PrimaryOffer =
   | "marketing"
   | "software"
   | "catalogo"
+  | "contacto_directo"
   | "none";
+
+export type ContactTier = "A" | "B" | "C" | "D" | "X";
 
 export interface SubScores {
   web_nuevo: number;
@@ -68,10 +150,19 @@ export interface SubScores {
   marketing: number;
   software: number;
   catalogo: number;
+  contacto_directo: number;
   primary_offer: PrimaryOffer;
 }
 
 export type UrgencySignal = "high" | "medium" | "low";
+
+export interface InferredStateSummary {
+  has_delivery: boolean;
+  has_pos: boolean;
+  has_reservations: boolean;
+  has_ecommerce: boolean;
+  digitalization_level: string | null;
+}
 
 export interface ScoreBreakdown {
   computed_at: string;
@@ -81,7 +172,18 @@ export interface ScoreBreakdown {
   systems_gap: { total: number; rules: EvaluatedRule[] };
   prospect: { formula: string; total: number };
   sub_scores: SubScores;
-  urgency_signal?: UrgencySignal;
+  primary_offer: PrimaryOffer;
+  source_quality_bonus: number;
+  contact_tier: ContactTier;
+  pitch_hook: string;
+  urgency_signal: UrgencySignal;
+  gap_depth: number;
+  commercial_breadth: number;
+  business_quality_pts: number;
+  accessibility_factor: number;
+  timing_factor: number;
+  urgency_bonus: number;
+  inferred_state_summary: InferredStateSummary;
 }
 
 export type BuyerTypeSubScoreKey =
@@ -89,7 +191,8 @@ export type BuyerTypeSubScoreKey =
   | "rediseno"
   | "marketing"
   | "software"
-  | "catalogo";
+  | "catalogo"
+  | "contacto_directo";
 
 export interface BuyerTypeConfig {
   formula: Record<string, number>;
@@ -102,6 +205,14 @@ export interface BuyerTypeConfig {
 
 export type BuyerTypesConfig = Record<string, BuyerTypeConfig>;
 
+export interface CommissionEstimate {
+  monthly_orders_est: number;
+  avg_ticket_uyu: number;
+  commission_monthly_uyu: number;
+  system_cost_monthly_uyu: number;
+  monthly_savings_est: number;
+}
+
 export interface BuyerTypeScore {
   buyer_type: string;
   score: number;
@@ -109,6 +220,7 @@ export interface BuyerTypeScore {
     base: number;
     adjustments: number;
     applied_modifiers: string[];
+    commission_estimate?: CommissionEstimate;
   };
 }
 
@@ -117,6 +229,8 @@ export interface ScoreResult {
   digital_gap_score: number;
   systems_gap_score: number;
   prospect_score: number;
+  scoring_version: number;
+  contact_ready: boolean;
   score_breakdown: ScoreBreakdown;
   systems_gap_breakdown: { total: number; rules: EvaluatedRule[] };
 }
