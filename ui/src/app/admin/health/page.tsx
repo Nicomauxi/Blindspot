@@ -1,22 +1,31 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { getHealth, getCostsOverview, type HealthStatus, type BudgetStatus } from "@/lib/api";
+import {
+  ApiError,
+  getCostsOverview,
+  getSystemStatus,
+  restartSystemProcess,
+  type AdminSystemStatus,
+  type BudgetStatus,
+} from "@/lib/api";
 import { useAuthStore } from "@/lib/auth-store";
 import { cn, formatDate, formatRelative } from "@/lib/utils";
 
 export default function HealthPage() {
   const token = useAuthStore((s) => s.token);
-  const [health, setHealth] = useState<HealthStatus | null>(null);
+  const [health, setHealth] = useState<AdminSystemStatus | null>(null);
   const [budget, setBudget] = useState<BudgetStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
+  const [restartTarget, setRestartTarget] = useState<"core" | "api" | null>(null);
+  const [restartMessage, setRestartMessage] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     if (!token) return;
     try {
-      const [data, costs] = await Promise.all([getHealth(token), getCostsOverview(token).catch(() => null)]);
-      setHealth(data);
+      const [data, costs] = await Promise.all([getSystemStatus(token), getCostsOverview(token).catch(() => null)]);
+      setHealth(data.data);
       setBudget(costs?.data.google_places ?? null);
       setLastRefresh(new Date());
       setError(null);
@@ -30,6 +39,48 @@ export default function HealthPage() {
     const interval = setInterval(() => void refresh(), 10000);
     return () => clearInterval(interval);
   }, [refresh]);
+
+  const handleRestart = useCallback(async (target: "core" | "api") => {
+    if (!token) return;
+    const confirmed = window.confirm(`Esto reinicia el proceso ${target}. ¿Continuar?`);
+    if (!confirmed) return;
+
+    setRestartTarget(target);
+    setRestartMessage(null);
+    setError(null);
+
+    try {
+      const result = await restartSystemProcess(token, target);
+      if (!result.ok) {
+        setError(result.error);
+        return;
+      }
+      setRestartMessage(`Restart de ${target} solicitado. Verificando estado...`);
+    } catch (err) {
+      if (target === "api" && !(err instanceof ApiError)) {
+        setRestartMessage("Restart de api iniciado. Esperando reconexión del servicio...");
+      } else if (err instanceof ApiError) {
+        setError(err.message);
+      } else {
+        setError(err instanceof Error ? err.message : `Error al reiniciar ${target}`);
+      }
+    }
+
+    window.setTimeout(() => {
+      void refresh();
+      setRestartTarget(null);
+    }, 10_000);
+  }, [refresh, token]);
+
+  function formatUptime(seconds: number | null) {
+    if (seconds === null) return "n/a";
+    if (seconds < 60) return `${seconds}s`;
+    const minutes = Math.floor(seconds / 60);
+    const rem = seconds % 60;
+    if (minutes < 60) return `${minutes}m ${rem}s`;
+    const hours = Math.floor(minutes / 60);
+    return `${hours}h ${minutes % 60}m`;
+  }
 
   return (
     <div className="max-w-2xl space-y-6">
@@ -54,6 +105,10 @@ export default function HealthPage() {
         <div className="bg-red-50 text-red-700 rounded px-4 py-3 text-sm">{error}</div>
       )}
 
+      {restartMessage && (
+        <div className="bg-sky-50 text-sky-700 rounded px-4 py-3 text-sm">{restartMessage}</div>
+      )}
+
       {health && (
         <>
           {/* DB + API status */}
@@ -62,14 +117,22 @@ export default function HealthPage() {
             <div className="grid grid-cols-2 gap-4">
               <StatusRow
                 label="API"
-                value="ok"
-                ok
+                value={health.processes.api.status}
+                ok={health.processes.api.running}
               />
               <StatusRow
                 label="Base de datos"
-                value={health.db}
-                ok={health.db === "connected"}
+                value={health.db.connected ? "connected" : "error"}
+                ok={health.db.connected}
               />
+            </div>
+            <div className="mt-3 text-sm text-gray-600 flex justify-between">
+              <span>Latencia DB</span>
+              <span className="font-mono">{health.db.latency_ms.toFixed(1)} ms</span>
+            </div>
+            <div className="mt-2 text-sm text-gray-600 flex justify-between">
+              <span>Uptime API</span>
+              <span className="font-mono">{formatUptime(health.processes.api.uptime_seconds)}</span>
             </div>
           </div>
 
@@ -79,10 +142,10 @@ export default function HealthPage() {
             <div className="space-y-2">
               <StatusRow
                 label="Cron habilitado"
-                value={health.cron.enabled ? "Sí" : "No"}
-                ok={health.cron.enabled}
+                value={health.pipeline.cron_enabled ? "Sí" : "No"}
+                ok={health.pipeline.cron_enabled}
               />
-              {health.cron.missed && (
+              {health.pipeline.missed && (
                 <div className="flex items-center gap-2 text-sm text-amber-700 bg-amber-50 rounded px-3 py-2">
                   <span>⚠️</span>
                   <span>Run perdido — el cron debería haber corrido y no lo hizo</span>
@@ -90,11 +153,51 @@ export default function HealthPage() {
               )}
               <div className="text-sm text-gray-600 flex justify-between">
                 <span>Próximo run</span>
-                <span className="font-mono">{formatDate(health.cron.scheduled_for)}</span>
+                <span className="font-mono">{formatDate(health.pipeline.next_run_at)}</span>
               </div>
               <div className="text-sm text-gray-600 flex justify-between">
                 <span>Último completado</span>
-                <span className="font-mono">{formatDate(health.cron.last_completed_at)}</span>
+                <span className="font-mono">{formatDate(health.pipeline.last_run_at)}</span>
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-lg shadow-sm border p-5">
+            <h2 className="text-sm font-semibold text-gray-700 mb-3">Procesos</h2>
+            <div className="space-y-3">
+              <div className="border rounded-lg px-3 py-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="text-sm font-medium text-gray-800">core</div>
+                    <div className="text-xs text-gray-500">
+                      pid: {health.processes.core.pid ?? "n/a"} · uptime: {formatUptime(health.processes.core.uptime_seconds)}
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => void handleRestart("core")}
+                    disabled={restartTarget !== null}
+                    className="text-sm rounded border px-3 py-1.5 text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                  >
+                    {restartTarget === "core" ? "Reiniciando..." : "Restart Core"}
+                  </button>
+                </div>
+              </div>
+              <div className="border rounded-lg px-3 py-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="text-sm font-medium text-gray-800">api</div>
+                    <div className="text-xs text-gray-500">
+                      pid: {health.processes.api.pid ?? "n/a"} · uptime: {formatUptime(health.processes.api.uptime_seconds)}
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => void handleRestart("api")}
+                    disabled={restartTarget !== null}
+                    className="text-sm rounded border px-3 py-1.5 text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                  >
+                    {restartTarget === "api" ? "Reiniciando..." : "Restart API"}
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -124,7 +227,7 @@ export default function HealthPage() {
                 </div>
                 {health.last_run.dashboard_stale && (
                   <div className="text-sm text-amber-600">
-                    ⚠️ Dashboard puede estar desactualizado (run interrumpido)
+                  ⚠️ Dashboard puede estar desactualizado (run interrumpido)
                   </div>
                 )}
               </div>

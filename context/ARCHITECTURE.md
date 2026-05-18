@@ -15,7 +15,7 @@
 - **HTTP:** undici ^7
 - **DB:** Supabase PostgreSQL — Docker local (`supabase_db_gap-radar`). Supabase cloud no está activo en la operación actual; cualquier acción cloud es futura/manual.
 - **Scraping:** Playwright
-- **Tests:** Vitest — 1022 passing, 7 skipped, 93 files
+- **Tests:** Vitest — 1025 passing, 7 skipped, 94 files
 - **Dev:** tsx/esm
 - **Config:** YAML en `config/` — fuente de verdad para parámetros de discovery y scoring
 - **Repo:** https://github.com/Nicomauxi/Blindspot
@@ -31,8 +31,10 @@
 
 - `ui/src/app/admin/costs/page.tsx` implementa el Cost Dashboard activo.
 - `ui/src/app/admin/performance/page.tsx` implementa el Performance Dashboard activo.
+- `ui/src/app/admin/health/page.tsx` ahora consume `GET /api/v1/admin/system/status` y expone restart controls para `core` y `api`.
 - Consume `GET /api/v1/admin/costs/overview` y `GET /api/v1/admin/costs/history`.
 - Consume `GET /api/v1/admin/performance/overview`, `GET /api/v1/admin/performance/errors` y `GET /api/v1/admin/performance/quality`.
+- Consume `GET /api/v1/admin/system/status` y `POST /api/v1/admin/system/restart-{core,api}`.
 - `overview` entrega el mes activo, totales (`llm`, `google_places`, `infra`, `backup`), estado del budget GP, desglose `per_source`, resumen `per_lead` y `llm.by_provider`.
 - `history` entrega `monthly[12]` con `google_places_usd`, `llm_usd`, `infra_usd`, `backup_usd`, `total_usd` y `hot_leads`.
 - El costo por lead usa solo gasto variable: suma `llm_usage_log.cost_usd` por `lead_id` más el share del costo Google Places del `first_seen_run_id`.
@@ -280,6 +282,14 @@ docker exec supabase_db_gap-radar psql -U postgres -d postgres -c "..."
 - `GET /api/v1/admin/performance/errors` expone errores recientes con filtros por `days`, `phase`, `source`, `error_type`, `recovered` y `limit`.
 - `GET /api/v1/admin/performance/quality` selecciona un `run_id` de referencia o la última ventana disponible, calcula cobertura de datos sobre leads actualizados y resume cambios significativos desde `digital_footprint.last_change_diff`.
 - `ui/src/app/admin/performance/page.tsx` renderiza overview, throughput, tasa de éxito por fuente, cobertura, errores recientes y tabla de leads con cambios significativos.
+
+### Admin system status y restart actions
+
+- `api/src/routes/admin/system.ts` amplía `GET /api/v1/admin/system/status` con `server`, `db`, `pipeline` y `processes` sin romper los bloques `last_run`/`cron` ya usados por la UI.
+- En `NODE_ENV='production'`, el status intenta leer `pm2 jlist` para informar `pid`, `status` y `uptime_seconds` de `core` y `api`; en dev usa fallback local y deja `core` como no disponible.
+- `POST /api/v1/admin/system/restart-core` y `POST /api/v1/admin/system/restart-api` quedaron activos con códigos tipados `restart_disabled_in_dev`, `pm2_not_found`, `process_not_registered`, `pm2_failed` y `timeout`.
+- Cada restart escribe `audit_log.action='system.restart'` antes del intento de `pm2 restart <target>`, con `before_status` del proceso y metadatos del actor.
+- `ui/src/app/admin/health/page.tsx` agrega confirmación, estado de reinicio en curso y polling de 10s para verificar el sistema tras cada restart solicitado.
 
 ### Columnas multi-source en leads (migración 009)
 

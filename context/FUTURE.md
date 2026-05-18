@@ -45,8 +45,7 @@
 18. **Discovery Control Center UI** — pantalla `/discovery` consume `/api/v1/discovery/jobs` y `/suggestions`.
 19. **Fase 24** — Batch discovery multi-ciudad (CLI `--location-list` integrado con `pipeline_runs` sub-jobs).
 20. **Fase 44** — Google Places budget tracker (backend + badge UI en Pipeline Manager).
-21. **Restart actions UI + endpoints** — `POST /api/v1/admin/system/restart-{core,api}` con códigos tipados; botones en Health. Solo activos en `NODE_ENV='production'` (post-Fase 48).
-22. **Cleanup snapshots v1** — `DROP COLUMN prospect_score_v1, score_breakdown_v1` con backup previo. Manual/aprobación. El admin decide cuándo (ver alerta `scoring_v1_columns_present` en Health).
+21. **Cleanup snapshots v1** — `DROP COLUMN prospect_score_v1, score_breakdown_v1` con backup previo. Manual/aprobación. El admin decide cuándo (ver alerta `scoring_v1_columns_present` en Health).
 
 **Bloque 7 — Enriquecimiento incremental + refinamientos scoring (cierre del producto):**
 27. **Fase 40** — Full-text search.
@@ -606,40 +605,6 @@ La responsabilidad de Fase 23 respecto al Pipeline Manager queda del lado `src/`
 **Fuera de alcance:** ejecutar discovery real desde la UI en modo autónomo (los handlers funcionan, pero el agente autónomo no debe disparar runs reales — `SECURITY.md` lo bloquea).
 
 **Referencias:** `ADMIN_PANEL.md § Pantalla — Discovery Control Center`, `ARCHITECTURE_FRONTEND.md § Discovery Control Center`.
-
----
-
-### Restart Actions — endpoints + UI Health botones (item 30)
-
-**Por qué:** en producción, después de aplicar Fase 48 (pm2 + Nginx), el admin debe poder reiniciar `core` o `api` desde UI sin SSH. Sin esta fase, restart requiere acceso SSH al servidor.
-
-**Prerequisitos:**
-- Fase 48 aplicada (procesos `api` y `core` corriendo en pm2). En desarrollo (`NODE_ENV!='production'`), los endpoints devuelven 501 con `error_code='restart_disabled_in_dev'`.
-- Admin MVP UI aplicada (Health screen donde se agregan los botones).
-
-**Implementación:**
-
-1. **Endpoints en `api/`:**
-   - `POST /api/v1/admin/system/restart-core` — ejecuta `pm2 restart core` via `child_process.exec`. Retorna `{ ok: true, exit_code: 0 }` en éxito. Escribe `audit_log` con `action='system.restart'`, `target_type='system'`, `target_id='core'`, `diff={ requested_by_user_id, before_status, after_status_polled }`.
-   - `POST /api/v1/admin/system/restart-api` — mismo patrón con `pm2 restart api`. **Caveat canónico (sincronizado con `ADMIN_PANEL.md § Pantalla F`):** la propia request muere durante el restart — el cliente recibe **connection reset, no respuesta JSON**. NO intentar responder 202 antes del exec (el proceso ya se está reiniciando). La UI interpreta "connection reset within 5s del POST" como "reinicio iniciado" y polea `/api/v1/admin/system/status` tras 10s para verificar `uptime_seconds < 30`. Audit log se escribe **antes** del exec.
-   - Ambos endpoints retornan **501** con `error_code='restart_disabled_in_dev'` si `process.env.NODE_ENV !== 'production'`. Esto evita que el agente autónomo en dev mate procesos por accidente.
-   - Solo admin. Audit log obligatorio.
-
-2. **UI en Health screen:**
-   - Botón "Restart Core" + Botón "Restart API" con confirm modal ("Esto reinicia el proceso. Cron activo se interrumpe. ¿Continuar?").
-   - Spinner mientras se polea `/api/v1/admin/system/status` tras 10s verificando `uptime_seconds < 30` después del restart. (Para restart-api el proceso se reinicia, por lo que la UI espera 10s antes de sondear; para restart-core `/api/v1/health` también es alcanzable, pero el endpoint canónico es `/admin/system/status` en ambos casos. Sincronizado con `ADMIN_PANEL.md § Pantalla F`.)
-   - Banner de error si el endpoint retorna 501 (caso dev).
-
-3. **Códigos de error tipados (incluir en `error_code` del JSON response):**
-   - `restart_disabled_in_dev` — `NODE_ENV` no es production.
-   - `pm2_not_found` — comando `pm2` no existe en el PATH.
-   - `process_not_registered` — `pm2 restart <name>` falló porque el proceso no está registrado.
-   - `pm2_failed` — `pm2 restart` completó pero con exit code distinto de 0.
-   - `timeout` — `pm2 restart` no completó en 30s.
-
-**Fuera de alcance:** restart de DB/Nginx (administración a nivel sistema, fuera del modelo). Modo "rolling restart" multi-instancia (no aplica — 1 servidor).
-
-**Referencias:** `ADMIN_PANEL.md § Pantalla F — Health`, `ARCHITECTURE_FUTURE.md § Endpoints admin/system`.
 
 ---
 
