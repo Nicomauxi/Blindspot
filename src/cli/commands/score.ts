@@ -5,6 +5,7 @@ import { loadRuntimeLists } from "../../storage/system-lists.js";
 import { createScoringRun, completeScoringRun, failRun, getRunById } from "../../storage/runs.js";
 import { scoreLead } from "../../modules/scoring/index.js";
 import { computeAllBuyerScores } from "../../modules/scoring/buyer-types.js";
+import { getAdminServicePricing } from "../../storage/service-pricing.js";
 import type { Lead, ScoringRunStats, ProspectEntry } from "../../shared/types.js";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -69,9 +70,12 @@ async function scoreBuyerTypes(opts: { buyerType?: string; dryRun: boolean }): P
 
   log.info({ total: eligible.length }, "Computing buyer-type scores");
 
+  const deliverySystemCostUyu = await getAdminServicePricing("delivery_system");
+  const buyerScoreOpts = deliverySystemCostUyu != null ? { deliverySystemCostUyu } : {};
+
   let processed = 0;
   for (const lead of eligible) {
-    let scores = computeAllBuyerScores(lead);
+    let scores = computeAllBuyerScores(lead, buyerScoreOpts);
     if (opts.buyerType) {
       scores = scores.filter((s) => s.buyer_type === opts.buyerType);
     }
@@ -124,6 +128,8 @@ export async function scoreCommand(rawArgs: RawScoreArgs): Promise<void> {
 
   try {
     const scored: Array<{ lead: Lead; prospectScore: number }> = [];
+    const deliverySystemCostUyu = await getAdminServicePricing("delivery_system");
+    const buyerScoreOpts = deliverySystemCostUyu != null ? { deliverySystemCostUyu } : {};
 
     if (opts.run || opts.all) {
       const leads = opts.all
@@ -135,6 +141,21 @@ export async function scoreCommand(rawArgs: RawScoreArgs): Promise<void> {
       for (let i = 0; i < leads.length; i++) {
         const lead = leads[i]!;
         const result = scoreLead(lead);
+        const leadWithScore: Lead = {
+          ...lead,
+          business_quality_score: result.business_quality_score,
+          digital_gap_score: result.digital_gap_score,
+          systems_gap_score: result.systems_gap_score,
+          prospect_score: result.prospect_score,
+          scoring_version: result.scoring_version,
+          contact_ready: result.contact_ready,
+          score_breakdown: result.score_breakdown as unknown as Record<string, unknown>,
+          systems_gap_breakdown: result.systems_gap_breakdown as unknown as Record<string, unknown>,
+        };
+        let buyerScores = computeAllBuyerScores(leadWithScore, buyerScoreOpts);
+        if (opts.buyerType) {
+          buyerScores = buyerScores.filter((score) => score.buyer_type === opts.buyerType);
+        }
 
         log.info(
           `[${i + 1}/${leads.length}] scored ${lead.name} → bq=${result.business_quality_score} dg=${result.digital_gap_score} sg=${result.systems_gap_score} prospect=${result.prospect_score}`
@@ -142,6 +163,7 @@ export async function scoreCommand(rawArgs: RawScoreArgs): Promise<void> {
 
         if (!opts.dryRun) {
           await updateLeadScore(lead.id, result);
+          await upsertBuyerScores(lead.id, buyerScores);
         }
 
         scored.push({ lead, prospectScore: result.prospect_score });
@@ -158,7 +180,7 @@ export async function scoreCommand(rawArgs: RawScoreArgs): Promise<void> {
       }
     }
 
-    if (opts.buyerTypes) {
+    if (opts.buyerTypes && !(opts.run || opts.all)) {
       await scoreBuyerTypes({ ...(opts.buyerType ? { buyerType: opts.buyerType } : {}), dryRun: opts.dryRun });
     }
 
