@@ -2,6 +2,7 @@ import { Command } from "commander";
 import { getLogger } from "../../shared/logger.js";
 import { transitionToPending, executeRun } from "../../modules/pipeline/run-executor.js";
 import { getSupabase } from "../../shared/supabase.js";
+import { backfillGooglePlacesBudget, getGooglePlacesBudgetStatus } from "../../storage/pipeline-config.js";
 import type { PipelineRun, CpuBudget } from "../../modules/pipeline/types.js";
 
 const logger = getLogger();
@@ -64,5 +65,31 @@ export const pipelineCommand = new Command("pipeline")
     } else {
       logger.warn({ runId, status: result.status }, "Pipeline run finished with partial/failed status");
       process.exit(1);
+    }
+  });
+
+pipelineCommand
+  .command("budget")
+  .description("Show Google Places budget status or backfill historical spend")
+  .option("--backfill", "Recompute google_places_budget_spent from all completed runs", false)
+  .action(async (opts: { backfill: boolean }) => {
+    if (opts.backfill) {
+      logger.info("Backfilling Google Places budget from historical runs…");
+      const result = await backfillGooglePlacesBudget();
+      logger.info({ total_runs: result.total_runs, total_cost_usd: result.total_cost_usd }, "Budget backfill complete");
+      return;
+    }
+    const status = await getGooglePlacesBudgetStatus();
+    if (!status) {
+      console.log("No pipeline_config found");
+      return;
+    }
+    console.log(`Google Places Budget:`);
+    console.log(`  Total:      $${status.budget_total.toFixed(2)}`);
+    console.log(`  Spent:      $${status.budget_spent.toFixed(2)}`);
+    console.log(`  Remaining:  $${status.budget_remaining.toFixed(2)}`);
+    console.log(`  Alert at:   $${status.alert_threshold.toFixed(2)}`);
+    if (status.over_alert) {
+      console.log(`  ⚠ Budget remaining is below alert threshold!`);
     }
   });
