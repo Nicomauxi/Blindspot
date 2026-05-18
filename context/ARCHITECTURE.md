@@ -15,7 +15,7 @@
 - **HTTP:** undici ^7
 - **DB:** Supabase PostgreSQL — Docker local (`supabase_db_gap-radar`). Supabase cloud no está activo en la operación actual; cualquier acción cloud es futura/manual.
 - **Scraping:** Playwright
-- **Tests:** Vitest — 914 passing, 7 skipped, 75 files
+- **Tests:** Vitest — 1022 passing, 7 skipped, 93 files
 - **Dev:** tsx/esm
 - **Config:** YAML en `config/` — fuente de verdad para parámetros de discovery y scoring
 - **Repo:** https://github.com/Nicomauxi/Blindspot
@@ -30,10 +30,14 @@
 ## Admin UI
 
 - `ui/src/app/admin/costs/page.tsx` implementa el Cost Dashboard activo.
+- `ui/src/app/admin/performance/page.tsx` implementa el Performance Dashboard activo.
 - Consume `GET /api/v1/admin/costs/overview` y `GET /api/v1/admin/costs/history`.
+- Consume `GET /api/v1/admin/performance/overview`, `GET /api/v1/admin/performance/errors` y `GET /api/v1/admin/performance/quality`.
 - `overview` entrega el mes activo, totales (`llm`, `google_places`, `infra`, `backup`), estado del budget GP, desglose `per_source`, resumen `per_lead` y `llm.by_provider`.
 - `history` entrega `monthly[12]` con `google_places_usd`, `llm_usd`, `infra_usd`, `backup_usd`, `total_usd` y `hot_leads`.
 - El costo por lead usa solo gasto variable: suma `llm_usage_log.cost_usd` por `lead_id` más el share del costo Google Places del `first_seen_run_id`.
+- Performance overview agrega `runs`, `duration`, `per_phase`, `throughput` y `success_rate_per_source` sobre ventanas móviles.
+- Performance quality expone cobertura de datos (`email_quality`, `phone_type`, `coords`, `inferred_state`, `contact_tier`), tendencia diaria y resumen de `digital_footprint.last_change_diff`.
 
 ---
 
@@ -268,6 +272,14 @@ docker exec supabase_db_gap-radar psql -U postgres -d postgres -c "..."
 - `updateLeadEnrichment()` remueve cualquier `last_change_diff` stale antes de mergear, persiste el diff nuevo en `digital_footprint.last_change_diff` y agrega/remueve el tag `state-changed-significant` según corresponda.
 - Si el diff es crítico, el mismo flujo re-scorea el lead (`scoreLead`), actualiza `prospect_score` / `score_breakdown` y recalcula `lead_buyer_scores` usando `service_pricing`.
 - `enrichCommand()` acumula `significant_changes` en `EnrichmentRunStats`, lo muestra en el summary final y persiste errores recuperados por lead en `pipeline_errors`.
+
+### Performance dashboard admin
+
+- `api/src/routes/admin/performance.ts` dejó de responder stub y ahora entrega datos operativos completos una vez que existen `pipeline_errors` y change detection.
+- `GET /api/v1/admin/performance/overview` lee `pipeline_runs`, `pipeline_errors` y `leads` para derivar estado de runs, duración promedio, tiempo por fase, throughput y tasa de éxito por fuente.
+- `GET /api/v1/admin/performance/errors` expone errores recientes con filtros por `days`, `phase`, `source`, `error_type`, `recovered` y `limit`.
+- `GET /api/v1/admin/performance/quality` selecciona un `run_id` de referencia o la última ventana disponible, calcula cobertura de datos sobre leads actualizados y resume cambios significativos desde `digital_footprint.last_change_diff`.
+- `ui/src/app/admin/performance/page.tsx` renderiza overview, throughput, tasa de éxito por fuente, cobertura, errores recientes y tabla de leads con cambios significativos.
 
 ### Columnas multi-source en leads (migración 009)
 

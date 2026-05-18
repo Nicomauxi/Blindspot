@@ -45,9 +45,8 @@
 18. **Discovery Control Center UI** — pantalla `/discovery` consume `/api/v1/discovery/jobs` y `/suggestions`.
 19. **Fase 24** — Batch discovery multi-ciudad (CLI `--location-list` integrado con `pipeline_runs` sub-jobs).
 20. **Fase 44** — Google Places budget tracker (backend + badge UI en Pipeline Manager).
-21. **Performance Dashboard UI** — pantalla `/admin/performance`.
-22. **Restart actions UI + endpoints** — `POST /api/v1/admin/system/restart-{core,api}` con códigos tipados; botones en Health. Solo activos en `NODE_ENV='production'` (post-Fase 48).
-23. **Cleanup snapshots v1** — `DROP COLUMN prospect_score_v1, score_breakdown_v1` con backup previo. Manual/aprobación. El admin decide cuándo (ver alerta `scoring_v1_columns_present` en Health).
+21. **Restart actions UI + endpoints** — `POST /api/v1/admin/system/restart-{core,api}` con códigos tipados; botones en Health. Solo activos en `NODE_ENV='production'` (post-Fase 48).
+22. **Cleanup snapshots v1** — `DROP COLUMN prospect_score_v1, score_breakdown_v1` con backup previo. Manual/aprobación. El admin decide cuándo (ver alerta `scoring_v1_columns_present` en Health).
 
 **Bloque 7 — Enriquecimiento incremental + refinamientos scoring (cierre del producto):**
 27. **Fase 40** — Full-text search.
@@ -607,27 +606,6 @@ La responsabilidad de Fase 23 respecto al Pipeline Manager queda del lado `src/`
 **Fuera de alcance:** ejecutar discovery real desde la UI en modo autónomo (los handlers funcionan, pero el agente autónomo no debe disparar runs reales — `SECURITY.md` lo bloquea).
 
 **Referencias:** `ADMIN_PANEL.md § Pantalla — Discovery Control Center`, `ARCHITECTURE_FRONTEND.md § Discovery Control Center`.
-
----
-
-### Performance Dashboard UI — errores recientes y calidad de datos (item 29)
-
-**Por qué:** sin esta pantalla, el admin no puede diagnosticar regresiones del pipeline ni medir calidad de las fuentes. La tabla `pipeline_errors` (Fase 45-pre) y la lógica de change detection (Fase 45) ya existen.
-
-**Prerequisitos:**
-- Fase 45-pre aplicada (tabla `pipeline_errors` poblándose).
-- Fase 45 aplicada (change detection activo en re-enrich).
-- Endpoints `GET /api/v1/admin/performance/overview`, `GET /api/v1/admin/performance/errors`, `GET /api/v1/admin/performance/quality` **ya implementados en Fase API** (ver `api/src/routes/admin/performance.ts`). Esta fase NO toca `api/`; solo construye el frontend que consume esos endpoints. Si por algún error los endpoints faltaran en Fase API, retroceder a Fase API antes de empezar esta fase — NO crearlos acá.
-
-**Alcance incluido:**
-1. **Errores recientes** — tabla paginada de `pipeline_errors` con filtros por `phase`, `source`, `error_type`, `recovered`, ventana de tiempo. Click expande `message` + `stack` + link al `pipeline_runs.id` que originó el error.
-2. **Calidad de datos** — métricas: `% leads con email_quality≠unknown`, `% leads con phone_type≠unknown`, `% leads con coords`, `% leads con inferred_state='active'`, `% leads con contact_tier!='X'`. Tendencias últimos 30 días.
-3. **Tasa de éxito por fuente** — runs completados vs fallidos por `source` (google_places/mintur/osm/yelu/pedidosya), últimos 30 días.
-4. **Change detection summary** — leads con `digital_footprint.last_change_diff` no null en el último run, agrupados por tipo de cambio (website-appeared, contact_tier-changed, etc).
-
-**Fuera de alcance:** root-cause analyzer (manual por ahora — el admin lee el stack y decide).
-
-**Referencias:** `ADMIN_PANEL.md § Pantalla E — Performance Dashboard`.
 
 ---
 
