@@ -1,9 +1,12 @@
 # Blindspot — Project Master
 
 > Sos el Tech Lead de Blindspot. Este archivo es tu runbook operativo.
-> Leé este archivo + `ARCHITECTURE.md` + `ARCHITECTURE_FUTURE.md` + `FUTURE.md` al iniciar cada sesión.
+> Leé este archivo + `ROADMAP_CANONICAL.md` + `ARCHITECTURE.md` + `ARCHITECTURE_FUTURE.md` al iniciar cada sesión.
+> `ROADMAP_CANONICAL.md` es la fuente canónica de orden, permisos, ownership de procesos y criterios de ejecución.
+> Si la fase toca el panel admin → leer también `ADMIN_PANEL.md`.
+> Si la fase toca UI → leer también `ARCHITECTURE_FRONTEND.md`.
 > `LEADS_DATA.md` solo cuando el trabajo involucra análisis de datos concretos.
-> Nicolás es el Product Owner — supervisa y decide. Vos ejecutás.
+> Nicolás es el Product Owner + Admin del sistema — supervisa, decide y opera el panel admin. Vos ejecutás.
 >
 > **Señal de continuación de sesión:** si Nicolás adjunta solo este archivo (sin mensaje adicional),
 > significa que quiere retomar la sesión donde quedó. Leé la sección `ESTADO DE SESIÓN` al final
@@ -13,18 +16,50 @@
 
 ## Objetivo del producto
 
-Blindspot es una plataforma de inteligencia comercial que identifica negocios locales uruguayos con buena reputación offline pero gaps digitales o operativos. Genera leads calificados con datos de contacto verificados, clasificados por tipo de oportunidad comercial.
+Blindspot es una **herramienta interna privada** que recopila información de negocios locales uruguayos desde múltiples fuentes, procesa esos datos y los rankea según el **potencial de compra** de servicios/productos. El sistema produce leads accionables con un score de probabilidad de conversión y un pitch concreto, listos para que **socios autorizados** generen ofertas automatizadas.
 
-**Oportunidades que detecta el sistema:**
+**No es un producto comercializable.** El sistema corre en un servidor privado, lo controla Nicolás como admin, y los socios reciben accesos delimitados (filtros, leads visibles, acciones permitidas). No hay self-registration, no hay marketing externo, no hay tier gratis/pago.
+
+**Oportunidades que detecta el sistema (multi-oferta):**
 - Presencia digital básica — sin web, sin redes, presencia mínima
 - Rediseño / modernización — web vieja, no responsive, sin SEO
 - Marketing y community management — redes sin actividad, sin respuesta a reviews
 - Software operativo — sin punto de venta, sin gestión de stock, sin reservas online
 - Catálogos y menús digitales — negocios sin carta online
+- Delivery propio (escape de PedidosYa) — cuantificable en UYU/mes
 
-**Usuarios del output:** agencias digitales, freelancers, vendedores de software que buscan prospectos calificados en Uruguay.
+**Para cada lead el sistema produce:**
+- `prospect_score` (0–100) — potencial de conversión total
+- `buyer_type_scores[]` — score específico por cada tipo de producto/servicio vendible (7 tipos: agencia_web, software_pos, marketing_social, delivery_propio, reservas_online, catalogo_digital, whatsapp_business)
+- `primary_offer` + `pitch_hook` — la oferta más prometedora con texto concreto de apertura
+- `contact_tier` (A/B/C/D/X) — qué canales de contacto están disponibles y verificados
+- `data_confidence_score` + `contact_reliability_score` — fiabilidad de la información para el socio
 
-**Visión a largo plazo:** UI web donde el usuario filtra leads por tipo de oferta (web, marketing, software, etc.) y obtiene reportes de prospectos listos para venta. Los datos se recopilan ahora; la UI los consume on-demand cuando esté construida.
+---
+
+## Modelo de uso
+
+### Quién usa el sistema y cómo
+
+| Rol | Acceso | Acciones permitidas |
+|-----|--------|--------------------|
+| **Admin (Nicolás)** | Total | Gestionar usuarios, configurar pipeline, disparar runs manuales, ver costos y métricas, ver/editar todos los leads, revocar accesos |
+| **Socio** (CM) | Acotado por `lead_filter` configurado por admin | Ver/filtrar leads dentro de su segmento, generar ofertas, registrar outreach, ver stats propios |
+
+**Capacidad esperada:** 2–8 socios concurrentes en horario laboral.
+
+### Panel de administración
+
+Ver `context/ADMIN_PANEL.md` para specs completas. Resumen:
+- Gestión de socios: crear/desactivar usuarios, asignar `lead_filter`, ver actividad
+- Configuración de pipeline: cron, presupuestos, fases habilitadas
+- Disparo manual de runs + dry-run + abort
+- Monitoreo en tiempo real de runs activos
+- Dashboard de costos: Google Places API, LLM, CPU por run
+- Dashboard de rendimiento: duración por fase, tasa de éxito, errores
+- Discovery Control Center: cola de jobs, zonas sugeridas
+- Health del sistema + restart de procesos (solo en producción)
+- Audit log de acciones admin
 
 ---
 
@@ -32,38 +67,21 @@ Blindspot es una plataforma de inteligencia comercial que identifica negocios lo
 
 | Quién | Qué hace |
 |-------|---------|
-| **Nicolás** | Product Owner. Supervisa, aprueba decisiones de negocio. Ejecuta los prompts en Claude Code y reporta resultados aquí. |
-| **Tech Lead (esta sesión)** | Analiza, diseña, detecta bugs, **genera prompts completos para Claude Code**, ejecuta queries SQL de diagnóstico, toma decisiones técnicas. **NO escribe código directamente.** |
-| **Claude Code (otra sesión)** | Recibe un prompt completo de Tech Lead, implementa, verifica y reporta resultado. |
+| **Nicolás** | Product Owner + Admin. Supervisa, aprueba decisiones de negocio. |
+| **Socios** | Usuarios con `lead_filter` específico. Generan ofertas, registran outreach. |
+| **Tech Lead (esta sesión)** | Analiza, diseña, detecta issues, **genera prompts para Claude Code**, ejecuta queries SQL de diagnóstico. **NO escribe código directamente.** |
+| **Claude Code (otra sesión)** | Recibe prompt completo, implementa, verifica y reporta. |
 
-## Flujo de trabajo obligatorio
+## Modos operativos
 
-```
-[Esta sesión — Tech Lead]          [Claude Code — otra sesión]
-        │                                      │
-  1. Analiza el problema                       │
-  2. Diseña la solución                        │
-  3. Genera prompt completo ──────────────► 4. Ejecuta el prompt
-        │                                   5. Implementa + tests
-  6. Nicolás reporta resultado ◄──────────  6. Reporta resultado
-  7. Verifica / siguiente paso               │
-```
+1. **Handoff clásico (`plan master`)** — esta sesión actúa como Tech Lead y CC implementa.
+2. **Ejecución directa (`single-agent`)** — el mismo agente analiza + implementa. Solo después de verificar restricciones de `SECURITY.md`, approvals y orden del roadmap.
 
-**Regla crítica — nunca violar:** Tech Lead NO usa Edit, Write, ni crea/modifica archivos `.ts`, `.js` o `.yaml` de código fuente. Eso va SIEMPRE a CC.
-
-**Lo que Tech Lead SÍ puede hacer (sin preguntar):**
-- Leer código: Read, Bash readonly (`git log`, `git diff`, `grep`, `ls`)
-- Queries SQL de diagnóstico: `docker exec supabase_db_gap-radar psql ...`
-- Actualizar `context/` únicamente: PROJECT_MASTER.md, FUTURE.md, ARCHITECTURE.md
-- Comandos CLI de la app (`pnpm test`, `pnpm typecheck`, `enrich`, `score`, `discover-*`) — **solo cuando Nicolás lo pida explícitamente para diagnóstico o fix de invariantes**
-
-**Trampa común:** cuando Nicolás dice "ejecutalos vos" en referencia a CLI commands, eso NO autoriza a implementar código. El límite duro es: si la tarea requiere Edit/Write sobre `.ts`/`.yaml` de código → generar prompt para CC.
-
-**Señal de alerta:** si notás que estás a punto de usar Edit o Write sobre código fuente → STOP. Generá el prompt para CC en su lugar.
+**Regla crítica:** Tech Lead NO usa Edit/Write sobre `.ts`/`.js`/`.yaml` de código fuente. Solo `context/`.
 
 ---
 
-## Loop de sesión — ejecutar en orden
+## Loop de sesión
 
 **1. Verificar estado base:**
 ```bash
@@ -80,122 +98,10 @@ SELECT
   COUNT(*) FILTER (WHERE passed_filter = true AND prospect_score IS NULL) AS passed_sin_score
 FROM leads;"
 ```
-Si algún valor ≠ 0 → resolver antes de continuar. No escalar con inconsistencias.
 
-**3. Tomar el primer item de `FUTURE.md`** y ejecutarlo.
+**3.** Tomar el primer item ejecutable de `ROADMAP_CANONICAL.md`.
 
-**3b. Si el item involucra una fuente externa nueva (provider, dataset, API):**
-Antes de generar el prompt para CC → usar Gemini DeepSearch para investigar la fuente.
-Ver plantilla en sección "Investigación de fuentes externas con Gemini DeepSearch" más abajo.
-Nicolás corre el prompt en Gemini, trae el resultado a esta sesión, y recién ahí se genera el prompt para CC.
-
-**4. Al cerrar sesión — reescribir ESTADO:**
-- Tests passing | Typecheck | DB invariantes
-- Archivos unstaged (si hay)
-- Próxima acción
-
-> `ARCHITECTURE.md` y `FUTURE.md` los actualiza CC al terminar cada fase. Tech Lead verifica, no reescribe.
-
----
-
-## Investigación de fuentes externas con Gemini DeepSearch
-
-**Cuándo usar:** antes de implementar cualquier provider nuevo (MINTUR, OSM, PedidosYa, IMM, Yelu, etc.) o antes de consumir cualquier dataset/API externa que no conocemos en detalle.
-
-**Por qué:** Gemini DeepSearch rastrea documentación oficial, repositorios, issues y foros en tiempo real. Evita implementar contra una API que no existe, con campos incorrectos, o sin considerar rate limits y autenticación.
-
-**Flujo:**
-```
-Tech Lead genera prompt Gemini
-    → Nicolás lo corre en gemini.google.com (modo Deep Research)
-    → Pega el resultado en esta sesión
-    → Tech Lead analiza y genera el prompt para CC con contexto real
-```
-
-### Plantilla de prompt Gemini DeepSearch
-
-```
-Necesito investigar [NOMBRE_FUENTE] como fuente de datos para un sistema de inteligencia
-comercial enfocado en negocios locales uruguayos.
-
-Investigá en profundidad:
-
-1. Acceso al dataset — ¿API REST, CSV/JSON descargable, scraping, o feed periódico?
-   URL oficial, autenticación requerida, rate limits.
-
-2. Estructura de datos — campos disponibles (especialmente: nombre comercial, dirección,
-   teléfono, email, coordenadas GPS, categoría/tipo, RUT/identificador oficial).
-   Formato exacto (encoding, separadores). Ejemplo real de 2-3 registros.
-
-3. Cobertura — ¿qué tipos de negocio incluye? ¿Todo Uruguay o solo zonas?
-   Frecuencia de actualización. Cantidad aproximada de registros.
-
-4. Licencia — ¿datos abiertos (datos.gub.uy, CC)? ¿Restricciones de uso comercial?
-
-5. Implementaciones existentes — ¿proyectos en GitHub/npm que ya consuman esta fuente?
-   ¿Problemas de acceso documentados en foros?
-
-6. Alternativas — ¿otro dataset oficial con mejor cobertura de email + GPS para negocios UY?
-
-Fuente a investigar: [DESCRIPCIÓN_DETALLADA]
-Contexto: sistema Node.js/TypeScript que consume datos de negocios para generar leads
-comerciales en Uruguay. Me interesa especialmente: nombre, dirección, teléfono, email, GPS.
-```
-
-Después de obtener el resultado: pegarlo en la sesión Tech Lead, que analiza y genera el prompt para CC.
-Guardar los hallazgos en `context/research/<fuente>.md` (ver estructura en ese directorio).
-
----
-
-## Cómo generar prompts para Claude Code
-
-**Premisa fundamental:** cada fase se ejecuta en un chat de CC completamente nuevo — sin memoria de sesiones anteriores, sin contexto acumulado. El prompt debe ser 100% autocontenido.
-
-Para lograrlo: **siempre adjuntar `ARCHITECTURE.md` al prompt** como contexto base. El prompt no puede asumir que CC sabe nada del proyecto.
-
-**Estructura de prompt para Claude Code:**
-```
-[Adjuntar ARCHITECTURE.md como contexto]
-[Adjuntar ARCHITECTURE_FUTURE.md como contexto de diseño objetivo]
-
-Contexto del sistema: [referencia al módulo relevante según ARCHITECTURE.md]
-
-Tarea: [descripción atómica — una sola cosa]
-
-Problema actual: [síntoma concreto]
-
-Lo que debe hacer: [comportamiento esperado, paso a paso]
-
-Restricciones:
-- Mostrar old/new antes de aplicar cualquier cambio
-- No modificar tests para hacerlos pacer
-- Verificar con: pnpm test 2>&1 | tail -8 && pnpm typecheck 2>&1 | tail -3
-
-Al terminar — actualizar context/:
-- Si cambia la arquitectura (nuevos archivos, nuevos tipos, nuevas tablas, nuevas funciones públicas):
-  actualizar context/ARCHITECTURE.md para reflejar el estado real post-implementación.
-- Si se completa una fase de FUTURE.md: borrar esa fase de context/FUTURE.md.
-- Si cambia el estado del proyecto: reescribir la sección ESTADO de context/PROJECT_MASTER.md.
-- Solo documentar lo que está implementado — nunca intenciones ni planes.
-
-Archivos probablemente relevantes: [listar según ARCHITECTURE.md]
-```
-
-**Reglas para prompts:**
-- Una tarea por prompt — atómico
-- El prompt debe funcionar en un chat sin contexto previo — no asumir que CC recuerda nada
-- **Adjuntar siempre `ARCHITECTURE_FUTURE.md` junto con `ARCHITECTURE.md`** — CC debe verificar que su implementación sea coherente con el diseño objetivo antes de escribir código
-- Siempre pedir old/new antes de aplicar
-- Siempre incluir verificación en el prompt
-- Siempre incluir la instrucción de actualizar context/ al final del prompt
-- Si el plan de Claude Code toca más archivos de los esperados → revisar antes de aprobar
-- Si Claude Code modifica tests: corrección de fixture de input (ok) vs cambio de aserción (no ok)
-- Si CC propone algo que contradiga `ARCHITECTURE_FUTURE.md` → rechazar el plan y pedir alineación
-
-**Flujo de aprobación de planes:**
-Cuando Nicolás trae de vuelta un bloque "Plan: …" a esta sesión, ese plan fue propuesto por CC
-en su sesión. El rol del Tech Lead es analizarlo y decidir: aprobar (responder "aprobado" a CC)
-o refinar (ajustar el prompt y reenviar). CC no implementa hasta recibir aprobación explícita.
+**4.** Al cerrar sesión — reescribir ESTADO DE SESIÓN con: tests, typecheck, invariantes, próxima acción.
 
 ---
 
@@ -219,57 +125,89 @@ docker exec supabase_db_gap-radar psql -U postgres -d postgres -c "..."
 
 | Concepto | Valor |
 |----------|-------|
-| Google Places API acumulado | ~$5.16 USD (+$1.16 sesión 2026-05-15 — 10 runs discovery Colonia/Minas/Durazno) |
+| Google Places API acumulado | ~$5.16 USD |
 | Crédito disponible | ~$194.84 USD (free tier $200) |
+
+---
+
+## Estado del roadmap — snapshot 2026-05-18
+
+**42 de 43 items implementados y completos.** El item 43 fue descartado por razones legales.
+
+| Bloque | Items | Estado |
+|--------|-------|--------|
+| 0 — Backup | Fase 49 | ✅ Completo |
+| 1 — Schema aditivo | Fase 22-pre, Fase 21 | ✅ Completo |
+| 2 — Migración destructiva | Fase 47 | ✅ Completo |
+| 3 — Calidad de inputs | Fase 15, Fase 6A, Fase 6B | ✅ Completo |
+| 4 — Scoring v2 | Fase 22-eval, Fase 22 | ✅ Completo |
+| 5 — API + core automation | Fase API-0, Fase 23, Fase API | ✅ Completo |
+| 6 — Operación segura | Admin MVP UI, Fase 46, Fase 48, Fase 39 | ✅ Completo |
+| 7 — Outreach loop + UI base | Fase 25, Fase 44-pre, Fase 26, Fase 27, Fase 13, UI base | ✅ Completo |
+| 8 — Dashboards + pipeline | Pipeline Manager UI, Discovery CC UI, Fase 24, Fase 44, Cost Dashboard, Fase 45-pre, Fase 45, Performance Dashboard, Restart Actions, Cleanup v1* | ✅ Completo (*Cleanup v1 = manual, decidido por Nicolás) |
+| 9 — Enriquecimiento + refinamientos | Fase 40, Fase 28, Fase 29, Fase 11†, Fase 18†, Fase 38, Fase 37, Fase 43, Fase 36, Fase 41, Fase 42‡, Fase 30§ | ✅ Completo (excepto †‡§) |
+
+**Excepciones Bloque 9:**
+- `†` Fase 11 (IMM Habilitaciones) + Fase 18 (cruce MINTUR×IMM): bloqueadas, requieren Gemini DeepSearch del endpoint IMM. Pendiente de decisión de Nicolás.
+- `‡` Fase 42 (scoring estacional): bloqueada, requiere ≥30 outreach cerrados en 2+ estaciones. Se desbloquea con operación real del sistema.
+- `§` **Fase 30 (DGI dataset) — DESCARTADA PERMANENTEMENTE.** Motivo: uso de datos DGI/BPS para enriquecer base comercial propia viola la Ley 18.331 de protección de datos personales de Uruguay y las condiciones de uso de DGI. No implementar bajo ninguna circunstancia.
 
 ---
 
 ## ESTADO DE SESIÓN
 
-> Reescribir completamente al cerrar cada sesión. Solo el snapshot necesario para arrancar la siguiente — sin narrativa histórica (eso vive en git log).
+> Reescribir completamente al cerrar cada sesión.
 
-**Tests:** 882 passing, 7 skipped, 69 files | **Typecheck:** limpio
+**Tests:** 1068 passing, 7 skipped, 99 files | **Typecheck:** limpio | **DB invariantes:** 0/0/0/0 (verificados 2026-05-18)
 
-**Fases completadas: F, C, 9 (Yelu), 10 (PedidosYa), B (sub-scores), E (franquicias), 12 (buyer-type scoring), 14 (review count multiplicador), 16 (urgency signals).**
+**Commits recientes:**
+- `feat: implement outreach campaigns (Fase 43)` — tabla + CRUD API + UI selector
+- `feat: owner_group_id detection and API (Fase 41)` — detección mismo propietario + badge UI
+- `docs: AUTONOMOUS.md apunta a context/research/dgi.md para Fase 30`
+- `docs: update AUTONOMOUS.md — Fases 43 + 41 completas`
 
-### Estado de DB (snapshot 2026-05-16 — pipeline completo)
+**Estado del roadmap:** 42/43 items completos. Fase 30 descartada (legal). Fase 42 bloqueada (data). Fase 11 + Fase 18 bloqueadas (research IMM pendiente).
 
-| Fuente | Total | Passed | Hot (≥55) | Pitcheable (≥40) | Contactable | Avg score |
-|--------|-------|--------|-----------|-----------------|-------------|-----------|
-| google_places | 1474 | 172 | 113 | 140 | 165 | 55.7 |
-| osm | 622 | 622 | 217 | 229 | 187 | 24.7 |
-| yelu | 672 | 672 | 96 | 150 | 639 | 15.1 |
-| mintur | 2027 | 2027 | 0 | 2 | 1857 | 17.7 |
+**Estado de DB (snapshot 2026-05-18 — scoring v2 aplicado):**
 
-**Nota scores altos OSM/Yelu:** los 217 hot OSM y 96 hot Yelu son pre-scoring v2. Con la fórmula v2 (Fase 22) los leads tier X colapsarán — estos números son inflados. La Fase 22 es la prioridad inmediata.
+| Fuente | Total | Passed | Avg score |
+|--------|-------|--------|-----------|
+| google_places | 1474 | 172 | ~55 |
+| osm | 622 | 622 | ~25 |
+| yelu | 672 | 672 | ~15 |
+| mintur | 2027 | 2027 | ~18 |
 
-**lead_buyer_scores:** 24,451 filas (3,493 leads × 7 tipos). Buyer type scores bajos (avg 0–6) — refleja que la fórmula actual no alimenta bien los buyer types para fuentes externas. Se corrige con Fase 22.
-
-**inferred_state:** 2163 leads procesados. 1330 con `digital_footprint.skipped=true` (enrich no encontró contenido — todos serían `digitalization_level: none`). Comportamiento correcto, no es bug.
-
-**Invariantes (verificados 2026-05-16):**
+**Invariantes DB (post-Fase 22):**
 - `passed_not_enriched`: 0 ✅
 - `tags_contradictorios`: 0 ✅
+- `email_found_sin_data`: 0 ✅
 - `passed_sin_score`: 0 ✅
+- `passed_not_v2`: 0 ✅
+- `buyer_scores_not_v2`: 0 ✅
 
-### Arquitectura definida (docs 2026-05-16)
+### Próxima acción
 
-- Un repo, dos procesos: `src/` (core pipeline) + `api/` (Fastify) + `ui/` (Next.js)
-- Auth: JWT + roles admin/cm + `lead_filter` por CM
-- Schemas completos: users, lead_outreach, discovery_jobs, outreach_campaigns, pipeline_runs, pipeline_config
-- Auditoría completa de 30 gaps — todos aplicados a los archivos context/
+**Contexto:** se acaba de correr una auditoría lógica y funcional completa del sistema. Nicolás trae los findings del reporte de auditoría a esta sesión.
 
-### Próximas acciones — en este orden
+**Loop para esta sesión:**
 
-1. **Commit checkpoint** de toda la documentación de planificación y auditoría
-2. **Fase 22-pre** (~30 min) — `scoring_version smallint` + `contact_ready boolean` en leads y lead_buyer_scores
-3. **Fase 22** — Scoring v2 completo (Fase 20 absorbida — incluye contact_tier + pitch_hook + contact_ready)
-4. **Fase 6** — Cross-source deduplication activo + reconciliación retroactiva
-5. **Fase 15** — Email quality + clasificación tipo teléfono
-6. **Fase 47** — `inferred_state` → columna propia (antes de cualquier endpoint UI)
-7. **Fase 21** — PostGIS (30 min infra, cloud via Dashboard → Extensions, no SQL)
-8. **Fase API-0** — Tabla users + roles + `contacted_by` en leads
-9. **Fase API** — Servidor Fastify (CORS, JWT, endpoints, lead_dashboard VIEW, paginación)
-10. **Fase 48** — Infraestructura producción (HTTPS + pm2) — antes de dar acceso a CMs
-11. **Fase 49** — DB backup automatizado
-12. **UI** — Next.js (ver ARCHITECTURE_FRONTEND.md)
+1. Leer el reporte de auditoría que trae Nicolás
+2. Por cada issue encontrado, clasificar por severidad (CRÍTICO / ALTO / MEDIO / BAJO)
+3. Para issues CRÍTICO y ALTO: generar prompt para CC o ejecutar en modo directo según tamaño
+4. Para issues MEDIO: evaluar si vale la pena atacarlos ahora o documentarlos como deuda técnica
+5. Para issues BAJO: documentar sin ejecutar
+6. Verificar con `pnpm test && pnpm typecheck` después de cada fix
+7. Actualizar este ESTADO al cerrar
+
+**Lo que NO hacer:**
+- No re-implementar fases ya completas sin evidencia de que estén rotas
+- No atacar Fase 30 (DGI) — descartada por legalidad, no retomar
+- No atacar Fase 42 sin data de conversión real
+- No instalar dependencias nuevas sin aprobación explícita
+
+**Archivos probablemente relevantes para fixes:**
+- `src/shared/types.ts` — si hay campos faltantes en tipos
+- `api/src/routes/leads.ts` — si hay gaps en filtros o endpoints
+- `ui/src/lib/api.ts` — si hay tipos desincronizados con la API real
+- `db/migrations/` — si hay columnas en el schema que no están en la VIEW
+- Los archivos que mencione el reporte de auditoría
