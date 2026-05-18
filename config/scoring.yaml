@@ -1,4 +1,4 @@
-version: 1
+version: 2
 recent_reviews_threshold_days: 180
 
 # business_quality: 0-100. Qué tan "valioso como negocio offline" es este lead.
@@ -31,9 +31,6 @@ business_quality:
     - name: has_recent_reviews
       condition: { field: google_data.has_recent_reviews, op: eq, value: true }
       weight: 10
-    - name: external_source_quality
-      condition: { field: source, op: neq, value: google_places }
-      weight: 70
 
 # digital_gap: 0-100. Qué tan ausente está el negocio digitalmente.
 digital_gap:
@@ -132,7 +129,87 @@ mutual_exclusions:
 cap: 100
 
 # Fórmula de prospect_score
-prospect_formula: "max(sub_scores) * contactabilityMultiplier"
+prospect_formula: "commercial_score_v2"
+
+commercial_score:
+  gap_depth_cap: 60
+  source_quality_bonus:
+    google_places: 0
+    osm: 8
+    yelu: 10
+    pedidosya: 15
+    mintur: 20
+  commercial_breadth:
+    secondary_threshold: 30
+    secondary_bonus: 8
+    tertiary_threshold: 30
+    tertiary_bonus: 4
+  business_quality:
+    rating_tiers:
+      - { min: 4.0, max: 4.3, points: 2 }
+      - { min: 4.3, max: 5.01, points: 5 }
+    review_tiers:
+      - { min: 20, max: 50, points: 1 }
+      - { min: 50, max: null, points: 3 }
+    data_confidence_multiplier: 3
+    contact_reliability_multiplier: 2
+    corroboration_bonus: 2
+    cap: 15
+  accessibility:
+    tier_base: { X: 0.30, D: 0.65, C: 0.90, B: 1.15, A: 1.30 }
+    reliability_adjustment: { base: 0.75, weight: 0.25 }
+  timing:
+    urgency_high: 0.15
+    new_business_window: 0.05
+    competitive_pressure_isolated: 0.05
+    franchise_penalty: -0.15
+    cap: 1.20
+    floor: 0.85
+    days_in_pool:
+      fresh_threshold_days: 7
+      fresh_bonus: 0.05
+      stale_threshold_days: 90
+      stale_penalty: -0.05
+  urgency_bonus: { high: 5, medium: 2, low: 0 }
+
+thresholds:
+  hot: 55
+  pitcheable: 40
+  pool: 25
+
+pitch_hooks:
+  web_nuevo:
+    default: "No tienen web, estan perdiendo clientes que buscan online."
+    overrides:
+      - when:
+          has_delivery: true
+        text: "Estan pagando 30% a PedidosYa; con su propia web de pedidos, recuperan ese margen."
+  rediseno:
+    default: "Su web existe pero no convierte; responsive y SEO moderno."
+  marketing:
+    default: "Tienen web pero no redes activas; community management."
+  software:
+    default: "El negocio ya opera, pero sin sistema propio pierde control y eficiencia."
+    overrides:
+      - when:
+          has_delivery: true
+          has_pos: false
+        text: "Ya tienen delivery, les falta el sistema de gestion central."
+      - when:
+          has_delivery: false
+        text: "Sin sistema de pedidos propio, estan atados a comisiones y procesos manuales."
+  catalogo:
+    default: "Hoy obligan al cliente a preguntar lo basico; un catalogo claro reduce friccion de compra."
+    overrides:
+      - when:
+          niche: restaurant
+        text: "Sin carta digital, muchos clientes no resuelven que pedir antes de ir."
+      - when:
+          has_reservations: false
+          niche: gym
+        text: "Sin sistema de reservas, pierden alumnos que no saben como agendar."
+  contacto_directo:
+    default: "El negocio existe y es contactable, pero no tiene activos digitales que lo ayuden a vender mejor."
 
 buyer_types:
   agencia_web:
@@ -204,17 +281,3 @@ buyer_types:
     inferred_penalties:
       has_pos: -30
       has_ecommerce: -40
-
-review_count_multiplier:
-  - max: 10
-    multiplier: 0.75
-  - max: 50
-    multiplier: 1.00
-  - max: 200
-    multiplier: 1.20
-  - max: null
-    multiplier: 1.40
-
-rating_bonus:
-  threshold: 4.3
-  bonus: 5

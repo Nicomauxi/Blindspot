@@ -40,16 +40,10 @@ const DimensionSchema = z
     }
   });
 
-const SUB_SCORE_KEYS = ["web_nuevo", "rediseno", "marketing", "software", "catalogo"] as const;
-
-const ReviewCountMultiplierRuleSchema = z.object({
+const RangePointsRuleSchema = z.object({
+  min: z.number(),
   max: z.number().nullable(),
-  multiplier: z.number().positive(),
-});
-
-const RatingBonusSchema = z.object({
-  threshold: z.number(),
-  bonus: z.number(),
+  points: z.number(),
 });
 
 const BuyerTypeConfigSchema = z.object({
@@ -59,6 +53,69 @@ const BuyerTypeConfigSchema = z.object({
   tag_required: z.string().optional(),
   inferred_bonuses: z.record(z.string(), z.number()).optional(),
   inferred_penalties: z.record(z.string(), z.number()).optional(),
+});
+
+const ContactTierSchema = z.enum(["A", "B", "C", "D", "X"]);
+
+const CommercialScoreSchema = z.object({
+  gap_depth_cap: z.number().positive(),
+  source_quality_bonus: z.record(z.string(), z.number()),
+  commercial_breadth: z.object({
+    secondary_threshold: z.number().nonnegative(),
+    secondary_bonus: z.number().nonnegative(),
+    tertiary_threshold: z.number().nonnegative(),
+    tertiary_bonus: z.number().nonnegative(),
+  }),
+  business_quality: z.object({
+    rating_tiers: z.array(RangePointsRuleSchema).min(1),
+    review_tiers: z.array(RangePointsRuleSchema).min(1),
+    data_confidence_multiplier: z.number().nonnegative(),
+    contact_reliability_multiplier: z.number().nonnegative(),
+    corroboration_bonus: z.number().nonnegative(),
+    cap: z.number().positive(),
+  }),
+  accessibility: z.object({
+    tier_base: z.record(ContactTierSchema, z.number().positive()),
+    reliability_adjustment: z.object({
+      base: z.number().nonnegative(),
+      weight: z.number().nonnegative(),
+    }),
+  }),
+  timing: z.object({
+    urgency_high: z.number(),
+    new_business_window: z.number(),
+    competitive_pressure_isolated: z.number(),
+    franchise_penalty: z.number(),
+    cap: z.number().positive(),
+    floor: z.number().positive(),
+    days_in_pool: z.object({
+      fresh_threshold_days: z.number().positive(),
+      fresh_bonus: z.number(),
+      stale_threshold_days: z.number().positive(),
+      stale_penalty: z.number(),
+    }).optional(),
+  }),
+  urgency_bonus: z.object({
+    high: z.number(),
+    medium: z.number(),
+    low: z.number(),
+  }),
+});
+
+const PitchHookOverrideWhenSchema = z.object({
+  has_delivery: z.boolean().optional(),
+  has_pos: z.boolean().optional(),
+  has_reservations: z.boolean().optional(),
+  has_ecommerce: z.boolean().optional(),
+  niche: z.string().optional(),
+});
+
+const PitchHookSchema = z.object({
+  default: z.string().min(1),
+  overrides: z.array(z.object({
+    when: PitchHookOverrideWhenSchema,
+    text: z.string().min(1),
+  })).optional(),
 });
 
 const ScoringConfigSchema = z
@@ -73,9 +130,21 @@ const ScoringConfigSchema = z
     }),
     cap: z.number().default(100),
     prospect_formula: z.string(),
+    commercial_score: CommercialScoreSchema,
+    thresholds: z.object({
+      hot: z.number().nonnegative(),
+      pitcheable: z.number().nonnegative(),
+      pool: z.number().nonnegative(),
+    }),
+    pitch_hooks: z.object({
+      web_nuevo: PitchHookSchema,
+      rediseno: PitchHookSchema,
+      marketing: PitchHookSchema,
+      software: PitchHookSchema,
+      catalogo: PitchHookSchema,
+      contacto_directo: PitchHookSchema,
+    }),
     buyer_types: z.record(z.string(), BuyerTypeConfigSchema).optional(),
-    review_count_multiplier: z.array(ReviewCountMultiplierRuleSchema).optional(),
-    rating_bonus: RatingBonusSchema.optional(),
   })
   .superRefine((cfg, ctx) => {
     if (cfg.cap <= 0) {

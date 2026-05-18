@@ -5,7 +5,7 @@ import type { ScoreBreakdown } from "../../src/modules/scoring/types.js";
 function breakdown(): ScoreBreakdown {
   return {
     computed_at: "2026-01-01T00:00:00.000Z",
-    config_version: 1,
+    config_version: 2,
     business_quality: { total: 85, rules: [] },
     digital_gap: {
       total: 55,
@@ -22,7 +22,27 @@ function breakdown(): ScoreBreakdown {
       marketing: 0,
       software: 0,
       catalogo: 0,
+      contacto_directo: 0,
       primary_offer: "web_nuevo",
+    },
+    primary_offer: "web_nuevo",
+    source_quality_bonus: 0,
+    contact_tier: "A",
+    pitch_hook: "hook",
+    urgency_signal: "low",
+    gap_depth: 45,
+    commercial_breadth: 0,
+    business_quality_pts: 10,
+    accessibility_factor: 1.3,
+    timing_factor: 1,
+    urgency_bonus: 0,
+    days_in_pool: 0,
+    inferred_state_summary: {
+      has_delivery: false,
+      has_pos: false,
+      has_reservations: false,
+      has_ecommerce: false,
+      digitalization_level: null,
     },
   };
 }
