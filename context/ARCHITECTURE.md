@@ -261,6 +261,14 @@ docker exec supabase_db_gap-radar psql -U postgres -d postgres -c "..."
 - Índices activos: `pipeline_errors_run`, `pipeline_errors_occurred_at`, `pipeline_errors_phase`, `pipeline_errors_lead`.
 - `src/storage/pipeline-errors.ts` expone `recordPipelineError()` para persistir errores de workers sin depender de `pipeline_runs.log_lines`.
 
+### Change detection en re-enrich
+
+- `src/modules/enrichment/change-detection.ts` centraliza el diff incremental entre `digital_footprint` previo y nuevo.
+- Cambios críticos hoy: `has_website` `false -> true`, primer `contact_email`, `inferred_state.has_delivery` `false -> true` y `contact_tier` recalculado cuando el re-score cambia de tier.
+- `updateLeadEnrichment()` remueve cualquier `last_change_diff` stale antes de mergear, persiste el diff nuevo en `digital_footprint.last_change_diff` y agrega/remueve el tag `state-changed-significant` según corresponda.
+- Si el diff es crítico, el mismo flujo re-scorea el lead (`scoreLead`), actualiza `prospect_score` / `score_breakdown` y recalcula `lead_buyer_scores` usando `service_pricing`.
+- `enrichCommand()` acumula `significant_changes` en `EnrichmentRunStats`, lo muestra en el summary final y persiste errores recuperados por lead en `pipeline_errors`.
+
 ### Columnas multi-source en leads (migración 009)
 
 | Columna | Tipo | Notas |

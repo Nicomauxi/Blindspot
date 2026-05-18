@@ -45,10 +45,9 @@
 18. **Discovery Control Center UI** — pantalla `/discovery` consume `/api/v1/discovery/jobs` y `/suggestions`.
 19. **Fase 24** — Batch discovery multi-ciudad (CLI `--location-list` integrado con `pipeline_runs` sub-jobs).
 20. **Fase 44** — Google Places budget tracker (backend + badge UI en Pipeline Manager).
-21. **Fase 45** — Change detection en re-enrich.
-22. **Performance Dashboard UI** — pantalla `/admin/performance`. Bloqueada por Fase 45-pre + Fase 45.
-23. **Restart actions UI + endpoints** — `POST /api/v1/admin/system/restart-{core,api}` con códigos tipados; botones en Health. Solo activos en `NODE_ENV='production'` (post-Fase 48).
-24. **Cleanup snapshots v1** — `DROP COLUMN prospect_score_v1, score_breakdown_v1` con backup previo. Manual/aprobación. El admin decide cuándo (ver alerta `scoring_v1_columns_present` en Health).
+21. **Performance Dashboard UI** — pantalla `/admin/performance`.
+22. **Restart actions UI + endpoints** — `POST /api/v1/admin/system/restart-{core,api}` con códigos tipados; botones en Health. Solo activos en `NODE_ENV='production'` (post-Fase 48).
+23. **Cleanup snapshots v1** — `DROP COLUMN prospect_score_v1, score_breakdown_v1` con backup previo. Manual/aprobación. El admin decide cuándo (ver alerta `scoring_v1_columns_present` en Health).
 
 **Bloque 7 — Enriquecimiento incremental + refinamientos scoring (cierre del producto):**
 27. **Fase 40** — Full-text search.
@@ -1389,20 +1388,6 @@ CREATE INDEX llm_usage_log_feature ON llm_usage_log(feature, occurred_at DESC);
 3. Worker: `google_places_budget_spent += 0.02 × requests_made` al finalizar cada run con GP
 4. UI: barra de presupuesto en Pipeline Manager → Estado del servidor
 5. Alerta: badge rojo si `budget_remaining < alert_threshold`; incluir en payload de webhook
-
----
-
-### Fase 45 — Change detection en re-enrich
-
-**Por qué:** el sistema re-enriquece leads stale pero no detecta cambios. Un negocio que lanzó una web nueva debería moverse de `web_nuevo` a `rediseno` automáticamente. Ver `ARCHITECTURE_FUTURE.md § Change detection en re-enrich`.
-
-**Prerequisito:** Fase 45-pre (tabla `pipeline_errors` ya existe — alimenta la sección de errores del Performance Dashboard).
-
-**Implementación:**
-1. Función `diffFootprint(prev, next): EnrichmentDiff` en `src/modules/enrichment/index.ts`
-2. Si diff tiene cambios críticos (website appeared, contact_tier cambió) → tag `state-changed-significant` + re-score automático
-3. Persistir `digital_footprint.last_change_diff: EnrichmentDiff`
-4. Monitor de ejecución muestra "N leads con cambios significativos" post-run
 
 ---
 

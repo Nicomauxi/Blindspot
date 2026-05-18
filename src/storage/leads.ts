@@ -1,12 +1,20 @@
 import { getSupabase } from "../shared/supabase.js";
 import { getLogger } from "../shared/logger.js";
-import type { DigitalFootprint, DigitalFootprintEnriched, Lead, LeadUpsert, SocialSearch } from "../shared/types.js";
+import type { DigitalFootprint, DigitalFootprintEnriched, EnrichmentDiff, Lead, LeadUpsert, SocialSearch } from "../shared/types.js";
 import { calculateContactReliability } from "../modules/scoring/confidence.js";
 import type { BuyerTypeScore, ScoreResult } from "../modules/scoring/types.js";
 import { normalizeUruguayMobile } from "../modules/enrichment/parsers/whatsapp.js";
 import { MAX_CONTACT_EMAILS } from "../modules/enrichment/index.js";
+import {
+  appendEnrichmentChange,
+  createEnrichmentDiff,
+  hasCriticalEnrichmentChange,
+} from "../modules/enrichment/change-detection.js";
 import { isFranchise, normalizeName } from "../modules/discovery/deduplication.js";
 import { classifyUruguayPhone } from "../shared/phone.js";
+import { scoreLead } from "../modules/scoring/index.js";
+import { computeAllBuyerScores } from "../modules/scoring/buyer-types.js";
+import { getAdminServicePricing } from "./service-pricing.js";
 
 export interface UpsertResult {
   inserted: Lead[];
@@ -15,6 +23,7 @@ export interface UpsertResult {
 const DUPLICATE_TAG = "possible-duplicate";
 const DUPLICATE_SECONDARY_TAG = "duplicate-secondary";
 const FRANCHISE_TAG = "franchise-detected";
+const SIGNIFICANT_CHANGE_TAG = "state-changed-significant";
 const FALLBACK_BLOCKED_EMAIL_DOMAINS = new Set([
   "thinkit.com.uy",
   "smartserv.com.uy",
@@ -291,6 +300,26 @@ export function cleanupMergedTagsForEnrichment(
 
 function extractInferredState(footprint: DigitalFootprint): Lead["inferred_state"] {
   return footprint.skipped === true ? null : (footprint.inferred_state ?? null);
+}
+
+function withoutLastChangeDiff(footprint: DigitalFootprint): DigitalFootprint {
+  if (!("last_change_diff" in footprint)) return footprint;
+  const { last_change_diff: _ignored, ...rest } = footprint;
+  return rest;
+}
+
+function currentContactTier(scoreBreakdown: Record<string, unknown> | null): string | null {
+  const value = scoreBreakdown?.["contact_tier"];
+  return typeof value === "string" ? value : null;
+}
+
+function applyLastChangeDiff(
+  footprint: DigitalFootprint,
+  diff: EnrichmentDiff | null
+): DigitalFootprint {
+  const base = withoutLastChangeDiff(footprint);
+  if (diff === null) return base;
+  return { ...base, last_change_diff: diff };
 }
 
 function canonicalPhoneValue(canonicalFields: Lead["canonical_fields"]): string | null {
@@ -601,17 +630,19 @@ export async function updateLeadEnrichment(
   footprint: DigitalFootprint,
   newTags: string[],
   whatsappFromSite: string | null
-): Promise<void> {
+): Promise<{ last_change_diff: EnrichmentDiff | null; critical_change: boolean; rescored: boolean }> {
   const db = getSupabase();
   const { data: current, error: fetchErr } = await db
     .from("leads")
-    .select("tags, whatsapp, phone, canonical_fields, digital_footprint")
+    .select("tags, whatsapp, phone, canonical_fields, digital_footprint, score_breakdown")
     .eq("id", leadId)
     .single();
   if (fetchErr) throw new Error(`Failed to load lead ${leadId}: ${fetchErr.message}`);
 
   const existingFootprint = (current?.digital_footprint as DigitalFootprint | null) ?? null;
-  const mergedFootprint = mergeFootprint(existingFootprint, footprint);
+  const mergedFootprint = withoutLastChangeDiff(mergeFootprint(existingFootprint, footprint));
+  const previousContactTier = currentContactTier((current?.score_breakdown as Record<string, unknown> | null) ?? null);
+  let changeDiff = createEnrichmentDiff(leadId, existingFootprint, mergedFootprint);
 
   const currentTags: string[] = Array.isArray(current?.tags) ? (current?.tags as string[]) : [];
   const mergedTags = cleanupMergedTagsForEnrichment([...currentTags, ...newTags], mergedFootprint);
@@ -627,7 +658,7 @@ export async function updateLeadEnrichment(
   const canonicalFields = (current?.canonical_fields as Lead["canonical_fields"]) ?? null;
   const finalTags = dedupeTags(
     mergeClassificationTags(mergedTags, currentPhone, canonicalFields, mergedFootprint)
-  );
+  ).filter((tag) => tag !== SIGNIFICANT_CHANGE_TAG);
   const contact_reliability_score = calculateContactReliability(
     contactReliabilityLead(
       currentPhone,
@@ -655,7 +686,7 @@ export async function updateLeadEnrichment(
           select: (columns: string) => {
             single: () => Promise<{ data: unknown; error: { message: string } | null }>;
           };
-        }).select("id").single()
+        }).select("*").single()
       : updateQuery
   ) as { data?: unknown; error: { message: string } | null };
 
@@ -664,6 +695,66 @@ export async function updateLeadEnrichment(
   if ("data" in updateResult && updateResult.data === null) {
     throw new Error(`Supabase returned no row for leadId=${leadId}`);
   }
+
+  let rescored = false;
+  const updatedLead = ("data" in updateResult ? updateResult.data : null) as Lead | null;
+
+  if (updatedLead && changeDiff && hasCriticalEnrichmentChange(changeDiff)) {
+    const scoreResult = scoreLead(updatedLead);
+    const nextContactTier = currentContactTier(
+      scoreResult.score_breakdown as unknown as Record<string, unknown>
+    );
+    if (previousContactTier !== nextContactTier) {
+      changeDiff = appendEnrichmentChange(changeDiff, leadId, {
+        field: "contact_tier",
+        from: previousContactTier,
+        to: nextContactTier,
+        significance: "critical",
+      });
+    }
+
+    await updateLeadScore(leadId, scoreResult);
+    const deliverySystemCostUyu = await getAdminServicePricing("delivery_system");
+    const buyerScores = computeAllBuyerScores(
+      {
+        ...updatedLead,
+        business_quality_score: scoreResult.business_quality_score,
+        digital_gap_score: scoreResult.digital_gap_score,
+        systems_gap_score: scoreResult.systems_gap_score,
+        prospect_score: scoreResult.prospect_score,
+        scoring_version: scoreResult.scoring_version,
+        contact_ready: scoreResult.contact_ready,
+        score_breakdown: scoreResult.score_breakdown as unknown as Record<string, unknown>,
+        systems_gap_breakdown: scoreResult.systems_gap_breakdown as unknown as Record<string, unknown>,
+      },
+      deliverySystemCostUyu != null ? { deliverySystemCostUyu } : {}
+    );
+    await upsertBuyerScores(leadId, buyerScores);
+    rescored = true;
+  }
+
+  const criticalChange = hasCriticalEnrichmentChange(changeDiff);
+  const finalDiffFootprint = applyLastChangeDiff(mergedFootprint, changeDiff);
+  const finalPersistedTags = dedupeTags(
+    criticalChange ? [...finalTags, SIGNIFICANT_CHANGE_TAG] : finalTags
+  );
+
+  const { error: diffPersistError } = await db
+    .from("leads")
+    .update({
+      digital_footprint: finalDiffFootprint,
+      tags: finalPersistedTags,
+    })
+    .eq("id", leadId);
+  if (diffPersistError) {
+    throw new Error(`Failed to persist change diff for lead ${leadId}: ${diffPersistError.message}`);
+  }
+
+  return {
+    last_change_diff: changeDiff,
+    critical_change: criticalChange,
+    rescored,
+  };
 }
 
 export async function updateLeadSocialSearch(
