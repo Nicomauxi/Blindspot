@@ -485,6 +485,8 @@ export interface LeadCompanyData {
   detected_sub_niche?: string;
   sub_niche_source?: "keyword" | "llm";
   sub_niche_detected_at?: string;
+  tipo_operador?: string;
+  tipo_operador_sub_niche?: string;
 }
 
 // ─── Multi-source architecture ────────────────────────────────────────────────
