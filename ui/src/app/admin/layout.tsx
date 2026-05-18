@@ -10,6 +10,7 @@ const navLinks = [
   { href: "/admin/leads", label: "Lead Explorer" },
   { href: "/admin/outreach", label: "Outreach" },
   { href: "/admin/segments", label: "Segmentos" },
+  { href: "/admin/discovery", label: "Discovery CC" },
   { href: "/admin/users", label: "Usuarios" },
   { href: "/admin/health", label: "Estado del sistema" },
   { href: "/admin/pipeline", label: "Pipeline Manager" },

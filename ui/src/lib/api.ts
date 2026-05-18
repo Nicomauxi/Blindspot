@@ -357,6 +357,57 @@ export async function patchOutreach(
   }, token);
 }
 
+// Discovery
+export type DiscoveryJob = {
+  id: string;
+  source: string;
+  location: string;
+  niche: string | null;
+  profile: string | null;
+  max_results: number;
+  cpu_budget: string;
+  status: "queued" | "running" | "completed" | "failed" | "paused" | "cancelled";
+  triggered_by: string;
+  leads_found: number | null;
+  leads_new: number | null;
+  started_at: string | null;
+  completed_at: string | null;
+  error_message: string | null;
+  created_at: string;
+};
+
+export async function listDiscoveryJobs(
+  token: string,
+  params: { status?: string; cursor?: string; limit?: number } = {}
+) {
+  const qp = new URLSearchParams();
+  if (params.status) qp.set("status", params.status);
+  if (params.cursor) qp.set("cursor", params.cursor);
+  if (params.limit) qp.set("limit", String(params.limit));
+  return request<PaginatedResponse<DiscoveryJob>>(`/api/v1/discovery/jobs?${qp}`, {}, token);
+}
+
+export async function createDiscoveryJob(
+  token: string,
+  data: { source: string; location: string; niche?: string; max_results?: number; cpu_budget?: string }
+) {
+  return request<SingleResponse<DiscoveryJob>>("/api/v1/discovery/jobs", {
+    method: "POST",
+    body: JSON.stringify(data),
+  }, token);
+}
+
+export async function patchDiscoveryJob(
+  token: string,
+  id: string,
+  action: "pause" | "resume" | "cancel"
+) {
+  return request<SingleResponse<DiscoveryJob>>(`/api/v1/discovery/jobs/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ action }),
+  }, token);
+}
+
 // Stats / Segments
 export type SegmentEntry = { value: string; count: number; avg_score: number | null };
 export type SegmentsData = {
