@@ -63,4 +63,47 @@ export async function statsRoutes(app: FastifyInstance): Promise<void> {
 
     return reply.status(200).send({ data: data ?? [] });
   });
+
+  // GET /stats/segments — segment breakdown by niche, tier, source
+  app.get("/stats/segments", { preHandler: requireAuth }, async (request, reply) => {
+    const authUser = getAuthUser(request);
+    const db = getDb();
+    const view = authUser.role === "cm" ? "lead_dashboard" : "lead_dashboard";
+
+    const [nicheRes, tierRes, sourceRes] = await Promise.all([
+      db.from(view).select("niche, prospect_score, contact_tier"),
+      db.from(view).select("contact_tier, prospect_score").not("contact_tier", "is", null),
+      db.from(view).select("source, prospect_score").not("source", "is", null),
+    ]);
+
+    type Row = { niche: string | null; prospect_score: number | null; contact_tier: string | null; source?: string };
+
+    function aggregate(rows: Row[], key: keyof Row) {
+      const map: Record<string, { count: number; total_score: number; count_scored: number }> = {};
+      for (const row of rows) {
+        const val = String(row[key] ?? "unknown");
+        if (!map[val]) map[val] = { count: 0, total_score: 0, count_scored: 0 };
+        map[val].count++;
+        if (row.prospect_score != null) {
+          map[val].total_score += row.prospect_score;
+          map[val].count_scored++;
+        }
+      }
+      return Object.entries(map)
+        .map(([value, stats]) => ({
+          value,
+          count: stats.count,
+          avg_score: stats.count_scored > 0 ? Math.round(stats.total_score / stats.count_scored) : null,
+        }))
+        .sort((a, b) => b.count - a.count);
+    }
+
+    return reply.status(200).send({
+      data: {
+        by_niche: aggregate((nicheRes.data ?? []) as Row[], "niche"),
+        by_tier: aggregate((tierRes.data ?? []) as Row[], "contact_tier"),
+        by_source: aggregate((sourceRes.data ?? []) as Row[], "source"),
+      },
+    });
+  });
 }
