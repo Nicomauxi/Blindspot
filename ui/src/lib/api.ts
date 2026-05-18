@@ -481,6 +481,126 @@ export async function getCostsHistory(token: string) {
   return request<{ data: CostsHistory }>("/api/v1/admin/costs/history", {}, token);
 }
 
+// Performance
+export type PerformanceOverview = {
+  days: number;
+  runs: {
+    total: number;
+    successful: number;
+    failed: number;
+    partial: number;
+    aborted: number;
+    pending: number;
+    running: number;
+  };
+  duration: {
+    avg_min: number;
+    total_hours: number;
+  };
+  per_phase: {
+    phase: string;
+    avg_min: number;
+    pct_of_total: number;
+    runs: number;
+  }[];
+  throughput: {
+    enrich_per_hour: number;
+    score_per_hour: number;
+    discovery_per_min: number;
+  };
+  success_rate_per_source: {
+    source: string;
+    success: number;
+    total: number;
+    errors: number;
+    pct: number;
+  }[];
+  ts: string;
+};
+
+export type PerformanceErrorRow = {
+  id: string;
+  ts: string;
+  run_id: string | null;
+  phase: string;
+  source: string | null;
+  lead_id: string | null;
+  error_type: string;
+  message: string;
+  stack: string | null;
+  recovered: boolean;
+};
+
+export type PerformanceQuality = {
+  run_id: string | null;
+  window: {
+    started_at: string;
+    completed_at: string | null;
+  } | null;
+  coverage: {
+    total_leads: number;
+    email_quality_pct: number;
+    phone_type_pct: number;
+    coords_pct: number;
+    inferred_state_pct: number;
+    contactable_tier_pct: number;
+  };
+  trend: {
+    day: string;
+    email_quality_pct: number;
+    phone_type_pct: number;
+    coords_pct: number;
+    inferred_state_pct: number;
+    contactable_tier_pct: number;
+  }[];
+  changes: {
+    significant_total: number;
+    score_up_15: number;
+    score_down_15: number;
+    tier_gained: number;
+    tier_lost: number;
+    new_hot: number;
+    by_field: { field: string; count: number }[];
+    significant_changes: {
+      lead_id: string;
+      name: string;
+      source: string | null;
+      changed_at: string;
+      field: string;
+      from: unknown;
+      to: unknown;
+      prospect_score: number | null;
+      contact_tier: string | null;
+    }[];
+  };
+  ts: string;
+};
+
+export async function getPerformanceOverview(token: string, days = 30) {
+  return request<{ data: PerformanceOverview }>(`/api/v1/admin/performance/overview?days=${days}`, {}, token);
+}
+
+export async function getPerformanceErrors(
+  token: string,
+  params: { days?: number; phase?: string; source?: string; error_type?: string; recovered?: boolean; limit?: number } = {}
+) {
+  const qp = new URLSearchParams();
+  if (params.days) qp.set("days", String(params.days));
+  if (params.phase) qp.set("phase", params.phase);
+  if (params.source) qp.set("source", params.source);
+  if (params.error_type) qp.set("error_type", params.error_type);
+  if (params.recovered !== undefined) qp.set("recovered", String(params.recovered));
+  if (params.limit) qp.set("limit", String(params.limit));
+  return request<{ data: PerformanceErrorRow[]; total: number }>(`/api/v1/admin/performance/errors?${qp}`, {}, token);
+}
+
+export async function getPerformanceQuality(token: string, params: { run_id?: string; days?: number } = {}) {
+  const qp = new URLSearchParams();
+  if (params.run_id) qp.set("run_id", params.run_id);
+  if (params.days) qp.set("days", String(params.days));
+  return request<{ data: PerformanceQuality }>(`/api/v1/admin/performance/quality?${qp}`, {}, token);
+}
+
 // Stats / Segments
 export type SegmentEntry = { value: string; count: number; avg_score: number | null };
 export type SegmentsData = {
