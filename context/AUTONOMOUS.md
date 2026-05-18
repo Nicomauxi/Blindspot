@@ -372,9 +372,9 @@ Cuando se llega a una stop condition, NO continuar al siguiente paso. En cambio:
 
 **Última actualización:** 2026-05-18
 
-**Sesiones autónomas completadas:** 10 (`Fase 49 — DB backup automatizado`, `Fase 22-pre — campos de versión y rollback de scoring`, `Fase 21 — PostGIS local + columna gps`, `Fase 47 — inferred_state a columna propia`, `Fase 15 — calidad de email + tipo de teléfono`, `Fase 6A — deduplicación cross-source para inserts nuevos`, `Fase 6B — reconciliación retroactiva local`, `Fase 22 — scoring v2 apply`, `Fase API-0 — schemas users/pipeline/outreach/audit_log`, `Fase 23 — core automation scheduler`)
+**Sesiones autónomas completadas:** 11 (`Fase 49 — DB backup automatizado`, `Fase 22-pre — campos de versión y rollback de scoring`, `Fase 21 — PostGIS local + columna gps`, `Fase 47 — inferred_state a columna propia`, `Fase 15 — calidad de email + tipo de teléfono`, `Fase 6A — deduplicación cross-source para inserts nuevos`, `Fase 6B — reconciliación retroactiva local`, `Fase 22 — scoring v2 apply`, `Fase API-0 — schemas users/pipeline/outreach/audit_log`, `Fase 23 — core automation scheduler`, `Fase API APIA+APIB — Fastify skeleton + auth + /health + /leads`)
 
-**Próxima fase a ejecutar:** Fase API (Fastify server en `api/`, sub-paquete APIA). Bloque 5 continúa: Fase API → Bloque 6.
+**Próxima fase a ejecutar:** Fase API sub-paquete APIC — `/api/v1/outreach*` endpoints (GET list, POST create, PATCH update). Bloque 5 continúa.
 
 **Orden por bloques (canónico — sincronizado con `ROADMAP_CANONICAL.md § Roadmap ejecutable`, 44 items 0–43):**
 - **Bloque 0:** Fase 49 (backup) — completada y verificada el 2026-05-17.
@@ -394,7 +394,7 @@ Cuando se llega a una stop condition, NO continuar al siguiente paso. En cambio:
 **Intervención humana todavía necesaria:** gasto externo / APIs billables, `pnpm add` o comandos bloqueados, research pendiente (IMM/DGI), revisión humana del reporte post-apply de `Fase 22` si se quiere recalibrar antes de API/UI, validación de data estacional para `Fase 42`, y acciones manuales de producción/cleanup como `Fase 48` y `Cleanup v1`. El resto debe continuar solo.
 
 **Estado conocido:**
-- Tests: 917 passing, 7 skipped, 77 files
+- Tests: 934 passing, 7 skipped, 81 files
 - Typecheck: limpio
 - DB invariantes: todos en 0 (verificado 2026-05-18)
 - Directiva de sesión 2026-05-18: continuar el roadmap sin pausas por etiquetas `approval/manual` aisladas. Frenar solo por bloqueo real de seguridad, gasto externo, research pendiente, contradicción documental o input humano realmente necesario.
@@ -413,6 +413,8 @@ Cuando se llega a una stop condition, NO continuar al siguiente paso. En cambio:
 - Fase API-0: migración `014_api_0_schema.sql` aplicada. Tablas creadas: `users` (con admin `admin@blindspot.local`), `pipeline_runs`, `pipeline_config` (singleton con `enabled=false`), `discovery_jobs`, `audit_log`, `lead_outreach`. Columna `leads.contacted_by uuid REFERENCES users(id)` agregada. Tests: 917 passing, invariantes DB todos en 0.
 - Fase 23: `src/start.ts` (entry point long-running), `PipelineScheduler` (cron + polling 60s/30s + configWatcher), `PgListener` (pg LISTEN pipeline_trigger con reconexión), `run-executor.ts` (executeRun + transitionToPending), `crash-recovery.ts` (recoverOrphanedRuns al boot), `scheduled-for.ts` (nextCronRun via cron-parser). Paquetes instalados: `node-cron`, `cron-parser`, `pg`. CLI `blindspot pipeline --run-all [--dry-run]`. Tests: 921 passing, typecheck limpio.
 - `src/package.json` creado con `"name": "core"`. `pnpm-workspace.yaml` + workspace completo se finaliza en Fase API cuando se crea `api/`.
+- Fase API APIA: `api/` creado como workspace, `buildServer()` con cors/helmet/rate-limit/jwt, `POST /auth/login`, `POST /auth/refresh`, `GET /api/v1/health`. Supabase client con NoopWebSocket, `requireAuth`/`requireAdmin` middleware con DB lookup fresh por request.
+- Fase API APIB: migración `015_lead_dashboard_view.sql` (VIEW `lead_dashboard` con LEFT JOIN LATERAL `lead_buyer_scores`). `GET /api/v1/leads` (cursor-based, CM filter intersection, fail-closed para `lead_filter=null`). `GET /api/v1/leads/:id` (404 para lead fuera del filtro del CM). Zod validation de query params. Tests: 934 passing, typecheck limpio.
 - Último commit previo a esta fase: 9ba5b13 (docs: quinta auditoría — 10 bugs estructurales y de lógica)
 
 **Contexto de la documentación:** los archivos context/ tienen 19 fixes de auditorías previas + reorganización 2026-05-16 (modelo "uso interno + socios"). Se eliminaron contradicciones C2–C5 detectadas en quinta auditoría:
