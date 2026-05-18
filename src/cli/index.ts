@@ -5,6 +5,7 @@ import { discoverCommand, collectOverride } from "./commands/discover.js";
 import { enrichCommand } from "./commands/enrich.js";
 import { heuristicRefreshCommand } from "./commands/heuristic-refresh.js";
 import { scoreCommand } from "./commands/score.js";
+import { scoreEvalCommand } from "./commands/score-eval.js";
 import { reportCommand } from "./commands/report.js";
 import { leadsListCommand } from "./commands/leads-list.js";
 import { vocabularyCommand } from "./commands/vocabulary.js";
@@ -13,6 +14,8 @@ import { runCommand } from "./commands/run.js";
 import { maintenanceCommand } from "./commands/maintenance.js";
 import { discoverExternalCommand } from "./commands/discover-external.js";
 import { inferStateCommand } from "./commands/infer-state.js";
+import { reconcileRetroactiveCommand } from "./commands/reconcile-retroactive.js";
+import { pipelineCommand } from "./commands/pipeline.js";
 
 const program = new Command();
 
@@ -141,6 +144,24 @@ program
       buyerTypes: opts.buyerTypes ?? false,
       ...(opts.buyerType ? { buyerType: opts.buyerType } : {}),
       dryRun: opts.dryRun ?? false,
+    });
+  });
+
+program
+  .command("score-eval")
+  .description("Simulate scoring v2 against the current v1 snapshot without persisting any DB changes")
+  .option("--output-dir <path>", "Output directory (default: ./reports/22-eval/<timestamp>/)")
+  .option("--top <number>", "Top-N size for comparison tables", "50")
+  .option("--gold-set-size <number>", "Bootstrap gold-set candidate count", "40")
+  .action(async (opts: {
+    outputDir?: string;
+    top: string;
+    goldSetSize: string;
+  }) => {
+    await scoreEvalCommand({
+      ...(opts.outputDir ? { outputDir: opts.outputDir } : {}),
+      top: opts.top,
+      goldSetSize: opts.goldSetSize,
     });
   });
 
@@ -288,6 +309,18 @@ program
     });
   });
 
+program
+  .command("reconcile-retroactive")
+  .description("Reconcile retroactive cross-source duplicates over existing local leads")
+  .option("--apply", "Apply the reconciliation instead of reporting dry-run candidates", false)
+  .option("--limit <number>", "Max groups to apply when --apply is used")
+  .action(async (opts: { apply?: boolean; limit?: string }) => {
+    await reconcileRetroactiveCommand({
+      apply: opts.apply ?? false,
+      ...(opts.limit !== undefined ? { limit: Number(opts.limit) } : {}),
+    });
+  });
+
 program.addCommand(runCommand);
 program.addCommand(maintenanceCommand);
 
@@ -311,6 +344,8 @@ program
       concurrency: opts.concurrency,
     });
   });
+
+program.addCommand(pipelineCommand);
 
 try {
   getScoringConfig();
