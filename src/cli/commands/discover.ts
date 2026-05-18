@@ -8,6 +8,7 @@ import { enrichWithDetails } from "../../modules/discovery/google-data-enricher.
 import { applyProfileFilter, normalizeNiche, tagCandidate } from "../../modules/discovery/filters.js";
 import { getDiscoveryConfig, getProfileConfig } from "../../modules/discovery/config.js";
 import { createRun, completeRun, failRun } from "../../storage/runs.js";
+import { incrementGooglePlacesBudgetSpent } from "../../storage/pipeline-config.js";
 import { upsertLeads, loadAllLeads } from "../../storage/leads.js";
 import { rebuildVocabularyForNiche } from "../../storage/vocabulary.js";
 import { loadAllRuntime } from "../../storage/system-lists.js";
@@ -308,15 +309,18 @@ export async function discoverCommand(rawArgs: {
 
     // 7. Close run with correct HTTP request count (not candidate count)
     const duration_ms = Date.now() - startedAt;
+    const runCostUsd = estimatePlacesCostUsd(textSearchRequestCount, detailsRequestCount);
     await completeRun(run.id, {
       places_requests: textSearchRequestCount + detailsRequestCount,
-      estimated_cost_usd: estimatePlacesCostUsd(textSearchRequestCount, detailsRequestCount),
+      estimated_cost_usd: runCostUsd,
       leads_discovered: passed.length,
       leads_new: inserted.filter((l) => l.passed_filter).length,
       leads_updated: updated.filter((l) => l.passed_filter).length,
       leads_rejected: rejected.length,
       duration_ms,
     });
+    // Best-effort: increment budget tracker (non-blocking)
+    incrementGooglePlacesBudgetSpent(runCostUsd).catch(() => undefined);
 
     // 8. Best-effort vocabulary rebuild using ALL leads for the niche (GAP 3).
     //    Uses loadAllLeads so frequencies are computed from the full corpus,

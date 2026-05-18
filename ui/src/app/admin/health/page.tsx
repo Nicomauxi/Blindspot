@@ -1,21 +1,23 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { getHealth, type HealthStatus } from "@/lib/api";
+import { getHealth, getCostsOverview, type HealthStatus, type BudgetStatus } from "@/lib/api";
 import { useAuthStore } from "@/lib/auth-store";
 import { cn, formatDate, formatRelative } from "@/lib/utils";
 
 export default function HealthPage() {
   const token = useAuthStore((s) => s.token);
   const [health, setHealth] = useState<HealthStatus | null>(null);
+  const [budget, setBudget] = useState<BudgetStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
 
   const refresh = useCallback(async () => {
     if (!token) return;
     try {
-      const data = await getHealth(token);
+      const [data, costs] = await Promise.all([getHealth(token), getCostsOverview(token).catch(() => null)]);
       setHealth(data);
+      setBudget(costs?.data.google_places ?? null);
       setLastRefresh(new Date());
       setError(null);
     } catch (err) {
@@ -96,6 +98,15 @@ export default function HealthPage() {
               </div>
             </div>
           </div>
+
+          {/* Google Places budget badge */}
+          {budget && budget.over_alert && (
+            <div className="bg-red-50 border border-red-200 text-red-700 rounded px-4 py-3 text-sm flex items-center gap-2">
+              <span>Presupuesto Google Places bajo:</span>
+              <span className="font-semibold">${budget.budget_remaining.toFixed(2)} restantes</span>
+              <span className="text-red-400">(umbral: ${budget.alert_threshold.toFixed(2)})</span>
+            </div>
+          )}
 
           {/* Last run */}
           {health.last_run && (

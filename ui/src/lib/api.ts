@@ -408,6 +408,34 @@ export async function patchDiscoveryJob(
   }, token);
 }
 
+// Costs
+export type BudgetStatus = {
+  budget_total: number;
+  budget_spent: number;
+  budget_remaining: number;
+  alert_threshold: number;
+  over_alert: boolean;
+};
+
+export type CostsOverview = {
+  google_places: BudgetStatus | null;
+  llm: { total_calls: number; total_cost_usd: number };
+  ts: string;
+};
+
+export type CostsHistory = {
+  llm_by_month: { month: string; cost_usd: number; calls: number; tokens: number }[];
+  google_places_runs: { id: string; niche: string; location: string; cost_usd: number; places_requests: number; finished_at: string }[];
+};
+
+export async function getCostsOverview(token: string) {
+  return request<{ data: CostsOverview }>("/api/v1/admin/costs/overview", {}, token);
+}
+
+export async function getCostsHistory(token: string) {
+  return request<{ data: CostsHistory }>("/api/v1/admin/costs/history", {}, token);
+}
+
 // Stats / Segments
 export type SegmentEntry = { value: string; count: number; avg_score: number | null };
 export type SegmentsData = {
