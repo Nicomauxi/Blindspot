@@ -1,7 +1,7 @@
 import { readFileSync } from "fs";
 import { load } from "js-yaml";
 import { z } from "zod";
-import type { DiscoveryConfig, ProfileConfig } from "../../shared/types.js";
+import type { DiscoveryConfig, ProfileConfig, ScrapingConfig } from "../../shared/types.js";
 
 const ProfileConfigSchema: z.ZodType<ProfileConfig> = z
   .object({
@@ -21,12 +21,28 @@ const ProfileConfigSchema: z.ZodType<ProfileConfig> = z
     }
   });
 
+const ScrapingConfigSchema: z.ZodType<ScrapingConfig> = z.object({
+  discovery_ua_pool: z.array(z.string()).min(1),
+  discovery_delay_ms: z.tuple([z.number().int().min(0), z.number().int().min(0)]),
+  discovery_max_retries: z.number().int().min(0),
+  social_ua_pool: z.array(z.string()).min(1),
+  social_delay_ms: z.tuple([z.number().int().min(0), z.number().int().min(0)]),
+  social_max_retries: z.number().int().min(0),
+  proxy_enabled: z.boolean(),
+});
+
 const DiscoveryConfigSchema: z.ZodType<DiscoveryConfig> = z.object({
   version: z.literal(1),
   profiles: z.record(z.string(), ProfileConfigSchema),
   social_domains: z.array(z.string()),
   persist_rejected: z.boolean(),
   source_refresh: z.record(z.string(), z.number().int().positive()).optional(),
+  deduplication: z.object({
+    geo_radius_meters: z.number().int().positive().optional(),
+    name_threshold_online: z.number().min(0).max(1).optional(),
+    name_threshold_retroactive: z.number().min(0).max(1).optional(),
+  }).optional(),
+  scraping: ScrapingConfigSchema.optional(),
 });
 
 let cached: DiscoveryConfig | null = null;
@@ -57,6 +73,36 @@ export function resetDiscoveryConfigCache(): void {
 
 export function getSourceRefreshDays(source: string, fallback = 30): number {
   return getDiscoveryConfig().source_refresh?.[source] ?? fallback;
+}
+
+export function getDedupGeoRadiusMeters(fallback = 500): number {
+  return getDiscoveryConfig().deduplication?.geo_radius_meters ?? fallback;
+}
+
+export function getOnlineDedupThreshold(fallback = 0.85): number {
+  return getDiscoveryConfig().deduplication?.name_threshold_online ?? fallback;
+}
+
+export function getRetroactiveDedupThreshold(fallback = 0.9): number {
+  return getDiscoveryConfig().deduplication?.name_threshold_retroactive ?? fallback;
+}
+
+const DEFAULT_SCRAPING: ScrapingConfig = {
+  discovery_ua_pool: [
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+  ],
+  discovery_delay_ms: [800, 2500],
+  discovery_max_retries: 3,
+  social_ua_pool: [
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+  ],
+  social_delay_ms: [1500, 4000],
+  social_max_retries: 2,
+  proxy_enabled: false,
+};
+
+export function getScrapingConfig(): ScrapingConfig {
+  return getDiscoveryConfig().scraping ?? DEFAULT_SCRAPING;
 }
 
 export function getProfileConfig(

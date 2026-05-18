@@ -8,8 +8,25 @@ vi.mock("../../src/shared/config.js", () => ({
   getConfig: mockGetConfig,
 }));
 
-vi.mock("playwright", () => ({
+vi.mock("../../src/modules/discovery/config.js", () => ({
+  getScrapingConfig: vi.fn(() => ({
+    social_ua_pool: ["Mozilla/5.0 Test UA"],
+    social_delay_ms: [0, 0],
+    social_max_retries: 0,
+    discovery_ua_pool: ["Mozilla/5.0 Test UA"],
+    discovery_delay_ms: [0, 0],
+    discovery_max_retries: 0,
+    proxy_enabled: false,
+  })),
+}));
+
+vi.mock("puppeteer-extra-plugin-stealth", () => ({
+  default: vi.fn(() => ({})),
+}));
+
+vi.mock("playwright-extra", () => ({
   chromium: {
+    use: vi.fn(),
     executablePath: vi.fn(() => "/usr/bin/chromium"),
     launch: vi.fn(async () => ({
       newContext: vi.fn(async () => ({})),
@@ -17,7 +34,7 @@ vi.mock("playwright", () => ({
   },
 }));
 
-import { chromium } from "playwright";
+import { chromium } from "playwright-extra";
 import {
   openSocialEnrichBrowser,
   resolvePlaywrightExecutablePath,

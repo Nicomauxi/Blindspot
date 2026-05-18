@@ -12,8 +12,11 @@ import {
   loadAllLeads,
   loadLeadsByRunId,
   updateLeadSocialSearch,
+  updateLeadSocialEnrichStatus,
 } from "../../storage/leads.js";
 import { getSocialSearchRefreshDays, isUruguayMobilePhone } from "../enrichment/social-search.js";
+import { getScrapingConfig } from "../discovery/config.js";
+import { randomBetween } from "../../shared/scraping.js";
 import { openSocialEnrichBrowser } from "./browser.js";
 import { extractFacebookProfile } from "./facebook.js";
 import { extractInstagramProfile } from "./instagram.js";
@@ -31,6 +34,7 @@ export interface SocialEnrichStats {
   processed: number;
   skippedFresh: number;
   errors: number;
+  blocked: number;
 }
 
 const DEFAULT_LIMIT = 10;
@@ -84,14 +88,29 @@ function tagsForResult(
   return { tags, whatsapp };
 }
 
+const BLOCKED_SIGNALS = ["blocked", "captcha", "denied", "403", "checkpoint"];
+
+function isBlockedError(err: unknown): boolean {
+  const msg = (err instanceof Error ? err.message : String(err)).toLowerCase();
+  return BLOCKED_SIGNALS.some((s) => msg.includes(s));
+}
+
 async function processLead(
   lead: Lead,
-  context: Awaited<ReturnType<typeof openSocialEnrichBrowser>>["context"]
-): Promise<{ processed: boolean; error: boolean }> {
+  context: Awaited<ReturnType<typeof openSocialEnrichBrowser>>["context"],
+  sleepFn: (ms: number) => Promise<void>
+): Promise<{ processed: boolean; error: boolean; blocked: boolean }> {
+  const scrapingCfg = getScrapingConfig();
   const page = await context.newPage();
   try {
     const facebookUrl = selectedHeuristicUrl(lead, "facebook");
     const instagramUrl = selectedHeuristicUrl(lead, "instagram");
+
+    if (facebookUrl || instagramUrl) {
+      const delayMs = randomBetween(scrapingCfg.social_delay_ms[0], scrapingCfg.social_delay_ms[1]);
+      await sleepFn(delayMs);
+    }
+
     const facebook = facebookUrl
       ? await extractFacebookProfile(page, facebookUrl, lead)
       : null;
@@ -107,11 +126,17 @@ async function processLead(
     };
     const derived = tagsForResult(facebook, instagram);
     await updateLeadSocialSearch(lead.id, socialSearch, derived.tags, derived.whatsapp);
-    return { processed: true, error: false };
+    await updateLeadSocialEnrichStatus(lead.id, "ok");
+    return { processed: true, error: false, blocked: false };
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
+    if (isBlockedError(err)) {
+      getLogger().warn({ leadId: lead.id }, "social enrich blocked for lead");
+      await updateLeadSocialEnrichStatus(lead.id, "blocked").catch(() => {});
+      return { processed: false, error: false, blocked: true };
+    }
     getLogger().warn({ leadId: lead.id, err: msg }, "social enrich failed for lead");
-    return { processed: false, error: true };
+    return { processed: false, error: true, blocked: false };
   } finally {
     await page.close();
   }
@@ -141,17 +166,22 @@ export async function runSocialEnrich(opts: SocialEnrichOptions): Promise<Social
     "Starting social enrich"
   );
 
+  const scrapingCfg = getScrapingConfig();
+  const sleepFn = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
   const session = await openSocialEnrichBrowser();
   let processed = 0;
   let errors = 0;
+  let blocked = 0;
   try {
     const limit = pLimit(getConcurrency());
     await Promise.all(
       selected.map((lead) =>
         limit(async () => {
-          const result = await processLead(lead, session.context);
+          const result = await processLead(lead, session.context, sleepFn);
           if (result.processed) processed += 1;
           if (result.error) errors += 1;
+          if (result.blocked) blocked += 1;
         })
       )
     );
@@ -160,11 +190,14 @@ export async function runSocialEnrich(opts: SocialEnrichOptions): Promise<Social
     await session.browser.close();
   }
 
+  log.info({ processed, errors, blocked, socialDelayMs: scrapingCfg.social_delay_ms }, "Social enrich complete");
+
   return {
     loaded: loaded.length,
     selected: selected.length,
     processed,
     skippedFresh: freshSkipped.length,
     errors,
+    blocked,
   };
 }

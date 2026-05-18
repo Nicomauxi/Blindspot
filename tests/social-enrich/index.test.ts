@@ -15,6 +15,20 @@ vi.mock("../../src/storage/leads.js", () => ({
   loadAllLeads: vi.fn(),
   loadLeadsByRunId: vi.fn(),
   updateLeadSocialSearch: vi.fn(),
+  updateLeadSocialEnrichStatus: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("../../src/modules/discovery/config.js", () => ({
+  getScrapingConfig: vi.fn(() => ({
+    social_ua_pool: ["Mozilla/5.0 Test UA"],
+    social_delay_ms: [0, 0],
+    social_max_retries: 0,
+    discovery_ua_pool: ["Mozilla/5.0 Test UA"],
+    discovery_delay_ms: [0, 0],
+    discovery_max_retries: 0,
+    proxy_enabled: false,
+  })),
+  getSocialSearchRefreshDays: vi.fn(() => 30),
 }));
 
 vi.mock("../../src/modules/social-enrich/browser.js", () => ({
@@ -208,12 +222,28 @@ describe("runSocialEnrich", () => {
       makeLead({ id: "ok" }),
     ]);
     vi.mocked(extractFacebookProfile)
-      .mockRejectedValueOnce(new Error("blocked"))
+      .mockRejectedValueOnce(new Error("network timeout"))
       .mockResolvedValueOnce(null);
 
     const result = await runSocialEnrich({ run: RUN_ID, limit: 10, force: true });
 
     expect(result.errors).toBe(1);
+    expect(result.processed).toBe(1);
+  });
+
+  it("counts blocked leads separately from errors", async () => {
+    vi.mocked(loadLeadsByRunId).mockResolvedValue([
+      makeLead({ id: "blocked-lead" }),
+      makeLead({ id: "ok-lead" }),
+    ]);
+    vi.mocked(extractFacebookProfile)
+      .mockRejectedValueOnce(new Error("403 blocked"))
+      .mockResolvedValueOnce(null);
+
+    const result = await runSocialEnrich({ run: RUN_ID, limit: 10, force: true });
+
+    expect(result.blocked).toBe(1);
+    expect(result.errors).toBe(0);
     expect(result.processed).toBe(1);
   });
 });

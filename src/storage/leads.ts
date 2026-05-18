@@ -1,10 +1,12 @@
 import { getSupabase } from "../shared/supabase.js";
 import { getLogger } from "../shared/logger.js";
 import type { DigitalFootprint, DigitalFootprintEnriched, Lead, LeadUpsert, SocialSearch } from "../shared/types.js";
+import { calculateContactReliability } from "../modules/scoring/confidence.js";
 import type { BuyerTypeScore, ScoreResult } from "../modules/scoring/types.js";
 import { normalizeUruguayMobile } from "../modules/enrichment/parsers/whatsapp.js";
 import { MAX_CONTACT_EMAILS } from "../modules/enrichment/index.js";
 import { isFranchise, normalizeName } from "../modules/discovery/deduplication.js";
+import { classifyUruguayPhone } from "../shared/phone.js";
 
 export interface UpsertResult {
   inserted: Lead[];
@@ -287,6 +289,99 @@ export function cleanupMergedTagsForEnrichment(
   return Array.from(set);
 }
 
+function extractInferredState(footprint: DigitalFootprint): Lead["inferred_state"] {
+  return footprint.skipped === true ? null : (footprint.inferred_state ?? null);
+}
+
+function canonicalPhoneValue(canonicalFields: Lead["canonical_fields"]): string | null {
+  if (!canonicalFields || typeof canonicalFields !== "object") return null;
+
+  const directPhone = canonicalFields["phone"];
+  if (typeof directPhone === "string") return directPhone;
+  if (
+    directPhone &&
+    typeof directPhone === "object" &&
+    "value" in directPhone &&
+    typeof directPhone.value === "string"
+  ) {
+    return directPhone.value;
+  }
+
+  return null;
+}
+
+function classificationTags(
+  leadPhone: string | null,
+  canonicalFields: Lead["canonical_fields"],
+  footprint: DigitalFootprint
+): string[] {
+  const tags: string[] = [];
+  const phoneTypes = [
+    classifyUruguayPhone(leadPhone),
+    classifyUruguayPhone(canonicalPhoneValue(canonicalFields)),
+    ...(footprint.skipped === true ? [] : (footprint.phone_classification ?? [])),
+  ];
+
+  if (phoneTypes.some((phone) => phone.type === "mobile")) tags.push("mobile-phone");
+  if (phoneTypes.some((phone) => phone.type === "landline")) tags.push("landline-phone");
+
+  if (
+    footprint.skipped !== true &&
+    Array.isArray(footprint.email_quality) &&
+    footprint.email_quality.length > 0 &&
+    footprint.email_quality.every((email) => email.mx_valid === false)
+  ) {
+    tags.push("email-no-mx");
+  }
+
+  return tags;
+}
+
+function mergeClassificationTags(
+  tags: string[],
+  leadPhone: string | null,
+  canonicalFields: Lead["canonical_fields"],
+  footprint: DigitalFootprint
+): string[] {
+  const set = new Set(tags);
+  set.delete("mobile-phone");
+  set.delete("landline-phone");
+  set.delete("email-no-mx");
+
+  for (const tag of classificationTags(leadPhone, canonicalFields, footprint)) {
+    set.add(tag);
+  }
+
+  return Array.from(set);
+}
+
+function contactReliabilityLead(
+  leadPhone: string | null,
+  canonicalFields: Lead["canonical_fields"],
+  tags: string[],
+  whatsapp: string | null,
+  footprint: DigitalFootprint
+): Pick<
+  Lead,
+  "name" | "address" | "rating" | "phone" | "website" | "whatsapp" |
+  "tags" | "digital_footprint" | "canonical_fields" |
+  "source_confidence" | "corroborating_sources"
+> {
+  return {
+    name: "",
+    address: null,
+    rating: null,
+    phone: leadPhone,
+    website: null,
+    whatsapp,
+    tags,
+    digital_footprint: footprint,
+    canonical_fields: canonicalFields,
+    source_confidence: null,
+    corroborating_sources: [],
+  };
+}
+
 export async function upsertLeads(
   items: LeadUpsert[],
   runId: string,
@@ -488,11 +583,15 @@ export function mergeFootprint(
   const prevEmails = existing.contact_emails ?? [];
   const nextEmails = fresh.contact_emails ?? [];
   const contact_emails = nextEmails.length > 0 ? nextEmails : prevEmails;
+  const email_quality = nextEmails.length > 0
+    ? fresh.email_quality
+    : existing.email_quality;
 
   return {
     ...fresh,
     ...(phone_confirmed !== undefined ? { phone_confirmed } : {}),
     contact_emails,
+    ...(email_quality !== undefined ? { email_quality } : {}),
     ...(social_search !== null ? { social_search } : {}),
   };
 }
@@ -506,7 +605,7 @@ export async function updateLeadEnrichment(
   const db = getSupabase();
   const { data: current, error: fetchErr } = await db
     .from("leads")
-    .select("tags, whatsapp, digital_footprint")
+    .select("tags, whatsapp, phone, canonical_fields, digital_footprint")
     .eq("id", leadId)
     .single();
   if (fetchErr) throw new Error(`Failed to load lead ${leadId}: ${fetchErr.message}`);
@@ -524,12 +623,27 @@ export async function updateLeadEnrichment(
       !mergedTags.includes("whatsapp-confirmed")) {
     mergedTags.push("whatsapp-derived");
   }
-  const finalTags = dedupeTags(mergedTags);
+  const currentPhone = (current?.phone as string | null) ?? null;
+  const canonicalFields = (current?.canonical_fields as Lead["canonical_fields"]) ?? null;
+  const finalTags = dedupeTags(
+    mergeClassificationTags(mergedTags, currentPhone, canonicalFields, mergedFootprint)
+  );
+  const contact_reliability_score = calculateContactReliability(
+    contactReliabilityLead(
+      currentPhone,
+      canonicalFields,
+      finalTags,
+      mergedWhatsapp,
+      mergedFootprint
+    )
+  );
 
   const updateQuery = db
     .from("leads")
     .update({
       digital_footprint: mergedFootprint,
+      inferred_state: extractInferredState(mergedFootprint),
+      contact_reliability_score,
       tags: finalTags,
       whatsapp: mergedWhatsapp,
     })
@@ -561,7 +675,7 @@ export async function updateLeadSocialSearch(
   const db = getSupabase();
   const { data: current, error: fetchErr } = await db
     .from("leads")
-    .select("digital_footprint, tags, whatsapp")
+    .select("digital_footprint, tags, whatsapp, phone, canonical_fields")
     .eq("id", leadId)
     .single();
   if (fetchErr) throw new Error(`Failed to load lead ${leadId}: ${fetchErr.message}`);
@@ -590,17 +704,61 @@ export async function updateLeadSocialSearch(
       !mergedTags.includes("whatsapp-confirmed")) {
     mergedTags.push("whatsapp-derived");
   }
-  const finalTags = dedupeTags(mergedTags);
+  const currentPhone = (current?.phone as string | null) ?? null;
+  const canonicalFields = (current?.canonical_fields as Lead["canonical_fields"]) ?? null;
+  const finalTags = dedupeTags(
+    mergeClassificationTags(mergedTags, currentPhone, canonicalFields, footprint)
+  );
+  const contact_reliability_score = calculateContactReliability(
+    contactReliabilityLead(
+      currentPhone,
+      canonicalFields,
+      finalTags,
+      mergedWhatsapp,
+      footprint
+    )
+  );
 
   const { error } = await db
     .from("leads")
     .update({
       digital_footprint: footprint,
+      inferred_state: extractInferredState(footprint),
+      contact_reliability_score,
       tags: finalTags,
       whatsapp: mergedWhatsapp,
     })
     .eq("id", leadId);
   if (error) throw new Error(`Failed to update social search for lead ${leadId}: ${error.message}`);
+}
+
+export async function updateLeadSocialEnrichStatus(
+  leadId: string,
+  status: "ok" | "blocked"
+): Promise<void> {
+  const db = getSupabase();
+  const { data: current, error: fetchErr } = await db
+    .from("leads")
+    .select("digital_footprint, tags")
+    .eq("id", leadId)
+    .single();
+  if (fetchErr) throw new Error(`Failed to load lead ${leadId}: ${fetchErr.message}`);
+
+  const currentFootprint = (current?.digital_footprint as DigitalFootprint | null) ?? null;
+  const footprint: DigitalFootprint = currentFootprint
+    ? { ...currentFootprint, social_enrich_status: status }
+    : { fetched_at: new Date().toISOString(), social_enrich_status: status };
+
+  const currentTags: string[] = Array.isArray(current?.tags) ? (current?.tags as string[]) : [];
+  const newTags = status === "blocked"
+    ? [...new Set([...currentTags, "social-blocked"])]
+    : currentTags.filter((t) => t !== "social-blocked");
+
+  const { error } = await db
+    .from("leads")
+    .update({ digital_footprint: footprint, tags: newTags })
+    .eq("id", leadId);
+  if (error) throw new Error(`Failed to update social_enrich_status for lead ${leadId}: ${error.message}`);
 }
 
 export async function patchLeadInferredState(
@@ -610,7 +768,10 @@ export async function patchLeadInferredState(
   const db = getSupabase();
   const { error } = await db
     .from("leads")
-    .update({ digital_footprint: footprint })
+    .update({
+      digital_footprint: footprint,
+      inferred_state: extractInferredState(footprint),
+    })
     .eq("id", leadId);
   if (error) throw new Error(`Failed to patch inferred_state for lead ${leadId}: ${error.message}`);
 }
@@ -699,6 +860,8 @@ export async function updateLeadScore(leadId: string, result: ScoreResult): Prom
       digital_gap_score: result.digital_gap_score,
       systems_gap_score: result.systems_gap_score,
       prospect_score: result.prospect_score,
+      scoring_version: result.scoring_version,
+      contact_ready: result.contact_ready,
       score_breakdown: result.score_breakdown,
       systems_gap_breakdown: result.systems_gap_breakdown,
     })
@@ -717,6 +880,7 @@ export async function upsertBuyerScores(
     buyer_type: s.buyer_type,
     score: s.score,
     breakdown: s.breakdown,
+    scoring_version: 2,
     computed_at: new Date().toISOString(),
   }));
   const { error } = await db

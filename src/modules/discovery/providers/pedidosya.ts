@@ -10,6 +10,8 @@ import type {
   DiscoveryQuery,
   DiscoveryCandidate,
 } from "../../../shared/types.js";
+import { getScrapingConfig } from "../config.js";
+import { pickRandom, randomBetween, backoffMs } from "../../../shared/scraping.js";
 
 const SOURCE: DiscoverySource = "pedidosya";
 const SOURCE_CONFIDENCE = 0.7;
@@ -31,6 +33,7 @@ interface PedidosYaListing {
 
 interface PedidosYaDeps {
   fetchPage?: (url: string) => Promise<string>;
+  sleepFn?: (ms: number) => Promise<void>;
 }
 
 export function locationToSlug(location: string): string {
@@ -97,17 +100,19 @@ export class PedidosYaProvider implements IDiscoveryProvider {
     const citySlug = locationToSlug(query.location);
     const candidates: DiscoveryCandidate[] = [];
 
+    const scrapingCfg = getScrapingConfig();
+    const sleepFn = this.deps.sleepFn ?? ((): Promise<void> => Promise.resolve());
+
     let browser: Browser | null = null;
     let fetchPage: (url: string) => Promise<string>;
 
     if (this.deps.fetchPage) {
       fetchPage = this.deps.fetchPage;
     } else {
+      const ua = pickRandom(scrapingCfg.discovery_ua_pool);
       browser = await chromium.launch({ headless: true });
       const context = await browser.newContext({
-        userAgent:
-          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 " +
-          "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        userAgent: ua,
         viewport: { width: 1280, height: 800 },
         locale: "es-UY",
         timezoneId: "America/Montevideo",
@@ -130,12 +135,25 @@ export class PedidosYaProvider implements IDiscoveryProvider {
             ? `${BASE_URL}/${category}/${citySlug}`
             : `${BASE_URL}/${category}/${citySlug}?page=${pageNum}`;
 
-        let html: string;
-        try {
-          html = await fetchPage(url);
-        } catch {
-          break;
+        if (pageNum > 1) {
+          const delayMs = randomBetween(scrapingCfg.discovery_delay_ms[0], scrapingCfg.discovery_delay_ms[1]);
+          await sleepFn(delayMs);
         }
+
+        let html: string | null = null;
+        for (let attempt = 0; attempt <= scrapingCfg.discovery_max_retries; attempt++) {
+          try {
+            html = await fetchPage(url);
+            break;
+          } catch {
+            if (attempt < scrapingCfg.discovery_max_retries) {
+              await sleepFn(backoffMs(attempt));
+              continue;
+            }
+          }
+        }
+
+        if (html === null) break;
 
         const listings = parsePage(html, citySlug);
         if (listings.length === 0) break;
