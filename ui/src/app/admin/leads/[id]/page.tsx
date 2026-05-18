@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
-import { getLead, listOutreach, type LeadDetail, type OutreachEntry } from "@/lib/api";
+import { getLead, listOutreach, generateOffer, type LeadDetail, type OutreachEntry, type OfferPackage } from "@/lib/api";
 import { useAuthStore } from "@/lib/auth-store";
 import { cn, formatRelative } from "@/lib/utils";
 
@@ -51,6 +51,10 @@ export default function LeadDetailPage() {
   const [outreach, setOutreach] = useState<OutreachEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [offer, setOffer] = useState<OfferPackage | null>(null);
+  const [offerLoading, setOfferLoading] = useState(false);
+  const [offerChannel, setOfferChannel] = useState("whatsapp");
+  const [offerCopied, setOfferCopied] = useState(false);
 
   useEffect(() => {
     if (!token || !id) return;
@@ -177,6 +181,60 @@ export default function LeadDetailPage() {
           )}
         </div>
       </div>
+
+      {/* Generate offer */}
+      <Section title="Generar oferta">
+        <div className="flex flex-wrap items-center gap-2 mb-3">
+          <select
+            value={offerChannel}
+            onChange={(e) => setOfferChannel(e.target.value)}
+            className="border rounded px-2 py-1 text-sm"
+          >
+            <option value="whatsapp">WhatsApp</option>
+            <option value="email">Email</option>
+            <option value="phone">Teléfono</option>
+          </select>
+          <button
+            onClick={async () => {
+              if (!token || !lead) return;
+              setOfferLoading(true);
+              setOffer(null);
+              try {
+                const res = await generateOffer(token, { lead_id: lead.id, channel: offerChannel });
+                setOffer(res.data);
+              } catch {
+                // ignore — show error inline if needed
+              } finally {
+                setOfferLoading(false);
+              }
+            }}
+            disabled={offerLoading}
+            className="bg-brand-600 text-white rounded px-3 py-1 text-sm hover:bg-brand-700 disabled:opacity-50"
+          >
+            {offerLoading ? "Generando..." : "Generar oferta"}
+          </button>
+        </div>
+        {offer && (
+          <div className="bg-gray-50 rounded p-3 text-sm">
+            <p className="text-gray-800 whitespace-pre-wrap mb-2">{offer.text}</p>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => {
+                  navigator.clipboard.writeText(offer.text);
+                  setOfferCopied(true);
+                  setTimeout(() => setOfferCopied(false), 2000);
+                }}
+                className="text-xs text-brand-600 hover:underline"
+              >
+                {offerCopied ? "¡Copiado!" : "Copiar"}
+              </button>
+              <span className="text-xs text-gray-400">
+                via {offer.provider ?? offer.source_llm} · {offer.model ?? ""}
+              </span>
+            </div>
+          </div>
+        )}
+      </Section>
 
       {/* Outreach history */}
       <Section title={`Outreach (${outreach.length})`}>
