@@ -27,6 +27,7 @@ const LOST_REASONS = ["price", "timing", "no_interest", "competitor", "other"] a
 
 const createSchema = z.object({
   lead_id: uuidSchema,
+  campaign_id: uuidSchema.nullable().optional(),
   channel: z.string().min(1).max(100),
   offer_type: z.string().max(100).optional(),
   offer_package: z.record(z.string(), z.unknown()).optional(),
@@ -52,6 +53,7 @@ const patchSchema = createSchema
 
 const listQuerySchema = z.object({
   lead_id: uuidSchema.optional(),
+  campaign_id: uuidSchema.optional(),
   status: z.enum(OUTREACH_STATUSES).optional(),
   cursor: uuidSchema.optional(),
   limit: z
@@ -99,7 +101,7 @@ export async function outreachRoutes(app: FastifyInstance): Promise<void> {
       });
     }
 
-    const { lead_id, status, cursor, limit } = parseResult.data;
+    const { lead_id, campaign_id, status, cursor, limit } = parseResult.data;
     const db = getDb();
 
     let query = db
@@ -112,6 +114,7 @@ export async function outreachRoutes(app: FastifyInstance): Promise<void> {
     }
 
     if (lead_id) query = query.eq("lead_id", lead_id);
+    if (campaign_id) query = query.eq("campaign_id", campaign_id);
     if (status) query = query.eq("status", status);
 
     if (cursor) {
@@ -206,6 +209,7 @@ export async function outreachRoutes(app: FastifyInstance): Promise<void> {
       .from("lead_outreach")
       .insert({
         lead_id: body.lead_id,
+        campaign_id: body.campaign_id ?? null,
         user_id: authUser.id,
         channel: body.channel,
         offer_type: body.offer_type ?? null,

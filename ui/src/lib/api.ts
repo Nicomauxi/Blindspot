@@ -355,9 +355,29 @@ export async function getLead(token: string, id: string) {
 }
 
 // Outreach
+export type Campaign = {
+  id: string;
+  name: string;
+  user_id: string;
+  segment_filter: Record<string, unknown>;
+  status: "active" | "paused" | "closed";
+  notes: string | null;
+  created_at: string;
+  closed_at: string | null;
+};
+
+export type CampaignStats = {
+  contacted: number;
+  responded: number;
+  closed_won: number;
+  conversion_rate: number;
+  avg_score_contacted: number | null;
+};
+
 export type OutreachEntry = {
   id: string;
   lead_id: string;
+  campaign_id: string | null;
   user_id: string;
   channel: string;
   offer_type: string | null;
@@ -377,14 +397,50 @@ export type OutreachEntry = {
 
 export async function listOutreach(
   token: string,
-  params: { lead_id?: string; status?: string; cursor?: string; limit?: number } = {}
+  params: { lead_id?: string; campaign_id?: string; status?: string; cursor?: string; limit?: number } = {}
 ) {
   const qp = new URLSearchParams();
   if (params.lead_id) qp.set("lead_id", params.lead_id);
+  if (params.campaign_id) qp.set("campaign_id", params.campaign_id);
   if (params.status) qp.set("status", params.status);
   if (params.cursor) qp.set("cursor", params.cursor);
   if (params.limit) qp.set("limit", String(params.limit));
   return request<PaginatedResponse<OutreachEntry>>(`/api/v1/outreach?${qp}`, {}, token);
+}
+
+export async function listCampaigns(token: string) {
+  return request<{ data: Campaign[] }>("/api/v1/campaigns", {}, token);
+}
+
+export async function createCampaign(
+  token: string,
+  data: { name: string; segment_filter?: Record<string, unknown>; notes?: string }
+) {
+  return request<SingleResponse<Campaign>>("/api/v1/campaigns", {
+    method: "POST",
+    body: JSON.stringify(data),
+  }, token);
+}
+
+export async function getCampaign(token: string, id: string) {
+  return request<{ data: Campaign; stats: CampaignStats }>(`/api/v1/campaigns/${id}`, {}, token);
+}
+
+export async function patchCampaign(
+  token: string,
+  id: string,
+  data: { name?: string; status?: string; notes?: string | null }
+) {
+  return request<SingleResponse<Campaign>>(`/api/v1/campaigns/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(data),
+  }, token);
+}
+
+export async function closeCampaign(token: string, id: string) {
+  const BASE = process.env["NEXT_PUBLIC_API_URL"] ?? "http://localhost:3001";
+  const headers: Record<string, string> = { Authorization: `Bearer ${token}` };
+  await fetch(`${BASE}/api/v1/campaigns/${id}`, { method: "DELETE", headers });
 }
 
 export async function createOutreach(
