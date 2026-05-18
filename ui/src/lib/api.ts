@@ -134,6 +134,75 @@ export async function getHealth(token: string) {
   return request<HealthStatus>("/api/v1/health", {}, token);
 }
 
+export type AdminSystemStatus = {
+  status: "ok" | "degraded";
+  server: {
+    uptime_seconds: number;
+    version: string;
+  };
+  db: {
+    connected: boolean;
+    latency_ms: number;
+  };
+  pipeline: {
+    cron_enabled: boolean;
+    next_run_at: string | null;
+    last_run_at: string | null;
+    last_status: string | null;
+    missed: boolean;
+  };
+  processes: {
+    core: {
+      running: boolean;
+      pid: number | null;
+      uptime_seconds: number | null;
+      status: string;
+    };
+    api: {
+      running: boolean;
+      pid: number | null;
+      uptime_seconds: number | null;
+      status: string;
+    };
+  };
+  last_run: {
+    id: string;
+    status: string;
+    completed_at: string | null;
+    dashboard_stale: boolean;
+  } | null;
+  cron: {
+    enabled: boolean;
+    scheduled_for: string | null;
+    last_completed_at: string | null;
+    missed: boolean;
+  };
+  ts: string;
+};
+
+export type RestartResponse =
+  | { ok: true; exit_code: 0 }
+  | {
+      ok: false;
+      error_code:
+        | "restart_disabled_in_dev"
+        | "pm2_not_found"
+        | "process_not_registered"
+        | "pm2_failed"
+        | "timeout";
+      error: string;
+      stderr: string;
+      exit_code: number | null;
+    };
+
+export async function getSystemStatus(token: string) {
+  return request<{ data: AdminSystemStatus }>("/api/v1/admin/system/status", {}, token);
+}
+
+export async function restartSystemProcess(token: string, target: "core" | "api") {
+  return request<RestartResponse>(`/api/v1/admin/system/restart-${target}`, { method: "POST" }, token);
+}
+
 // Audit log
 export type AuditLogEntry = {
   id: string;
