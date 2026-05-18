@@ -6,6 +6,8 @@ import type {
   DiscoveryQuery,
   DiscoveryCandidate,
 } from "../../../shared/types.js";
+import { getScrapingConfig } from "../config.js";
+import { backoffMs, isBlockedStatus, pickRandom, randomBetween } from "../../../shared/scraping.js";
 
 const SOURCE: DiscoverySource = "yelu";
 const SOURCE_CONFIDENCE = 0.65;
@@ -33,7 +35,8 @@ interface YeluListing {
 }
 
 interface YeluDeps {
-  fetch: (url: string) => Promise<{ ok: boolean; status: number; text: () => Promise<string> }>;
+  fetch: (url: string, ua: string) => Promise<{ ok: boolean; status: number; text: () => Promise<string> }>;
+  sleepFn: (ms: number) => Promise<void>;
 }
 
 export function locationToSlug(location: string): string {
@@ -75,13 +78,23 @@ function parsePage(html: string): YeluListing[] {
   return listings;
 }
 
+const noopSleep = (): Promise<void> => Promise.resolve();
+
+function defaultFetch(url: string, ua: string): Promise<{ ok: boolean; status: number; text: () => Promise<string> }> {
+  return undiciFetch(url, { headers: { "User-Agent": ua } }) as ReturnType<typeof defaultFetch>;
+}
+
 export class YeluProvider implements IDiscoveryProvider {
   readonly source = SOURCE;
   readonly sourceConfidence = SOURCE_CONFIDENCE;
   private readonly deps: YeluDeps;
 
   constructor(deps: Partial<YeluDeps> = {}) {
-    this.deps = { fetch: undiciFetch as YeluDeps["fetch"], ...deps };
+    this.deps = {
+      fetch: defaultFetch,
+      sleepFn: noopSleep,
+      ...deps,
+    };
   }
 
   async discover(query: DiscoveryQuery): Promise<DiscoveryCandidate[]> {
@@ -90,6 +103,7 @@ export class YeluProvider implements IDiscoveryProvider {
 
     const citySlug = locationToSlug(query.location);
     const candidates: DiscoveryCandidate[] = [];
+    const scrapingCfg = getScrapingConfig();
 
     for (let page = 1; page <= MAX_PAGES; page++) {
       const url =
@@ -97,18 +111,42 @@ export class YeluProvider implements IDiscoveryProvider {
           ? `${BASE_URL}/category/${category}/city:${citySlug}`
           : `${BASE_URL}/category/${category}/${page}/city:${citySlug}`;
 
-      let res: { ok: boolean; status: number; text: () => Promise<string> };
-      try {
-        res = await this.deps.fetch(url);
-      } catch {
+      if (page > 1) {
+        const delayMs = randomBetween(scrapingCfg.discovery_delay_ms[0], scrapingCfg.discovery_delay_ms[1]);
+        await this.deps.sleepFn(delayMs);
+      }
+
+      let html: string | null = null;
+      for (let attempt = 0; attempt <= scrapingCfg.discovery_max_retries; attempt++) {
+        const ua = pickRandom(scrapingCfg.discovery_ua_pool);
+        let res: { ok: boolean; status: number; text: () => Promise<string> };
+        try {
+          res = await this.deps.fetch(url, ua);
+        } catch {
+          if (attempt < scrapingCfg.discovery_max_retries) {
+            await this.deps.sleepFn(backoffMs(attempt));
+            continue;
+          }
+          break;
+        }
+
+        if (isBlockedStatus(res.status)) {
+          if (attempt < scrapingCfg.discovery_max_retries) {
+            await this.deps.sleepFn(backoffMs(attempt, 2000));
+            continue;
+          }
+          break;
+        }
+
+        if (!res.ok) break;
+
+        html = await res.text();
         break;
       }
 
-      if (!res.ok) break;
+      if (html === null) break;
 
-      const html = await res.text();
       const listings = parsePage(html);
-
       if (listings.length === 0) break;
 
       for (const listing of listings) {

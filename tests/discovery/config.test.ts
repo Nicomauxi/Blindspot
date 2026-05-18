@@ -5,6 +5,7 @@ import {
   resetDiscoveryConfigCache,
   getProfileConfig,
   getSourceRefreshDays,
+  getScrapingConfig,
 } from "../../src/modules/discovery/config.js";
 import type { ProfileConfig } from "../../src/shared/types.js";
 
@@ -118,6 +119,65 @@ describe("getProfileConfig", () => {
 
   it("throws for unknown profile name", () => {
     expect(() => getProfileConfig("z")).toThrow(/"z"/);
+  });
+});
+
+describe("getScrapingConfig", () => {
+  it("returns scraping config from bundled discovery.yaml", () => {
+    const cfg = getScrapingConfig();
+    expect(cfg.discovery_ua_pool.length).toBeGreaterThan(0);
+    expect(cfg.social_ua_pool.length).toBeGreaterThan(0);
+    expect(cfg.discovery_delay_ms).toHaveLength(2);
+    expect(cfg.social_delay_ms).toHaveLength(2);
+    expect(typeof cfg.proxy_enabled).toBe("boolean");
+  });
+
+  it("parses YAML with scraping section", () => {
+    const yaml = `
+version: 1
+profiles:
+  a:
+    min_rating: 4.0
+    min_reviews: 10
+    max_reviews: null
+    web_requirement: any
+social_domains: []
+persist_rejected: false
+scraping:
+  discovery_ua_pool:
+    - "Mozilla/5.0 Test"
+  discovery_delay_ms: [500, 1500]
+  discovery_max_retries: 2
+  social_ua_pool:
+    - "Mozilla/5.0 Social"
+    - "Mozilla/5.0 Social 2"
+  social_delay_ms: [1000, 3000]
+  social_max_retries: 1
+  proxy_enabled: false
+`;
+    const config = parseDiscoveryConfig(yaml);
+    expect(config.scraping?.discovery_ua_pool).toEqual(["Mozilla/5.0 Test"]);
+    expect(config.scraping?.discovery_delay_ms).toEqual([500, 1500]);
+    expect(config.scraping?.discovery_max_retries).toBe(2);
+    expect(config.scraping?.social_ua_pool).toHaveLength(2);
+    expect(config.scraping?.social_delay_ms).toEqual([1000, 3000]);
+    expect(config.scraping?.proxy_enabled).toBe(false);
+  });
+
+  it("scraping section is optional", () => {
+    const yaml = `
+version: 1
+profiles:
+  a:
+    min_rating: 4.0
+    min_reviews: 10
+    max_reviews: null
+    web_requirement: any
+social_domains: []
+persist_rejected: false
+`;
+    const config = parseDiscoveryConfig(yaml);
+    expect(config.scraping).toBeUndefined();
   });
 });
 

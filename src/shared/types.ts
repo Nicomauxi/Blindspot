@@ -17,12 +17,28 @@ export interface ProfileConfig {
   web_requirement: WebRequirement;
 }
 
+export interface ScrapingConfig {
+  discovery_ua_pool: string[];
+  discovery_delay_ms: [number, number];
+  discovery_max_retries: number;
+  social_ua_pool: string[];
+  social_delay_ms: [number, number];
+  social_max_retries: number;
+  proxy_enabled: boolean;
+}
+
 export interface DiscoveryConfig {
   version: 1;
   profiles: Record<string, ProfileConfig>;
   social_domains: string[];
   persist_rejected: boolean;
   source_refresh?: Record<string, number> | undefined;
+  deduplication?: {
+    geo_radius_meters?: number | undefined;
+    name_threshold_online?: number | undefined;
+    name_threshold_retroactive?: number | undefined;
+  } | undefined;
+  scraping?: ScrapingConfig | undefined;
 }
 
 export interface FilterResult {
@@ -252,6 +268,7 @@ export type DigitalFootprintSkipped = {
   heuristic_discovery?: HeuristicDiscovery;
   directory_discovery?: DirectoryDiscovery;
   social_search?: SocialSearch;
+  social_enrich_status?: "ok" | "blocked";
 };
 
 export interface InferredStateField {
@@ -269,6 +286,25 @@ export interface InferredState {
   has_chat_support:     InferredStateField;
   digitalization_level: "none" | "basic" | "intermediate" | "advanced";
   computed_at:          string;
+}
+
+export type EmailQualityKind = "generic" | "role" | "personal" | "unknown";
+
+export interface EmailQualityAssessment {
+  email: string;
+  quality: EmailQualityKind;
+  domain_match: boolean;
+  mx_valid: boolean | null;
+  reliability_multiplier: number;
+}
+
+export type PhoneContactType = "mobile" | "landline" | "unknown";
+
+export interface PhoneContactAssessment {
+  phone: string;
+  normalized: string | null;
+  type: PhoneContactType;
+  region: "montevideo" | "interior" | null;
 }
 
 export interface DigitalFootprintEnriched {
@@ -306,8 +342,10 @@ export interface DigitalFootprintEnriched {
   copyright_year?: number | null;
   operational_systems?: OperationalSystemsSignal;
   contact_emails?: string[];
+  email_quality?: EmailQualityAssessment[];
   phone_confirmed?: boolean;
   phone_alternatives?: string[];
+  phone_classification?: PhoneContactAssessment[];
   has_hours_on_web?: boolean;
   whois?: {
     fetched_at: string;
@@ -318,6 +356,7 @@ export interface DigitalFootprintEnriched {
     error?: string;
   };
   inferred_state?: InferredState;
+  social_enrich_status?: "ok" | "blocked";
 }
 
 export type DigitalFootprint = DigitalFootprintSkipped | DigitalFootprintEnriched;
@@ -362,14 +401,20 @@ export interface Lead {
   last_seen_run_id: string | null;
   google_data: Record<string, unknown> | null;
   digital_footprint: DigitalFootprint | null;
+  inferred_state: InferredState | null;
+  gps: unknown | null;
   reviews_sample: unknown[] | null;
   business_quality_score: number | null;
   digital_gap_score: number | null;
   systems_gap_score: number | null;
   prospect_score: number | null;
+  scoring_version: number | null;
+  contact_ready: boolean | null;
+  prospect_score_v1: number | null;
   passed_filter: boolean;
   rejection_reasons: string[];
   score_breakdown: Record<string, unknown> | null;
+  score_breakdown_v1: Record<string, unknown> | null;
   systems_gap_breakdown: Record<string, unknown> | null;
   contacted_at: string | null;
   created_at: string;
