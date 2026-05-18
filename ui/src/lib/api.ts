@@ -415,17 +415,62 @@ export type BudgetStatus = {
   budget_remaining: number;
   alert_threshold: number;
   over_alert: boolean;
+  request_count: number;
 };
 
 export type CostsOverview = {
+  month: string;
+  totals: {
+    llm_usd: number;
+    google_places_usd: number;
+    infra_usd: number;
+    backup_usd: number;
+    total_usd: number;
+  };
   google_places: BudgetStatus | null;
-  llm: { total_calls: number; total_cost_usd: number };
+  llm: {
+    total_calls: number;
+    total_cost_usd: number;
+    by_provider: { provider: string; calls: number; tokens: number; leads_count: number; cost_usd: number }[];
+  };
+  infra: {
+    infra_monthly_cost_usd: number;
+    backup_monthly_cost_usd: number;
+    total_monthly_cost_usd: number;
+  };
+  per_lead: {
+    hot_leads_count: number;
+    total_cost_usd: number;
+    cost_per_hot_usd: number | null;
+    top_leads: {
+      lead_id: string;
+      name: string;
+      source: string | null;
+      llm_cost_usd: number;
+      gp_cost_share_usd: number;
+      total_cost_usd: number;
+    }[];
+  };
+  per_source: {
+    source: string;
+    cost_usd: number;
+    leads_count: number;
+    calls?: number;
+    tokens?: number;
+  }[];
   ts: string;
 };
 
 export type CostsHistory = {
-  llm_by_month: { month: string; cost_usd: number; calls: number; tokens: number }[];
-  google_places_runs: { id: string; niche: string; location: string; cost_usd: number; places_requests: number; finished_at: string }[];
+  monthly: {
+    month: string;
+    google_places_usd: number;
+    llm_usd: number;
+    infra_usd: number;
+    backup_usd: number;
+    total_usd: number;
+    hot_leads: number;
+  }[];
 };
 
 export async function getCostsOverview(token: string) {
