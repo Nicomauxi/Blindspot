@@ -372,9 +372,9 @@ Cuando se llega a una stop condition, NO continuar al siguiente paso. En cambio:
 
 **Última actualización:** 2026-05-18
 
-**Sesiones autónomas completadas:** 12 (`Fase 49 — DB backup automatizado`, `Fase 22-pre — campos de versión y rollback de scoring`, `Fase 21 — PostGIS local + columna gps`, `Fase 47 — inferred_state a columna propia`, `Fase 15 — calidad de email + tipo de teléfono`, `Fase 6A — deduplicación cross-source para inserts nuevos`, `Fase 6B — reconciliación retroactiva local`, `Fase 22 — scoring v2 apply`, `Fase API-0 — schemas users/pipeline/outreach/audit_log`, `Fase 23 — core automation scheduler`, `Fase API APIA…APIE — Fastify completo + matriz auth verde`)
+**Sesiones autónomas completadas:** 13 (`Fase 49 — DB backup automatizado`, `Fase 22-pre — campos de versión y rollback de scoring`, `Fase 21 — PostGIS local + columna gps`, `Fase 47 — inferred_state a columna propia`, `Fase 15 — calidad de email + tipo de teléfono`, `Fase 6A — deduplicación cross-source para inserts nuevos`, `Fase 6B — reconciliación retroactiva local`, `Fase 22 — scoring v2 apply`, `Fase API-0 — schemas users/pipeline/outreach/audit_log`, `Fase 23 — core automation scheduler`, `Fase API APIA…APIE — Fastify completo + matriz auth verde`, `Admin MVP UI — User Management + Health + Audit Log Viewer`)
 
-**Próxima fase a ejecutar:** Admin MVP UI (Bloque 6). Prerequisitos: Fase API completa ✓. Construir pantallas Next.js: User Management + Health/Status + Audit Log Viewer.
+**Próxima fase a ejecutar:** Fase 46 — Scraping hardening (Bloque 6). Prerequisitos: Admin MVP UI completa ✓.
 
 **Orden por bloques (canónico — sincronizado con `ROADMAP_CANONICAL.md § Roadmap ejecutable`, 44 items 0–43):**
 - **Bloque 0:** Fase 49 (backup) — completada y verificada el 2026-05-17.
@@ -418,7 +418,7 @@ Cuando se llega a una stop condition, NO continuar al siguiente paso. En cambio:
 - Fase API APIC: `GET/POST/PATCH /outreach`, `POST /outreach/generate-offer` (stub Fase 26). Status/outcome cross-field validation. CM 404 en otros registros. Fix Zod v4 UUID strictness con regex permissivo.
 - Fase API APID: `GET/PUT/PATCH /pipeline/config`, `POST /pipeline/run` (202 + pg_notify), `GET /pipeline/runs*`, `POST /pipeline/abort`. `GET/POST /discovery/jobs`, `PATCH /discovery/jobs/:id` (pause/resume/cancel). `GET/POST/PATCH/DELETE /users` (bcrypt, lead_filter validation, audit_log). `GET /campaigns*` (501 stub). Stats routes. `/admin/audit-log`, `/admin/system/status`, restart stubs (501 dev), costs/performance stubs.
 - Fase API APIE: 8 auth matrix tests — live lead_filter update con mismo JWT, active=false bloqueo inmediato, CM 403 en paths admin-only, intersección de filtros CM, 404 en lead fuera de filtro. Tests: 972 passing, typecheck limpio. Fase API COMPLETA.
-- Último commit previo a esta fase: 9ba5b13 (docs: quinta auditoría — 10 bugs estructurales y de lógica)
+- Admin MVP UI (2026-05-18): `ui/` workspace Next.js 15 completado. Rutas: `/login`, `/admin/users` (CRUD + lead_filter + reset pwd + activate/deactivate), `/admin/health` (polling 10s, estado DB/cron/last_run), `/admin/audit-log` (filtros actor/action/from/to, tabla paginada cursor-based, modal diff before/after, export JSON). Build Next.js limpio. TypeCheck limpio.
 
 **Contexto de la documentación:** los archivos context/ tienen 19 fixes de auditorías previas + reorganización 2026-05-16 (modelo "uso interno + socios"). Se eliminaron contradicciones C2–C5 detectadas en quinta auditoría:
 - Mono-repo confirmado (un directorio `blindspot/` con `src/`, `api/`, `ui/`) — `AUTONOMOUS.md` alineado.
