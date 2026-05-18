@@ -243,6 +243,24 @@ docker exec supabase_db_gap-radar psql -U postgres -d postgres -c "..."
 | contacted_at | timestamptz | |
 | created_at / updated_at | timestamptz | |
 
+### Tabla: pipeline_errors
+
+| Campo | Tipo | Notas |
+|-------|------|-------|
+| id | uuid PK | |
+| occurred_at | timestamptz | default `now()` |
+| run_id | uuid FK | `REFERENCES pipeline_runs(id) ON DELETE CASCADE` |
+| phase | text | `refresh` / `discovery` / `enrich` / `score` / `social-enrich` |
+| source | text | null cuando no aplica |
+| lead_id | uuid FK | `REFERENCES leads(id) ON DELETE SET NULL` |
+| error_type | text | timeout, `http_429`, captcha, blocked, parse_failed, db_error, other |
+| message | text | resumen persistente del error |
+| stack | text | opcional |
+| recovered | boolean | `true` cuando el pipeline continuó |
+
+- Índices activos: `pipeline_errors_run`, `pipeline_errors_occurred_at`, `pipeline_errors_phase`, `pipeline_errors_lead`.
+- `src/storage/pipeline-errors.ts` expone `recordPipelineError()` para persistir errores de workers sin depender de `pipeline_runs.log_lines`.
+
 ### Columnas multi-source en leads (migración 009)
 
 | Columna | Tipo | Notas |

@@ -45,11 +45,10 @@
 18. **Discovery Control Center UI** — pantalla `/discovery` consume `/api/v1/discovery/jobs` y `/suggestions`.
 19. **Fase 24** — Batch discovery multi-ciudad (CLI `--location-list` integrado con `pipeline_runs` sub-jobs).
 20. **Fase 44** — Google Places budget tracker (backend + badge UI en Pipeline Manager).
-21. **Fase 45-pre** — `pipeline_errors`.
-22. **Fase 45** — Change detection en re-enrich.
-23. **Performance Dashboard UI** — pantalla `/admin/performance`. Bloqueada por Fase 45-pre + Fase 45.
-24. **Restart actions UI + endpoints** — `POST /api/v1/admin/system/restart-{core,api}` con códigos tipados; botones en Health. Solo activos en `NODE_ENV='production'` (post-Fase 48).
-25. **Cleanup snapshots v1** — `DROP COLUMN prospect_score_v1, score_breakdown_v1` con backup previo. Manual/aprobación. El admin decide cuándo (ver alerta `scoring_v1_columns_present` en Health).
+21. **Fase 45** — Change detection en re-enrich.
+22. **Performance Dashboard UI** — pantalla `/admin/performance`. Bloqueada por Fase 45-pre + Fase 45.
+23. **Restart actions UI + endpoints** — `POST /api/v1/admin/system/restart-{core,api}` con códigos tipados; botones en Health. Solo activos en `NODE_ENV='production'` (post-Fase 48).
+24. **Cleanup snapshots v1** — `DROP COLUMN prospect_score_v1, score_breakdown_v1` con backup previo. Manual/aprobación. El admin decide cuándo (ver alerta `scoring_v1_columns_present` en Health).
 
 **Bloque 7 — Enriquecimiento incremental + refinamientos scoring (cierre del producto):**
 27. **Fase 40** — Full-text search.
@@ -1375,39 +1374,6 @@ CREATE INDEX llm_usage_log_feature ON llm_usage_log(feature, occurred_at DESC);
 **Política de retención:** sin auto-purga. El admin decide cuándo agregar particionamiento o purga si crece >1M rows.
 
 **Verificación:** `\d llm_usage_log` muestra todas las columnas; `INSERT` de prueba + `SELECT COUNT(*)` ≥ 1.
-
----
-
-### Fase 45-pre — Tabla `pipeline_errors` (PREREQUISITO de Fase 45 + Performance Dashboard)
-
-**Por qué:** `ADMIN_PANEL.md § Pantalla E — Performance Dashboard` lista "errores recientes" filtrables por fase y fuente. `pipeline_runs.log_lines` mezcla info+warn+error y se purga con el run; los errores deben sobrevivir aunque el run continue.
-
-**Implementación:**
-
-```sql
-CREATE TABLE pipeline_errors (
-  id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  occurred_at timestamptz NOT NULL DEFAULT now(),
-  run_id      uuid REFERENCES pipeline_runs(id) ON DELETE CASCADE,
-  phase       text NOT NULL,            -- 'refresh'|'discovery'|'enrich'|'score'|'social-enrich'
-  source      text,                     -- 'google_places'|'mintur'|... null si no aplica
-  lead_id     uuid REFERENCES leads(id) ON DELETE SET NULL,
-  error_type  text NOT NULL,            -- 'timeout'|'http_429'|'captcha'|'blocked'|'parse_failed'|'db_error'|'other'
-  message     text NOT NULL,
-  stack       text,
-  recovered   boolean DEFAULT false     -- true si el pipeline pudo continuar tras este error
-);
-CREATE INDEX pipeline_errors_run ON pipeline_errors(run_id);
-CREATE INDEX pipeline_errors_occurred_at ON pipeline_errors(occurred_at DESC);
-CREATE INDEX pipeline_errors_phase ON pipeline_errors(phase, occurred_at DESC);
-CREATE INDEX pipeline_errors_lead ON pipeline_errors(lead_id) WHERE lead_id IS NOT NULL;
-```
-
-**Quién inserta:** el worker de cada fase (refresh, discovery, enrich, score, social-enrich) cuando captura una excepción que sería normalmente solo log. Se inserta tanto si el error es fatal como si es recuperado (con `recovered=true`).
-
-**Política de retención:** auto-purga por cascade cuando el `pipeline_runs` row se elimina. Sin auto-purga adicional.
-
-**Verificación:** simular un error en un run de test → verificar que aparece la fila.
 
 ---
 
