@@ -33,8 +33,7 @@ function shouldProcess(lead: Lead, opts: { passedOnly: boolean; force: boolean }
   if (!lead.passed_filter && opts.passedOnly) return false;
   if (!lead.digital_footprint || lead.digital_footprint.skipped === true) return false;
   if (!opts.force) {
-    const fp = lead.digital_footprint as DigitalFootprintEnriched;
-    const existing = fp.inferred_state?.computed_at;
+    const existing = lead.inferred_state?.computed_at;
     if (existing && Date.now() - Date.parse(existing) < 24 * 60 * 60 * 1000) return false;
   }
   return true;
@@ -85,8 +84,7 @@ export async function inferStateCommand(rawArgs: RawArgs): Promise<void> {
         try {
           const fp = lead.digital_footprint as DigitalFootprintEnriched;
           const inferred = computeInferredState(fp, lead);
-          fp.inferred_state = inferred;
-          await patchLeadInferredState(lead.id, fp);
+          await patchLeadInferredState(lead.id, fp, inferred);
           levelCounts[inferred.digitalization_level] += 1;
           processed += 1;
           log.info(

@@ -183,21 +183,21 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
     }
   );
 
-  // GET /discovery/suggestions — stub until Fase 24
+  // GET /discovery/suggestions — intentionally unavailable until gap analysis exists
   app.get("/discovery/suggestions", { preHandler: requireAdmin }, async (_request, reply) => {
-    return reply.status(200).send({
-      data: [],
-      _stub: true,
-      _note: "Fase 24 will implement gap analysis and real suggestions",
+    return reply.status(501).send({
+      error: "Discovery suggestions are not available in the current jobs-only control center",
+      error_code: "feature_not_available",
+      capability: "jobs_only",
     });
   });
 
-  // GET /discovery/coverage — stub until Fase 24
+  // GET /discovery/coverage — intentionally unavailable until there is a real coverage model
   app.get("/discovery/coverage", { preHandler: requireAdmin }, async (_request, reply) => {
-    return reply.status(200).send({
-      data: {},
-      _stub: true,
-      _note: "Fase 24 will implement coverage map by zone+source",
+    return reply.status(501).send({
+      error: "Discovery coverage is not available in the current jobs-only control center",
+      error_code: "feature_not_available",
+      capability: "jobs_only",
     });
   });
 }

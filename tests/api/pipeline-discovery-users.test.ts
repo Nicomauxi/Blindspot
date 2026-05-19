@@ -225,6 +225,23 @@ describe("Pipeline routes — admin only", () => {
     await app.close();
   });
 
+  it("POST /pipeline/run accepts dry_run and still queues a run", async () => {
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/pipeline/run",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ dry_run: true }),
+    });
+    expect(res.statusCode).toBe(202);
+    const body = res.json();
+    expect(body.data.run_id).toBeDefined();
+    expect(body.data.dry_run).toBe(true);
+    await app.close();
+  });
+
   it("GET /pipeline/runs returns 200 for admin", async () => {
     const { buildServer } = await import("../../api/src/server.js");
     const app = await buildServer();
@@ -280,7 +297,7 @@ describe("Discovery routes", () => {
     await app.close();
   });
 
-  it("GET /discovery/suggestions returns stub", async () => {
+  it("GET /discovery/suggestions returns 501 when capability is unavailable", async () => {
     const { buildServer } = await import("../../api/src/server.js");
     const app = await buildServer();
     const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
@@ -289,9 +306,26 @@ describe("Discovery routes", () => {
       url: "/api/v1/discovery/suggestions",
       headers: { authorization: `Bearer ${token}` },
     });
-    expect(res.statusCode).toBe(200);
+    expect(res.statusCode).toBe(501);
     const body = res.json();
-    expect(body._stub).toBe(true);
+    expect(body.error_code).toBe("feature_not_available");
+    expect(body.capability).toBe("jobs_only");
+    await app.close();
+  });
+
+  it("GET /discovery/coverage returns 501 when capability is unavailable", async () => {
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/discovery/coverage",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.statusCode).toBe(501);
+    const body = res.json();
+    expect(body.error_code).toBe("feature_not_available");
+    expect(body.capability).toBe("jobs_only");
     await app.close();
   });
 });
@@ -360,7 +394,7 @@ describe("Users routes — admin only", () => {
       headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
       body: JSON.stringify({
         email: "new@x.com",
-        password: "password123",
+        password: "password12345",
         role: "cm",
         lead_filter: null,
       }),
@@ -381,7 +415,7 @@ describe("Users routes — admin only", () => {
       headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
       body: JSON.stringify({
         email: "new@x.com",
-        password: "password123",
+        password: "password12345",
         role: "cm",
         lead_filter: {},
       }),
@@ -402,7 +436,7 @@ describe("Users routes — admin only", () => {
       headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
       body: JSON.stringify({
         email: "new@x.com",
-        password: "password123",
+        password: "password12345",
         role: "cm",
         lead_filter: {},
         acknowledge_unrestricted: true,
@@ -422,7 +456,7 @@ describe("Users routes — admin only", () => {
       headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
       body: JSON.stringify({
         email: "new@x.com",
-        password: "password123",
+        password: "password12345",
         role: "cm",
         lead_filter: { contact_tier: [] },
       }),

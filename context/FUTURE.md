@@ -59,7 +59,7 @@
 35. **Fase 36** — `days_in_pool` scoring (refinamiento timing_factor).
 36. **Fase 41** — `owner_group_id` (detección mismo propietario por phone/email).
 37. **Fase 42** — Scoring estacional — **requiere data de conversión** (≥30 outreach cerrados en 2+ estaciones).
-38. **Fase 30** — DGI dataset resolution — **requiere Gemini DeepSearch previo** (validar fuente DGI/BPS).
+38. **Fase 30** — DGI/BPS dataset resolution — **DESCARTADA permanentemente por decisión de producto/legal (2026-05-18)**. No implementar ni reactivar dentro de este roadmap.
 
 **Por qué este orden ahorra trabajo:**
 - **Un solo `score --all`** (en Fase 22) en vez de tres (versión vieja: inicial + post-Fase-6 + post-reconciliación).
@@ -831,7 +831,7 @@ function mapOfferToServiceType(primaryOffer: PrimaryOffer, niche: string): Servi
 
 **Implementación:**
 1. Dos paths de detección:
-   - Con RUT (solo si una fuente futura lo aporta o si DGI se resuelve): CIIU del dataset DGI → sub-niche via tabla de mapeo
+   - Con RUT (solo si una fuente futura explícitamente aprobada lo aporta): CIIU → sub-niche via tabla de mapeo
    - Sin RUT: llamada a LLMProvider con prompt de clasificación (modelo configurado por `LLM_PROVIDER`/`LLM_MODEL`, ~5 tokens output)
 2. Nuevo campo: `lead_company_data.detected_sub_niche`
 3. Sub-niche activa lógica de sub-scores específica en `sub-scores.ts`
@@ -847,7 +847,7 @@ function mapOfferToServiceType(primaryOffer: PrimaryOffer, niche: string): Servi
 
 **Por qué:** MINTUR clasifica sus 2027 registros por tipo de operador (hotel, restaurante, agencia de viajes, spa, guía turístico). Esta info está en `source_data` JSONB sin parsear. Un hotel 3 estrellas sin web tiene un pitch y deal size completamente diferente a un camping sin web.
 
-**Aclaración crítica:** MINTUR no expone RUT público según `context/research/mintur.md`. Esta fase NO extrae RUT. Cualquier trabajo con RUT queda para Fase 30, usando una fuente específica de DGI u otra fuente oficial validada.
+**Aclaración crítica:** MINTUR no expone RUT público según `context/research/mintur.md`. Esta fase NO extrae RUT. Cualquier trabajo futuro con RUT queda fuera del roadmap actual salvo decisión nueva explícita.
 
 **Implementación:**
 1. Parser `TipoOperador` en enrich de MINTUR: extraer de `source_data` → guardar en `lead_company_data.tipo_operador`
@@ -858,21 +858,11 @@ function mapOfferToServiceType(primaryOffer: PrimaryOffer, niche: string): Servi
 
 ---
 
-### Fase 30 — DGI dataset resolution (RUT → CIIU → régimen fiscal)
+### Fase 30 — DGI/BPS dataset resolution
 
-**Por qué:** RUT → razón social + CIIU4 + régimen fiscal es el dato de mayor valor para estimar deal size. Un negocio en régimen general IRAE con facturación > $2M UYU/mes tiene presupuesto real para servicios digitales. Ver `ARCHITECTURE_FUTURE.md § DGI + RUT`.
+**Estado:** descartada permanentemente por decisión de producto/legal al 2026-05-18.
 
-**Estrategia por etapas:**
-1. **Etapa A:** investigar y validar una fuente oficial de RUT/CIIU utilizable para el caso de uso. No asumir que MINTUR aporta RUT.
-2. **Etapa B:** descargar/normalizar dataset DGI si existe acceso viable → script batch de resolución RUT → razón social + CIIU.
-3. **Etapa C:** régimen fiscal desde BPS o DGI API si existe acceso permitido → `business_quality_pts` ajustado por tamaño.
-
-**Impact del régimen fiscal en scoring:**
-- Monotributo (< $200k UYU/mes): `business_quality_pts` × 0.7
-- IRAE pequeña empresa: × 1.3
-- IRAE régimen general: × 1.5
-
-**Prerequisito:** fuente DGI/RUT validada con research propio. Fase 29 no desbloquea RUT.
+**Regla:** no implementar, no investigar y no dejar dependencias vivas del roadmap apuntando a esta fase.
 
 ---
 
@@ -951,7 +941,7 @@ Ver ARCHITECTURE.md — sección Scoring para detalles de implementación.
 | 10 | PedidosYaProvider — confirma delivery activo. Alimenta `inferred_state.has_delivery` con confianza 0.95 | ✅ Completada | — |
 | 11 | IMM Habilitaciones provider — CSV Montevideo, negocios habilitados activos | pendiente | **Media** — desbloquea teléfonos para MINTUR (Fase 18) |
 | 12 | InfoNegocios provider — decisores B2B, emails de gerencia | pendiente | Baja |
-| 13 | DGI dataset — RUT → razón social + CIIU + régimen fiscal. Ver Fase 30. Estrategia: traer datos primero, procesar después | pendiente (Fase 30) | **Alta en valor, media en urgencia** |
+| 13 | DGI/BPS dataset — RUT → razón social + CIIU + régimen fiscal | descartado permanentemente | Fuera de roadmap por decisión legal/producto |
 | 18 | Cruce MINTUR × IMM — join por nombre+dirección para resolver teléfonos faltantes en 1600 leads MINTUR | depende de Fase 11 | Media — desbloquea el 96% de MINTUR hoy inaccionable |
 
 ---
@@ -1443,7 +1433,7 @@ Todo el diseño de pantallas, componentes y UX está en `context/ARCHITECTURE_FR
 ## Decisiones arquitectónicas fuera del roadmap (no son fases ejecutables)
 
 > Esta sección contiene **decisiones activas de diseño** que NO van al roadmap canónico. NO son backlog — son no-ejecutar por diseño bajo el modelo actual.
-> El roadmap canónico (`ROADMAP_CANONICAL.md § Roadmap ejecutable`) cubre **todo el producto**: items 0–43 incluyen las fases originalmente postpuestas (11, 13, 18, 24, 29, 30, 36, 37, 39, 41, 42). Si una fase aparece en el canónico, se ejecuta en su lugar; no se postpone.
+> El roadmap canónico (`ROADMAP_CANONICAL.md § Roadmap ejecutable`) cubre **todo el producto ejecutable**. La antigua Fase 30 `DGI/BPS` quedó fuera del roadmap por descarte permanente y no debe tratarse como trabajo pendiente.
 
 | Decisión | Razón |
 |------|--------------------|

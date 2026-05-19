@@ -8,6 +8,7 @@ function buildPrompt(req: LLMRequest): string {
     `Genera un mensaje de ventas corto (máximo 3 frases) para contactar a ${req.lead_name}, `,
     `un negocio de tipo "${req.niche ?? "general"}" en Uruguay.`,
     req.pitch_hook ? ` Contexto clave: ${req.pitch_hook}.` : "",
+    req.price_uyu != null ? ` Referencia de precio: UYU ${req.price_uyu}.` : "",
     ` Oferta: ${req.offer_type}. Canal: ${req.channel}.`,
     ` Responde solo con el texto del mensaje, sin introducciones ni explicaciones.`,
   ].join("");

@@ -1,5 +1,8 @@
 # Prompt CC — Fase 16: Urgency signals
 
+> ARCHIVO HISTÓRICO. Fase 16 ya figura como completada en el estado actual.
+> No ejecutar salvo pedido explícito de Nicolás.
+
 > Enviar a CC después de que Fase 14 (review count multiplicador) esté completa y commiteada.
 > Adjuntar context/ARCHITECTURE.md al enviarlo.
 

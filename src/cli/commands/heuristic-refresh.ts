@@ -121,7 +121,8 @@ export async function heuristicRefreshCommand(rawArgs: RawArgs): Promise<void> {
             lead.id,
             result.digital_footprint,
             result.tags_to_add,
-            result.whatsapp_from_site
+            result.whatsapp_from_site,
+            result.inferred_state
           );
           processed += 1;
           log.info(

@@ -43,23 +43,119 @@ const listQuerySchema = z.object({
     .pipe(z.number().int().min(1).max(200)),
 });
 
-function buildLeadFilterConditions(
-  leadFilter: Record<string, unknown>
-): string[] {
-  const conditions: string[] = [];
+type JsonRecord = Record<string, unknown>;
+type CorroboratingSourceRecord = {
+  source: string;
+  external_id: string;
+  confidence: number;
+};
 
-  const contactTier = leadFilter["contact_tier"];
-  if (Array.isArray(contactTier) && contactTier.length > 0) {
-    const tiers = contactTier.map((t) => `'${String(t)}'`).join(",");
-    conditions.push(`contact_tier = ANY(ARRAY[${tiers}])`);
+function isRecord(value: unknown): value is JsonRecord {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function asNullableString(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function asNullableNumber(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim().length > 0) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
   }
+  return null;
+}
 
-  const primaryOffer = leadFilter["primary_offer"];
-  if (typeof primaryOffer === "string" && primaryOffer) {
-    conditions.push(`primary_offer = '${primaryOffer.replace(/'/g, "''")}'`);
-  }
+function asBooleanOrNull(value: unknown): boolean | null {
+  return typeof value === "boolean" ? value : null;
+}
 
-  return conditions;
+function asStringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+    : [];
+}
+
+function canonicalFieldValue(
+  canonicalFields: JsonRecord | null,
+  field: "email" | "phone" | "website"
+): string | null {
+  if (!canonicalFields) return null;
+  const raw = canonicalFields[field];
+  if (typeof raw === "string") return asNullableString(raw);
+  if (isRecord(raw)) return asNullableString(raw["value"]);
+  return null;
+}
+
+function scoreBreakdownValue(row: JsonRecord, key: string): string | null {
+  const direct = asNullableString(row[key]);
+  if (direct) return direct;
+  const breakdown = isRecord(row["score_breakdown"]) ? row["score_breakdown"] : null;
+  return breakdown ? asNullableString(breakdown[key]) : null;
+}
+
+function asCorroboratingSources(value: unknown): CorroboratingSourceRecord[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter(isRecord)
+    .map((item) => ({
+      source: asNullableString(item["source"]) ?? "unknown",
+      external_id: asNullableString(item["external_id"]) ?? "",
+      confidence: asNullableNumber(item["confidence"]) ?? 0,
+    }));
+}
+
+function normalizeLeadRow(row: JsonRecord): JsonRecord {
+  const canonicalFields = isRecord(row["canonical_fields"]) ? row["canonical_fields"] : null;
+  const corroboratingSources = asCorroboratingSources(row["corroborating_sources"]);
+
+  return {
+    id: asNullableString(row["id"]) ?? "",
+    name: asNullableString(row["name"]) ?? "",
+    niche: asNullableString(row["niche"]),
+    source: asNullableString(row["source"]) ?? "unknown",
+    canonical_source: asNullableString(row["canonical_source"]),
+    address: asNullableString(row["address"]),
+    phone:
+      asNullableString(row["phone"]) ??
+      asNullableString(row["contact_phone"]) ??
+      canonicalFieldValue(canonicalFields, "phone"),
+    whatsapp: asNullableString(row["whatsapp"]) ?? asNullableString(row["contact_whatsapp"]),
+    website:
+      asNullableString(row["website"]) ??
+      canonicalFieldValue(canonicalFields, "website"),
+    rating: asNullableNumber(row["rating"]),
+    review_count: asNullableNumber(row["review_count"]),
+    tags: asStringArray(row["tags"]),
+    state: asNullableString(row["state"]) ?? "discovered",
+    business_status: asNullableString(row["business_status"]),
+    source_confidence: asNullableNumber(row["source_confidence"]),
+    data_confidence_score: asNullableNumber(row["data_confidence_score"]),
+    contact_reliability_score: asNullableNumber(row["contact_reliability_score"]),
+    contact_ready: asBooleanOrNull(row["contact_ready"]),
+    prospect_score: asNullableNumber(row["prospect_score"]),
+    contact_tier: scoreBreakdownValue(row, "contact_tier"),
+    primary_offer: scoreBreakdownValue(row, "primary_offer"),
+    pitch_hook: scoreBreakdownValue(row, "pitch_hook"),
+    urgency_signal: scoreBreakdownValue(row, "urgency_signal"),
+    contacted_at: asNullableString(row["contacted_at"]),
+    contacted_by: asNullableString(row["contacted_by"]),
+    created_at: asNullableString(row["created_at"]) ?? "",
+    corroborating_sources: corroboratingSources,
+    top_buyer_type: asNullableString(row["top_buyer_type"]),
+    top_buyer_score: asNullableNumber(row["top_buyer_score"]),
+    owner_group_id: asNullableString(row["owner_group_id"]),
+    notes: asNullableString(row["notes"]),
+    digital_footprint: isRecord(row["digital_footprint"]) ? row["digital_footprint"] : null,
+    inferred_state: isRecord(row["inferred_state"]) ? row["inferred_state"] : null,
+    score_breakdown: isRecord(row["score_breakdown"]) ? row["score_breakdown"] : null,
+    lead_company_data: isRecord(row["lead_company_data"]) ? row["lead_company_data"] : null,
+    search_vector: row["search_vector"] ?? null,
+    sources_count: asNullableNumber(row["sources_count"]) ?? corroboratingSources.length,
+  };
 }
 
 export async function leadsRoutes(app: FastifyInstance): Promise<void> {
@@ -90,10 +186,6 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
         if (!authUser.lead_filter) {
           // CM with null lead_filter sees nothing (fail closed)
           return reply.status(200).send({ data: [], next_cursor: null, total: 0 });
-        }
-        const filterConditions = buildLeadFilterConditions(authUser.lead_filter);
-        for (const cond of filterConditions) {
-          query = query.filter(cond, "is", null);
         }
         // Apply contact_tier from lead_filter as intersection
         const filterTiers = authUser.lead_filter["contact_tier"];
@@ -147,15 +239,26 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
         return reply.status(500).send({ error: "Database error", error_code: "db_error" });
       }
 
-      const rows = data ?? [];
-      const hasMore = rows.length > limit;
-      const page = hasMore ? rows.slice(0, limit) : rows;
-      const nextCursor = hasMore ? (page[page.length - 1]?.id ?? null) : null;
+      const rows = (data ?? []).map((row) => normalizeLeadRow(row as JsonRecord));
+      const filteredRows =
+        authUser.role === "cm" && authUser.lead_filter
+          ? rows.filter((row) => passesLeadFilter(row, authUser.lead_filter))
+          : rows;
+      const maxVisible =
+        authUser.role === "cm" &&
+        typeof authUser.lead_filter?.["max_leads_visible"] === "number" &&
+        Number.isFinite(authUser.lead_filter["max_leads_visible"])
+          ? Math.max(0, authUser.lead_filter["max_leads_visible"] as number)
+          : null;
+      const cappedRows = maxVisible === null ? filteredRows : filteredRows.slice(0, maxVisible);
+      const hasMore = cappedRows.length > limit;
+      const page = hasMore ? cappedRows.slice(0, limit) : cappedRows;
+      const nextCursor = hasMore ? ((page[page.length - 1]?.id as string | undefined) ?? null) : null;
 
       return reply.status(200).send({
         data: page,
         next_cursor: nextCursor,
-        total: count ?? 0,
+        total: maxVisible === null ? count ?? page.length : Math.min(count ?? page.length, maxVisible),
       });
     }
   );
@@ -206,17 +309,19 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
         return reply.status(404).send({ error: "Lead not found", error_code: "not_found" });
       }
 
+      const normalizedLead = normalizeLeadRow(lead as JsonRecord);
+
       // CM filter check — 404 (not 403) to not reveal existence
       if (authUser.role === "cm") {
         if (!authUser.lead_filter) {
           return reply.status(404).send({ error: "Lead not found", error_code: "not_found" });
         }
-        if (!passesLeadFilter(lead, authUser.lead_filter)) {
+        if (!passesLeadFilter(normalizedLead, authUser.lead_filter)) {
           return reply.status(404).send({ error: "Lead not found", error_code: "not_found" });
         }
       }
 
-      return reply.status(200).send({ data: lead });
+      return reply.status(200).send({ data: normalizedLead });
     }
   );
 
@@ -236,7 +341,7 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
 
       const { data: lead, error: leadErr } = await db
         .from("lead_dashboard")
-        .select("id, owner_group_id, contact_tier")
+        .select("*")
         .eq("id", id)
         .single();
 
@@ -244,20 +349,22 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
         return reply.status(404).send({ error: "Lead not found", error_code: "not_found" });
       }
 
+      const normalizedLead = normalizeLeadRow(lead as JsonRecord);
+
       if (authUser.role === "cm") {
-        if (!authUser.lead_filter || !passesLeadFilter(lead as Record<string, unknown>, authUser.lead_filter)) {
+        if (!authUser.lead_filter || !passesLeadFilter(normalizedLead, authUser.lead_filter)) {
           return reply.status(404).send({ error: "Lead not found", error_code: "not_found" });
         }
       }
 
-      const groupId = (lead as Record<string, unknown>)["owner_group_id"];
+      const groupId = normalizedLead["owner_group_id"];
       if (!groupId) {
         return reply.status(200).send({ data: [] });
       }
 
       const { data: siblings, error: siblingsErr } = await db
         .from("lead_dashboard")
-        .select("id, name, niche, contact_tier, prospect_score, owner_group_id")
+        .select("*")
         .eq("owner_group_id", groupId)
         .neq("id", id);
 
@@ -270,11 +377,16 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
 
       if (authUser.role === "cm" && authUser.lead_filter) {
         results = results.filter((s) =>
-          passesLeadFilter(s as Record<string, unknown>, authUser.lead_filter as Record<string, unknown>)
+          passesLeadFilter(
+            normalizeLeadRow(s as JsonRecord),
+            authUser.lead_filter as Record<string, unknown>
+          )
         );
       }
 
-      return reply.status(200).send({ data: results });
+      return reply.status(200).send({
+        data: results.map((row) => normalizeLeadRow(row as JsonRecord)),
+      });
     }
   );
 }
@@ -292,6 +404,58 @@ function passesLeadFilter(
   const primaryOffer = filter["primary_offer"];
   if (typeof primaryOffer === "string" && primaryOffer) {
     if (lead["primary_offer"] !== primaryOffer) return false;
+  } else if (Array.isArray(primaryOffer) && primaryOffer.length > 0) {
+    const leadOffer = lead["primary_offer"] as string | undefined;
+    if (!leadOffer || !primaryOffer.includes(leadOffer)) return false;
+  }
+
+  const nicheFilter = filter["niche"];
+  if (Array.isArray(nicheFilter) && nicheFilter.length > 0) {
+    const leadNiche = lead["niche"] as string | undefined;
+    if (!leadNiche || !nicheFilter.includes(leadNiche)) return false;
+  }
+
+  const sourceFilter = filter["source"];
+  if (Array.isArray(sourceFilter) && sourceFilter.length > 0) {
+    const leadSource = lead["source"] as string | undefined;
+    if (!leadSource || !sourceFilter.includes(leadSource)) return false;
+  }
+
+  if (filter["exclude_contacted"] === true && lead["contacted_at"] != null) {
+    return false;
+  }
+
+  if (
+    filter["exclude_franchises"] === true &&
+    Array.isArray(lead["tags"]) &&
+    (lead["tags"] as unknown[]).includes("franchise-detected")
+  ) {
+    return false;
+  }
+
+  const requireState = filter["require_inferred_state"];
+  if (isRecord(requireState)) {
+    const inferredState = isRecord(lead["inferred_state"]) ? lead["inferred_state"] : null;
+    const boolChecks = [
+      "has_delivery",
+      "has_pos",
+      "has_reservations",
+    ] as const;
+    for (const key of boolChecks) {
+      if (requireState[key] === true) {
+        const fieldValue = inferredState && isRecord(inferredState[key])
+          ? inferredState[key]["value"]
+          : null;
+        if (fieldValue !== true) return false;
+      }
+    }
+  }
+
+  const detectedSubNiche = filter["detected_sub_niche"];
+  if (Array.isArray(detectedSubNiche) && detectedSubNiche.length > 0) {
+    const companyData = isRecord(lead["lead_company_data"]) ? lead["lead_company_data"] : null;
+    const leadSubNiche = companyData ? asNullableString(companyData["detected_sub_niche"]) : null;
+    if (!leadSubNiche || !detectedSubNiche.includes(leadSubNiche)) return false;
   }
 
   return true;

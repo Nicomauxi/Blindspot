@@ -1,0 +1,9 @@
+{
+  "name": "api",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "start": "node --env-file=../.env --import tsx/esm src/server.ts",
+    "dev": "node --env-file=../.env --watch --import tsx/esm src/server.ts"
+  }
+}

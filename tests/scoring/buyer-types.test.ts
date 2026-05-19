@@ -53,18 +53,15 @@ function withSubScores(scores: { web_nuevo?: number; rediseno?: number; marketin
 
 function withInferredState(state: Partial<Record<string, boolean>>): Partial<Lead> {
   const fields = ["has_delivery", "has_reservations", "has_online_catalog", "has_ecommerce", "has_pos", "has_chat_support"];
-  const inferred_state: Record<string, object> = {};
+  const inferred_state: Record<string, object | string> = {};
   for (const f of fields) {
     inferred_state[f] = { value: state[f] ?? false, confidence: 0.9, via: [] };
   }
   inferred_state["digitalization_level"] = "none";
   inferred_state["computed_at"] = "2026-01-01T00:00:00Z";
   return {
-    digital_footprint: {
-      fetched_at: "2026-01-01T00:00:00Z",
-      inferred_state,
-    },
-  } as unknown as Partial<Lead>;
+    inferred_state: inferred_state as Lead["inferred_state"],
+  };
 }
 
 function withTopLevelInferredState(state: Partial<Record<string, boolean>>): Partial<Lead> {

@@ -94,6 +94,46 @@ describe("updateLeadSocialSearch", () => {
     expect(Array.isArray(updateCall.tags)).toBe(true);
     expect((updateCall.tags as string[]).includes("whatsapp-derived")).toBe(true);
   });
+
+  it("recalculates contact_reliability_score from existing contact data", async () => {
+    single.mockResolvedValue({
+      data: {
+        digital_footprint: {
+          fetched_at: "2026-01-01T00:00:00.000Z",
+          contact_emails: [],
+          phone_classification: [],
+        },
+        tags: [],
+        whatsapp: null,
+        phone: "+59824087679",
+        canonical_fields: null,
+      },
+      error: null,
+    });
+    const socialSearch: SocialSearch = {
+      ran_at: "2026-01-02T00:00:00.000Z",
+      source: "playwright",
+      facebook: {
+        url: "https://facebook.com/negocio",
+        name: "Negocio",
+        email: null,
+        phone: "+59898000000",
+        website: null,
+        description: null,
+        whatsapp_button: false,
+        confidence: 0.8,
+        signals: ["page_loaded", "phone_found"],
+      },
+      instagram: null,
+    };
+
+    await updateLeadSocialSearch("lead-3", socialSearch, ["fb-confirmed"], null);
+
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({
+      contact_reliability_score: 0.3,
+      tags: expect.arrayContaining(["landline-phone"]),
+    }));
+  });
 });
 
 describe("updateLeadEnrichment — whatsapp invariant", () => {

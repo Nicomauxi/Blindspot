@@ -634,7 +634,7 @@ email_evidences: [
 | Yelu | Directorio privado UY, 31k+ listings — scraping HTML, sin GPS ni email en listado | 0.65 | ✅ Activo |
 | OSM / Overpass Turbo | Colaborativo, gratuito, GPS nativo, cubre interior | 0.60 | ✅ Activo |
 | InfoNegocios | Directorio B2B ejecutivos, decisores | 0.65 | Futuro |
-| DGI | RUT + razón social (requiere resolución a nombre comercial) | 0.35 | Futuro |
+| DGI/BPS | RUT + razón social | 0.35 | Descartado permanentemente el 2026-05-18; no implementar |
 
 ### Datos de empresa a persistir cuando las fuentes los proveen
 

@@ -132,7 +132,7 @@ docker exec supabase_db_gap-radar psql -U postgres -d postgres -c "..."
 
 ## Estado del roadmap — snapshot 2026-05-18
 
-**42 de 43 items implementados y completos.** El item 43 fue descartado por razones legales.
+**Estado canónico al 2026-05-18:** roadmap histórico bajo reauditoría. No usar este snapshot para declarar completitud mientras exista el plan de remediación activo.
 
 | Bloque | Items | Estado |
 |--------|-------|--------|
@@ -145,7 +145,7 @@ docker exec supabase_db_gap-radar psql -U postgres -d postgres -c "..."
 | 6 — Operación segura | Admin MVP UI, Fase 46, Fase 48, Fase 39 | ✅ Completo |
 | 7 — Outreach loop + UI base | Fase 25, Fase 44-pre, Fase 26, Fase 27, Fase 13, UI base | ✅ Completo |
 | 8 — Dashboards + pipeline | Pipeline Manager UI, Discovery CC UI, Fase 24, Fase 44, Cost Dashboard, Fase 45-pre, Fase 45, Performance Dashboard, Restart Actions, Cleanup v1* | ✅ Completo (*Cleanup v1 = manual, decidido por Nicolás) |
-| 9 — Enriquecimiento + refinamientos | Fase 40, Fase 28, Fase 29, Fase 11†, Fase 18†, Fase 38, Fase 37, Fase 43, Fase 36, Fase 41, Fase 42‡, Fase 30§ | ✅ Completo (excepto †‡§) |
+| 9 — Enriquecimiento + refinamientos | Fase 40, Fase 28, Fase 29, Fase 11†, Fase 18†, Fase 38, Fase 37, Fase 43, Fase 36, Fase 41, Fase 42‡ | Requiere reauditoría/cierre con evidencia |
 
 **Excepciones Bloque 9:**
 - `†` Fase 11 (IMM Habilitaciones) + Fase 18 (cruce MINTUR×IMM): bloqueadas, requieren Gemini DeepSearch del endpoint IMM. Pendiente de decisión de Nicolás.
@@ -158,15 +158,15 @@ docker exec supabase_db_gap-radar psql -U postgres -d postgres -c "..."
 
 > Reescribir completamente al cerrar cada sesión.
 
-**Tests:** 1068 passing, 7 skipped, 99 files | **Typecheck:** limpio | **DB invariantes:** 0/0/0/0 (verificados 2026-05-18)
+**Tests / typecheck / invariantes:** verificación histórica previa; revalidar contra el estado actual durante la remediación antes de usar como evidencia de cierre.
 
 **Commits recientes:**
 - `feat: implement outreach campaigns (Fase 43)` — tabla + CRUD API + UI selector
 - `feat: owner_group_id detection and API (Fase 41)` — detección mismo propietario + badge UI
-- `docs: AUTONOMOUS.md apunta a context/research/dgi.md para Fase 30`
+- `docs: AUTONOMOUS.md apuntaba a context/research/dgi.md para Fase 30` (superseded por descarte y plan de remediación 2026-05-18)
 - `docs: update AUTONOMOUS.md — Fases 43 + 41 completas`
 
-**Estado del roadmap:** 42/43 items completos. Fase 30 descartada (legal). Fase 42 bloqueada (data). Fase 11 + Fase 18 bloqueadas (research IMM pendiente).
+**Estado del roadmap:** reauditoría/remediación en curso. Fase 30 descartada (legal). Fase 42 bloqueada (data). Fase 11 + Fase 18 bloqueadas (research IMM pendiente).
 
 **Estado de DB (snapshot 2026-05-18 — scoring v2 aplicado):**
 

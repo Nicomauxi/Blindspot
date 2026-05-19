@@ -20,6 +20,7 @@ const RUN_STATUS_COLORS: Record<string, string> = {
   pending: "bg-yellow-50 text-yellow-700",
   running: "bg-blue-50 text-blue-700 animate-pulse",
   completed: "bg-green-50 text-green-700",
+  partial: "bg-orange-50 text-orange-700",
   failed: "bg-red-50 text-red-700",
   aborted: "bg-gray-50 text-gray-600",
 };
@@ -292,8 +293,13 @@ export default function PipelineManagerPage() {
                   {run.status}
                 </span>
                 <span className="font-mono text-xs text-gray-500 shrink-0">{run.id.slice(0, 8)}…</span>
-                {run.dry_run && <span className="text-xs bg-yellow-50 text-yellow-600 px-1 rounded">dry-run</span>}
-                <span className="text-xs text-gray-400 shrink-0">{run.scope}</span>
+                {run.overrides?.dry_run && <span className="text-xs bg-yellow-50 text-yellow-600 px-1 rounded">dry-run</span>}
+                <span className="text-xs text-gray-400 shrink-0">
+                  {run.overrides?.phases?.length ? run.overrides.phases.join(", ") : run.triggered_by}
+                </span>
+                {run.dashboard_stale && (
+                  <span className="text-xs bg-orange-50 text-orange-700 px-1 rounded">dashboard stale</span>
+                )}
                 <span className="flex-1" />
                 <span className="text-xs text-gray-400 shrink-0">{formatRelative(run.created_at)}</span>
                 {run.completed_at && run.started_at && (

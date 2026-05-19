@@ -12,6 +12,7 @@ function buildMessages(req: LLMRequest): Array<{ role: string; content: string }
     `Genera un mensaje de ventas de máximo 3 frases para contactar a "${req.lead_name}", `,
     `negocio de "${req.niche ?? "general"}" en Uruguay.`,
     req.pitch_hook ? ` Punto clave: ${req.pitch_hook}.` : "",
+    req.price_uyu != null ? ` Referencia de precio: UYU ${req.price_uyu}.` : "",
     ` Oferta: ${req.offer_type}. Canal: ${req.channel}. Solo el mensaje, sin encabezados.`,
   ].join("");
 

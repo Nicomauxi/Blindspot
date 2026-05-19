@@ -8,6 +8,7 @@ import type {
   DirectoryDiscovery,
   HeuristicDiscovery,
   HeuristicDiscoveryMode,
+  InferredState,
   Lead,
   SocialSearch,
 } from "../../shared/types.js";
@@ -38,6 +39,7 @@ import { parseSocialLinks } from "./parsers/social-links.js";
 import { parseOperationalSystems } from "./parsers/operational-systems.js";
 import type { OperationalSystemsCtx } from "./parsers/operational-systems.js";
 import { parseEmails } from "./parsers/email.js";
+import { assessEmailQuality } from "./parsers/email-quality.js";
 import type { EmailParseCtx } from "./parsers/email.js";
 import { parseWebPhones } from "./parsers/phone-web.js";
 import { parseHoursOnWeb } from "./parsers/hours-web.js";
@@ -45,6 +47,7 @@ import { parseCopyrightYear } from "./parsers/copyright-year.js";
 import { parseSsl } from "./parsers/ssl.js";
 import { whoisLookup, normalizeDomain } from "./whois.js";
 import type { GeoCtx } from "../social-enrich/geo-penalty.js";
+import { classifyUruguayPhones } from "../../shared/phone.js";
 
 const HTML_CACHE_MS = 7 * 24 * 60 * 60 * 1_000;
 const WHOIS_CACHE_MS = 30 * 24 * 60 * 60 * 1_000;
@@ -74,6 +77,7 @@ export type EnrichOutcome =
 
 export interface EnrichLeadResult {
   digital_footprint: DigitalFootprint;
+  inferred_state: InferredState | null;
   tags_to_add: string[];
   whatsapp_from_site: string | null;
   outcome: EnrichOutcome;
@@ -495,6 +499,7 @@ export async function enrichLead(
         ...(directoryDiscovery ? { directory_discovery: directoryDiscovery } : {}),
         ...(socialSearch ? { social_search: socialSearch } : {}),
       },
+      inferred_state: null,
       tags_to_add: tags,
       whatsapp_from_site: normalizeUruguayMobile(heuristicDiscovery?.selected.whatsapp?.number ?? "") ?? socialMobile,
       outcome: "skipped-no-website",
@@ -513,6 +518,7 @@ export async function enrichLead(
         ...(directoryDiscovery ? { directory_discovery: directoryDiscovery } : {}),
         ...(socialSearch ? { social_search: socialSearch } : {}),
       },
+      inferred_state: null,
       tags_to_add: [
         ...heuristicTags(heuristicDiscovery),
         ...socialSearchTags(socialSearch),
@@ -626,7 +632,12 @@ export async function enrichLead(
     }
   }
 
-  footprint.inferred_state = computeInferredState(footprint, lead);
+  footprint.email_quality = await assessEmailQuality(
+    footprint.contact_emails ?? [],
+    lead.name
+  );
+  footprint.phone_classification = classifyUruguayPhones(footprint.phone_alternatives ?? []);
+  const inferred_state = computeInferredState(footprint, lead);
 
   const tags_to_add = [
     ...deriveTags(footprint, lead, outdatedYearThreshold),
@@ -691,6 +702,7 @@ export async function enrichLead(
 
   return {
     digital_footprint: footprint,
+    inferred_state,
     tags_to_add,
     whatsapp_from_site,
     outcome,

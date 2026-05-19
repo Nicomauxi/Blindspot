@@ -8,9 +8,15 @@ let _mockUser: Record<string, unknown> = {
   active: true,
 };
 
+let _lastLlmUsageInsert: Record<string, unknown> | null = null;
+
 const mockLead = {
   id: "00000000-0000-0000-0000-000000000001",
   contact_tier: "A",
+  name: "Cafe Sur",
+  niche: "restaurant",
+  primary_offer: "delivery_system",
+  pitch_hook: "no acepta pedidos online",
 };
 
 const mockOutreach = {
@@ -80,7 +86,23 @@ vi.mock("../../api/src/db/client.js", () => ({
       }
       if (table === "llm_usage_log") {
         return {
-          insert: () => Promise.resolve({ error: null }),
+          insert: (payload: unknown) => {
+            _lastLlmUsageInsert = payload as Record<string, unknown>;
+            return Promise.resolve({ error: null });
+          },
+        };
+      }
+      if (table === "service_pricing") {
+        return {
+          select: () => ({
+            eq: () => ({
+              eq: () => ({
+                limit: () => ({
+                  maybeSingle: async () => ({ data: { monthly_fee: 3500 }, error: null }),
+                }),
+              }),
+            }),
+          }),
         };
       }
       if (table === "pipeline_config") {
@@ -135,6 +157,7 @@ function makeOutreachChain(): Record<string, unknown> {
 describe("GET /api/v1/outreach", () => {
   beforeEach(() => {
     process.env["API_JWT_SECRET"] = "test-secret-at-least-32-chars-long-1234";
+    _lastLlmUsageInsert = null;
     _mockUser = {
       id: "admin-user-id",
       email: "admin@blindspot.local",
@@ -412,6 +435,21 @@ describe("POST /api/v1/outreach/generate-offer", () => {
     expect(typeof body.data.text).toBe("string");
     expect(body.data.text.length).toBeGreaterThan(0);
     expect(body.data.source_llm).toBe("template");
+    expect(body.data.text).toContain("UYU 3.500");
+    expect(_lastLlmUsageInsert).toEqual(
+      expect.objectContaining({
+        operation: "generate_offer",
+        provider: "template",
+        model: "template-v1",
+        lead_id: mockLead.id,
+        user_id: "admin-user-id",
+        prompt_tokens: 0,
+        completion_tokens: 0,
+        cost_usd: 0,
+        success: true,
+        error: null,
+      })
+    );
     await app.close();
   });
 

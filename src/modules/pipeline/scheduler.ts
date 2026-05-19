@@ -2,6 +2,7 @@ import cron from "node-cron";
 import { getSupabase } from "../../shared/supabase.js";
 import { getLogger } from "../../shared/logger.js";
 import { executeRun, transitionToPending } from "./run-executor.js";
+import { processQueuedDiscoveryJobs } from "./discovery-jobs.js";
 import { nextCronRun } from "./scheduled-for.js";
 import type { PipelineRun, PipelineConfig } from "./types.js";
 
@@ -175,25 +176,14 @@ export class PipelineScheduler {
   }
 
   private async pollDiscoveryJobs(): Promise<void> {
-    const supabase = getSupabase();
-    const { data, error } = await supabase
-      .from("discovery_jobs")
-      .select("id, source, location, niche, triggered_by")
-      .eq("status", "queued")
-      .order("created_at", { ascending: true })
-      .limit(1);
-
-    if (error) {
+    try {
+      const result = await processQueuedDiscoveryJobs(1);
+      if (result.jobs_processed > 0) {
+        logger.info(result, "Processed queued discovery jobs");
+      }
+    } catch (error) {
       logger.error({ error }, "Failed to poll discovery jobs");
-      return;
     }
-
-    if (!data || data.length === 0) return;
-
-    const job = data[0];
-    if (!job) return;
-    logger.info({ jobId: job.id, source: job.source, location: job.location }, "Discovery job queued (execution pending Fase 24)");
-    // Real execution wired in Fase 24 (batch discovery multi-ciudad)
   }
 
   private async fetchConfig(): Promise<(PipelineConfig & { updated_at?: string }) | null> {

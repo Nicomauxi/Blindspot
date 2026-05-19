@@ -2,11 +2,17 @@ import { getSupabase } from "../../shared/supabase.js";
 import { getLogger } from "../../shared/logger.js";
 import { appendRunLog } from "./crash-recovery.js";
 import { notifyWebhook, loadWebhookConfig } from "./webhook.js";
+import {
+  executeDiscoveryPhase,
+  executeEnrichPhase,
+  executeRefreshPhase,
+  executeScorePhase,
+} from "./phase-executors.js";
 import type { PipelineRun, PhaseResults, PhaseResult, LogLine } from "./types.js";
 
 const logger = getLogger();
 
-export type RunResult = { status: "completed" | "failed" | "partial"; phase_results: PhaseResults };
+export type RunResult = { status: "completed" | "failed" | "partial" | "aborted"; phase_results: PhaseResults };
 
 export async function executeRun(run: PipelineRun): Promise<RunResult> {
   const supabase = getSupabase();
@@ -17,15 +23,25 @@ export async function executeRun(run: PipelineRun): Promise<RunResult> {
 
   await supabase
     .from("pipeline_runs")
-    .update({ status: "running", started_at: new Date().toISOString() })
+    .update({
+      status: "running",
+      started_at: new Date().toISOString(),
+      config_snapshot: run.config_snapshot ?? null,
+    })
     .eq("id", run.id);
 
   await appendRunLog(run.id, `Run started (dry_run=${isDryRun})`, "info");
 
   const phaseResults: PhaseResults = {};
-  let overallStatus: "completed" | "failed" | "partial" = "completed";
+  let hadFailure = false;
+  let hadSuccess = false;
 
   for (const phase of ["refresh", "discovery", "enrich", "score"] as const) {
+    if (await isAbortRequested(run.id)) {
+      await appendRunLog(run.id, `Abort requested before phase ${phase}`, "warn");
+      return finalizeRun(run.id, "aborted", phaseResults);
+    }
+
     if (!enabledPhases.includes(phase)) {
       phaseResults[phase] = skippedPhase();
       continue;
@@ -41,43 +57,68 @@ export async function executeRun(run: PipelineRun): Promise<RunResult> {
     phaseResults[phase] = result;
 
     if (result.status === "failed") {
-      overallStatus = "partial";
+      hadFailure = true;
       await appendRunLog(run.id, `Phase ${phase} failed: ${result.error ?? "unknown"}`, "error");
+      continue;
+    }
+
+    if (result.status === "ok") {
+      hadSuccess = true;
+    }
+
+    if (await isAbortRequested(run.id)) {
+      await appendRunLog(run.id, `Abort requested after phase ${phase}`, "warn");
+      return finalizeRun(run.id, "aborted", phaseResults);
     }
   }
 
   const invariantResult = await runInvariantCheck(run.id, isDryRun);
   phaseResults.invariant_check = invariantResult;
 
-  const finalStatus = invariantResult.status === "failed" ? "partial" : overallStatus;
+  if (invariantResult.status === "failed") {
+    hadFailure = true;
+  } else if (invariantResult.status === "ok") {
+    hadSuccess = true;
+  }
 
+  const finalStatus = hadFailure ? (hadSuccess ? "partial" : "failed") : "completed";
+
+  return finalizeRun(run.id, finalStatus, phaseResults);
+}
+
+async function finalizeRun(
+  runId: string,
+  status: "completed" | "failed" | "partial" | "aborted",
+  phaseResults: PhaseResults
+): Promise<RunResult> {
+  const supabase = getSupabase();
   await supabase
     .from("pipeline_runs")
     .update({
-      status: finalStatus,
+      status,
       completed_at: new Date().toISOString(),
       phase_results: phaseResults,
-      dashboard_stale: finalStatus !== "completed",
-      invariant_details: invariantResult,
+      dashboard_stale: status !== "completed",
+      invariant_details: phaseResults.invariant_check ?? null,
     })
-    .eq("id", run.id);
+    .eq("id", runId);
 
-  await appendRunLog(run.id, `Run finished with status=${finalStatus}`, finalStatus === "completed" ? "info" : "warn");
+  await appendRunLog(runId, `Run finished with status=${status}`, status === "completed" ? "info" : "warn");
 
   // Notify webhook (best-effort — don't let it fail the run)
   try {
     const webhookCfg = await loadWebhookConfig();
-    await notifyWebhook(run.id, "run_completed", webhookCfg, {
-      status: finalStatus,
+    await notifyWebhook(runId, "run_completed", webhookCfg, {
+      status,
       phase_results: phaseResults,
     });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
-    logger.warn({ runId: run.id, err: msg }, "Webhook notification error (ignored)");
+    logger.warn({ runId, err: msg }, "Webhook notification error (ignored)");
   }
 
-  logger.info({ runId: run.id, status: finalStatus }, "Run execution finished");
-  return { status: finalStatus, phase_results: phaseResults };
+  logger.info({ runId, status }, "Run execution finished");
+  return { status, phase_results: phaseResults };
 }
 
 async function runPhase(
@@ -88,14 +129,51 @@ async function runPhase(
   const startedAt = new Date().toISOString();
   await appendRunLog(runId, `Starting phase: ${phase}${isDryRun ? " (dry-run)" : ""}`, "info");
 
-  if (isDryRun) {
-    return { started_at: startedAt, completed_at: new Date().toISOString(), status: "ok", items_processed: 0 };
-  }
+  try {
+    const supabase = getSupabase();
+    const { data: runRow, error } = await supabase
+      .from("pipeline_runs")
+      .select("config_snapshot")
+      .eq("id", runId)
+      .single();
 
-  // In autonomous mode, phases are stubs — real execution is implemented per-phase
-  // as the pipeline grows. For now, log that the phase was invoked.
-  logger.info({ runId, phase }, "Phase invoked (stub — real execution pending)");
-  return { started_at: startedAt, completed_at: new Date().toISOString(), status: "ok", items_processed: 0 };
+    if (error || !runRow) {
+      throw new Error(`Failed to load config snapshot for run ${runId}`);
+    }
+
+    const configSnapshot = (runRow as Pick<PipelineRun, "config_snapshot">).config_snapshot;
+    if (!configSnapshot) {
+      throw new Error("Missing config_snapshot");
+    }
+
+    const summary = phase === "refresh"
+      ? await executeRefreshPhase(configSnapshot.phases.refresh, isDryRun)
+      : phase === "discovery"
+      ? await executeDiscoveryPhase(configSnapshot.phases.discovery, isDryRun)
+      : phase === "enrich"
+      ? await executeEnrichPhase(configSnapshot.phases.enrich, isDryRun)
+      : await executeScorePhase(configSnapshot.phases.score, isDryRun);
+
+    if (summary.note) {
+      await appendRunLog(runId, `Phase ${phase}: ${summary.note}`, "info");
+    }
+
+    return {
+      started_at: startedAt,
+      completed_at: new Date().toISOString(),
+      status: "ok",
+      items_processed: summary.itemsProcessed,
+    };
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    logger.error({ runId, phase, error: message }, "Pipeline phase failed");
+    return {
+      started_at: startedAt,
+      completed_at: new Date().toISOString(),
+      status: "failed",
+      error: message,
+    };
+  }
 }
 
 async function runInvariantCheck(runId: string, _isDryRun: boolean): Promise<PhaseResult> {
@@ -103,13 +181,22 @@ async function runInvariantCheck(runId: string, _isDryRun: boolean): Promise<Pha
   await appendRunLog(runId, "Running post-run invariant check", "info");
 
   const supabase = getSupabase();
-  const { data } = await supabase
+  const { count, error } = await supabase
     .from("leads")
     .select("id", { count: "exact", head: true })
     .eq("passed_filter", true)
     .is("prospect_score", null);
 
-  const passedSinScore = data ?? 0;
+  if (error) {
+    return {
+      started_at: startedAt,
+      completed_at: new Date().toISOString(),
+      status: "failed",
+      error: error.message,
+    };
+  }
+
+  const passedSinScore = count ?? 0;
   const passed = passedSinScore === 0;
 
   if (!passed) {
@@ -128,6 +215,22 @@ async function runInvariantCheck(runId: string, _isDryRun: boolean): Promise<Pha
 function skippedPhase(): PhaseResult {
   const now = new Date().toISOString();
   return { started_at: now, completed_at: now, status: "skipped" };
+}
+
+async function isAbortRequested(runId: string): Promise<boolean> {
+  const supabase = getSupabase();
+  const { data, error } = await supabase
+    .from("pipeline_runs")
+    .select("abort_requested")
+    .eq("id", runId)
+    .single();
+
+  if (error) {
+    logger.warn({ runId, error }, "Failed to check abort_requested");
+    return false;
+  }
+
+  return (data as { abort_requested?: boolean } | null)?.abort_requested === true;
 }
 
 export async function transitionToPending(

@@ -1,8 +1,10 @@
 # Blindspot — Leads Data
 
+> Snapshot histórico. No usar como fuente canónica de estado actual si contradice
+> `PROJECT_MASTER.md § Estado de DB` o queries directas a la DB local.
 > Cargar solo cuando el trabajo involucra análisis de datos, auditoría o planificación de outreach.
-> Actualizar al cierre de sesión si hubo cambios en datos.
-> **Última actualización:** 2026-05-13
+> Regenerar antes de tomar decisiones operativas.
+> **Última actualización de este snapshot:** 2026-05-13
 
 ---
 

@@ -36,7 +36,7 @@ interface StaleRun {
   niche: string;
 }
 
-async function queryStaleRuns(
+export async function queryStaleRuns(
   staleDays: number,
   niche?: string
 ): Promise<StaleRun[]> {
@@ -76,7 +76,7 @@ async function queryStaleRuns(
   return runs;
 }
 
-async function hasStaleLeadsForSource(
+export async function hasStaleLeadsForSource(
   source: string,
   staleDays: number
 ): Promise<boolean> {

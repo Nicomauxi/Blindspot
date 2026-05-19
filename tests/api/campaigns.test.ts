@@ -22,6 +22,16 @@ const mockCampaign = {
   closed_at: null,
 };
 
+const mockCampaignOutreachRows = [
+  { lead_id: "lead-1", status: "contacted", outcome: null },
+  { lead_id: "lead-2", status: "closed_won", outcome: "closed_won" },
+];
+
+const mockCampaignLeads = [
+  { id: "lead-1", prospect_score: 40 },
+  { id: "lead-2", prospect_score: 70 },
+];
+
 vi.mock("../../api/src/db/client.js", () => ({
   getDb: () => ({
     from: (table: string) => {
@@ -64,7 +74,14 @@ vi.mock("../../api/src/db/client.js", () => ({
       if (table === "lead_outreach") {
         return {
           select: () => ({
-            eq: () => Promise.resolve({ data: [], error: null }),
+            eq: () => Promise.resolve({ data: mockCampaignOutreachRows, error: null }),
+          }),
+        };
+      }
+      if (table === "leads") {
+        return {
+          select: () => ({
+            in: async () => ({ data: mockCampaignLeads, error: null }),
           }),
         };
       }
@@ -163,8 +180,10 @@ describe("GET /api/v1/campaigns/:id", () => {
     expect(res.statusCode).toBe(200);
     const body = JSON.parse(res.body);
     expect(body.data.id).toBe(CAMPAIGN_ID);
-    expect(typeof body.stats.contacted).toBe("number");
-    expect(typeof body.stats.conversion_rate).toBe("number");
+    expect(body.stats.contacted).toBe(2);
+    expect(body.stats.closed_won).toBe(1);
+    expect(body.stats.conversion_rate).toBe(50);
+    expect(body.stats.avg_score_contacted).toBe(55);
     await app.close();
   });
 

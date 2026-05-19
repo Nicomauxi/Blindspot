@@ -4,6 +4,12 @@
 > `ui/` consume la API REST expuesta por `api/` (mismo repo, proceso separado).
 > No documenta código implementado — para el estado actual del backend ver `ARCHITECTURE.md`.
 > Para el diseño objetivo del backend ver `ARCHITECTURE_FUTURE.md`.
+> Para orden de ejecución, ownership de procesos y decisiones canónicas ver `ROADMAP_CANONICAL.md`.
+>
+> **Alcance de este archivo:** pantallas de USO NORMAL (Lead Explorer, Lead Detail, Outreach Tracker, Segment Explorer, Discovery Control Center, Pipeline Manager). El **panel admin** específico (gestión de socios, audit log, dashboards de costo y performance, system status) tiene specs propias en `ADMIN_PANEL.md`.
+> **Estado canónico de roadmap:** `Segment Explorer` forma parte de `UI base` en `ROADMAP_CANONICAL.md`; no es una pantalla suelta fuera del canónico.
+>
+> **Modelo de uso:** ver `PROJECT_MASTER.md § Modelo de uso`. La UI sirve a 1 admin + 2–8 socios concurrentes, no a tráfico masivo. Optimizar para filtros componibles y respuesta <500ms en queries normales, no para escala.
 
 ---
 
@@ -96,18 +102,20 @@ GET  /api/v1/leads/:id
        + buyer_type_scores ordenados por score DESC
        + corroborating_sources con labels
 
-PATCH /api/v1/leads/:id/contact
-     body: { contacted_at, channel, notes }
-     → actualiza estado de outreach en leads.contacted_at
+// Para registrar contacto: usar POST /api/v1/outreach (sección Outreach abajo).
+// El trigger SQL contacted_by (Fase 25) actualiza leads.contacted_at y leads.contacted_by
+// automáticamente al primer outreach del lead — no hay PATCH /leads/:id/contact.
 ```
 
 ### Outreach
 
 ```
 GET  /api/v1/outreach
-     ?status=pending,responded
+     ?status=contacted,responded
      &order=created_at:desc
      → LeadOutreach[]
+     // status values del enum canónico: contacted | responded | interested
+     //                                    | closed_won | closed_lost | no_response
 
 POST /api/v1/outreach
      body: { lead_id, channel, offer_type, offer_package? }
@@ -159,7 +167,7 @@ PATCH /api/v1/pipeline/config
 POST /api/v1/pipeline/run
      body: { overrides?: Partial<PipelineConfig> }
      → dispara ejecución inmediata, responde con { run_id }
-     → el servidor inicia el pipeline en background
+     → `api/` encola `pipeline_runs.status='pending'` + `pg_notify`; `src/` inicia el pipeline en background
 
 POST /api/v1/pipeline/run/dry
      body: { overrides?: Partial<PipelineConfig> }
@@ -170,8 +178,10 @@ POST /api/v1/pipeline/abort
      → aborta el run activo (si lo hay), espera a que el lead actual termine limpiamente
 
 POST /api/v1/pipeline/pause-phase
-     body: { phase: 1 | 2 | 3 | 4 }
+     body: { phase: 'refresh' | 'discovery' | 'enrich' | 'score' }
      → pausa la fase indicada, continúa con la siguiente
+     // Naming alineado con phase_results jsonb keys (refresh/discovery/enrich/score).
+     // Fase 5 (report) no es pausable — son segundos al final del run.
 
 GET  /api/v1/pipeline/runs
      ?status=completed,failed,partial
@@ -212,10 +222,19 @@ interface LeadCard {
 
   // Score y oferta
   prospect_score: number
-  primary_offer: 'web_nuevo' | 'rediseno' | 'marketing' | 'software' | 'catalogo' | 'none'
+  primary_offer: 'web_nuevo' | 'rediseno' | 'marketing' | 'software' | 'catalogo' | 'contacto_directo' | 'none'
   pitch_hook: string
   urgency_signal: 'high' | 'medium' | 'low'
   buyer_type_scores: BuyerTypeScore[]   // top 3
+  detected_sub_niche?: string           // post-Fase 28; visible solo si lead.niche === 'other' y se detectó
+
+  // Score breakdown v2 (post-Fase 22 — campos para el panel de detalle)
+  gap_depth?: number                     // 0–60
+  commercial_breadth?: number            // 0–12
+  business_quality_pts?: number          // 0–15
+  accessibility_factor?: number          // 0.225–1.30
+  timing_factor?: number                 // 0.85–1.20
+  urgency_bonus?: number                 // 0–5
 
   // Estado operativo
   digitalization_level: 'none' | 'basic' | 'intermediate' | 'advanced'
@@ -327,10 +346,15 @@ interface LeadCard {
 │  ─────────────────────                  marketing   ██████  41      │
 │  🚫 Sin web propia                      software    ████░░  28      │
 │  📘 FB: presente, sin actividad 8m      catalogo    ██░░░░  18      │
-│  📷 IG: no detectado                                                 │
-│  ⚠️  Web vía heurístico (score 0.71)   Contactabilidad:  ×1.28     │
-│  🗓  Copyright 2019 detectado          Review mult:       ×1.20     │
-│  ⭐ Rating 4.4 · 87 reviews                                          │
+│  📷 IG: no detectado                    contacto_d  ░░░░░░   0      │
+│  ⚠️  Web vía heurístico (score 0.71)                                │
+│  🗓  Copyright 2019 detectado          Fórmula v2 (Fase 22):        │
+│  ⭐ Rating 4.4 · 87 reviews              gap_depth:        41/60    │
+│                                          breadth:          +8       │
+│                                          quality_pts:     12/15     │
+│                                          accessibility:   ×1.30     │
+│                                          timing:          ×1.05     │
+│                                          urgency_bonus:    +5       │
 │                                        Oferta principal:             │
 │  ESTADO OPERATIVO                      Marketing social              │
 │  ─────────────────────                                               │
@@ -423,6 +447,9 @@ Con PostGIS y coordenadas disponibles, el Segment Explorer agrega una vista de m
 → array liviano de coordenadas + score para renderizar el mapa sin cargar todo el LeadCard.
 
 **Librería:** MapLibre GL JS (MIT, sin API key) o Leaflet con tiles de OpenStreetMap.
+
+**Atribución obligatoria:** la API de MapLibre/Leaflet incluye `attributionControl` por defecto — **no desactivarlo**. Verificar visualmente que el texto `© Colaboradores de OpenStreetMap` aparece en una esquina del mapa, y que el link va a `https://www.openstreetmap.org/copyright`. Sin esta atribución el uso de tiles OSM viola la licencia ODbL.
+
 **Prerequisito:** PostGIS activado (Fase 21) y columna `gps` en `leads` con backfill de coordenadas.
 
 ---
@@ -733,7 +760,7 @@ Se abre desde Lead Explorer o Lead Detail al hacer "Marcar contactado".
 ┌──────────────────────────────────────────────────────┐
 │  Oferta generada — La Parrilla Don Carlos             │
 │  Tipo: Marketing social · Canal: WhatsApp             │
-│  Fuente: Gemini Flash ✨                              │
+│  Fuente: LLM configurado                             │
 ├──────────────────────────────────────────────────────┤
 │                                                      │
 │  Hola! Vi La Parrilla en Google y tienen muy buenas  │
@@ -770,7 +797,7 @@ Se abre desde Lead Explorer o Lead Detail al hacer "Marcar contactado".
 | `<OperationalState state={...} />` | InferredState | Íconos ✅/❌ por dimensión |
 | `<BuyerTypeBar types={[...]} />` | BuyerTypeScore[] | Barras horizontales top 3 |
 | `<ContactActions lead={...} />` | LeadCard | Botones: copiar email, abrir WA, marcar contactado |
-| `<SourcesBadges sources={[...]} />` | string[] | Chips: GP / MINTUR / Yelu / OSM |
+| `<SourcesBadges sources={[...]} />` | string[] | Chips: GP / MINTUR / Yelu / OSM. El chip `OSM` muestra tooltip `© Colaboradores de OpenStreetMap` al hover (atribución requerida por licencia ODbL). |
 | `<OutreachModal lead={...} />` | LeadCard | Modal de registro de contacto |
 | `<OfferModal lead={...} />` | LeadCard | Modal de oferta generada |
 
@@ -786,7 +813,8 @@ No construir todo de una vez. Prerequisito base: API server activo en `blindspot
 | 2 | Filtros por tier + oferta + urgencia + score | Scoring v2 completo (Fase 22) |
 | 3 | Lead Detail completo con sub-scores y señales | `inferred_state` como columna propia |
 | 4 | Modal de registro de outreach (contacted/won/lost) | Tabla `lead_outreach` + API `/api/v1/outreach` |
-| 5 | **Pipeline Manager** — config + ejecución manual + historial + budget tracker | Fase 23 + Fase 44 (budget tracker) |
+| 5a | **Pipeline Manager core** — config + ejecución manual + historial | Fase 23 |
+| 5b | **Budget badge** en Pipeline Manager (Google Places) | Fase 44 |
 | 6 | **Monitor de ejecución activa** (progress en tiempo real) | `GET /api/v1/pipeline/runs/active` + log endpoint |
 | 7 | Generación de ofertas IA | LLMProvider configurado (Gemini/Ollama) |
 | 8 | Segment Explorer + mapa geográfico | `GET /api/v1/stats/overview` + PostGIS (Fase 21) |
@@ -880,4 +908,5 @@ app/
 | API `/api/v1/` desde el inicio | Permite introducir `/api/v2/` para breaking changes sin romper el frontend en producción. |
 | FTS con `plainto_tsquery` en backend | La búsqueda de texto ocurre en PostgreSQL — el frontend solo manda `?q=`. Sin Elasticsearch, sin infraestructura adicional. |
 | Mapa con MapLibre GL JS (no Google Maps) | MIT license, sin API key, tiles de OpenStreetMap. Solo activo cuando PostGIS está disponible (Fase 21). |
+| **Atribución OSM obligatoria** | Cuando se muestren tiles de OpenStreetMap O leads con `source='osm'` (o con `osm` en `corroborating_sources`), la UI debe renderizar el texto literal `© Colaboradores de OpenStreetMap` (con link a `https://www.openstreetmap.org/copyright`). MapLibre lo provee via `attributionControl: true` (default — NO desactivarlo). Para vistas no-mapa (Lead Card, Lead Detail), el componente `<SourcesBadges>` muestra la atribución como tooltip al hover del chip `OSM`, y el `<AppFooter>` la repite globalmente cuando hay leads OSM filtrados. Requisito de licencia ODbL — no opcional. Ver `ROADMAP_CANONICAL.md § Fuentes de datos`. |
 | Campañas vinculadas a outreach (no a leads) | Un lead puede pertenecer a múltiples campañas en distintos momentos. El vínculo está en `lead_outreach.campaign_id`, no en `leads`. |

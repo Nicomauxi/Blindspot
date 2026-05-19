@@ -43,10 +43,7 @@ function computeCommissionEstimate(
 }
 
 function inferredBool(lead: Lead, field: string): boolean {
-  return (
-    resolveField(lead, `inferred_state.${field}.value`) === true ||
-    resolveField(lead, `digital_footprint.inferred_state.${field}.value`) === true
-  );
+  return resolveField(lead, `inferred_state.${field}.value`) === true;
 }
 
 function computeBuyerScore(

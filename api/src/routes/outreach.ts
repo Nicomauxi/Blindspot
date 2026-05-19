@@ -88,6 +88,99 @@ function validateStatusOutcome(
   return null;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function asNullableString(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function passesLeadFilter(
+  lead: Record<string, unknown>,
+  filter: Record<string, unknown>
+): boolean {
+  const tierFilter = filter["contact_tier"];
+  if (Array.isArray(tierFilter) && tierFilter.length > 0) {
+    const leadTier = lead["contact_tier"] as string | undefined;
+    if (!leadTier || !tierFilter.includes(leadTier)) return false;
+  }
+
+  const primaryOffer = filter["primary_offer"];
+  if (typeof primaryOffer === "string" && primaryOffer) {
+    if (lead["primary_offer"] !== primaryOffer) return false;
+  } else if (Array.isArray(primaryOffer) && primaryOffer.length > 0) {
+    const leadOffer = lead["primary_offer"] as string | undefined;
+    if (!leadOffer || !primaryOffer.includes(leadOffer)) return false;
+  }
+
+  const nicheFilter = filter["niche"];
+  if (Array.isArray(nicheFilter) && nicheFilter.length > 0) {
+    const leadNiche = lead["niche"] as string | undefined;
+    if (!leadNiche || !nicheFilter.includes(leadNiche)) return false;
+  }
+
+  const sourceFilter = filter["source"];
+  if (Array.isArray(sourceFilter) && sourceFilter.length > 0) {
+    const leadSource = lead["source"] as string | undefined;
+    if (!leadSource || !sourceFilter.includes(leadSource)) return false;
+  }
+
+  if (
+    filter["exclude_franchises"] === true &&
+    Array.isArray(lead["tags"]) &&
+    (lead["tags"] as unknown[]).includes("franchise-detected")
+  ) {
+    return false;
+  }
+
+  if (filter["exclude_contacted"] === true && lead["contacted_at"] != null) {
+    return false;
+  }
+
+  const requireState = filter["require_inferred_state"];
+  if (isRecord(requireState)) {
+    const inferredState = isRecord(lead["inferred_state"]) ? lead["inferred_state"] : null;
+    for (const key of ["has_delivery", "has_pos", "has_reservations"] as const) {
+      if (requireState[key] === true) {
+        const fieldValue = inferredState && isRecord(inferredState[key])
+          ? inferredState[key]["value"]
+          : null;
+        if (fieldValue !== true) return false;
+      }
+    }
+  }
+
+  const detectedSubNiche = filter["detected_sub_niche"];
+  if (Array.isArray(detectedSubNiche) && detectedSubNiche.length > 0) {
+    const companyData = isRecord(lead["lead_company_data"]) ? lead["lead_company_data"] : null;
+    const leadSubNiche = companyData ? asNullableString(companyData["detected_sub_niche"]) : null;
+    if (!leadSubNiche || !detectedSubNiche.includes(leadSubNiche)) return false;
+  }
+
+  return true;
+}
+
+async function getAdminServicePrice(
+  db: ReturnType<typeof getDb>,
+  serviceType: string
+): Promise<number | null> {
+  const { data, error } = await db
+    .from("service_pricing")
+    .select("monthly_fee, users!inner(role)")
+    .eq("service_type", serviceType)
+    .eq("users.role", "admin")
+    .limit(1)
+    .maybeSingle();
+
+  if (error || !data) return null;
+  return typeof (data as { monthly_fee?: unknown }).monthly_fee === "number"
+    ? (data as { monthly_fee: number }).monthly_fee
+    : null;
+}
+
 export async function outreachRoutes(app: FastifyInstance): Promise<void> {
   // GET /api/v1/outreach — list outreach records
   app.get("/outreach", { preHandler: requireAuth }, async (request, reply) => {
@@ -178,7 +271,7 @@ export async function outreachRoutes(app: FastifyInstance): Promise<void> {
     const db = getDb();
     const { data: lead, error: leadError } = await db
       .from("lead_dashboard")
-      .select("id, contact_tier")
+      .select("*")
       .eq("id", body.lead_id)
       .single();
 
@@ -191,16 +284,7 @@ export async function outreachRoutes(app: FastifyInstance): Promise<void> {
       if (!authUser.lead_filter) {
         return reply.status(404).send({ error: "Lead not found", error_code: "not_found" });
       }
-      const tierFilter = authUser.lead_filter["contact_tier"];
-      if (
-        Array.isArray(tierFilter) &&
-        tierFilter.length > 0 &&
-        !(lead as { contact_tier: string }).contact_tier
-          ? false
-          : Array.isArray(tierFilter) &&
-            tierFilter.length > 0 &&
-            !tierFilter.includes((lead as { contact_tier: string }).contact_tier)
-      ) {
+      if (!passesLeadFilter(lead as Record<string, unknown>, authUser.lead_filter)) {
         return reply.status(404).send({ error: "Lead not found", error_code: "not_found" });
       }
     }
@@ -348,6 +432,7 @@ export async function outreachRoutes(app: FastifyInstance): Promise<void> {
         offer_type?: string;
         channel?: string;
       };
+      const authUser = getAuthUser(request);
 
       if (!body?.lead_id) {
         return reply.status(400).send({
@@ -377,7 +462,9 @@ export async function outreachRoutes(app: FastifyInstance): Promise<void> {
       const provider = createLLMProvider();
       const startMs = Date.now();
       let result;
-      let status: LlmUsageLog["status"] = "success";
+      let usageSuccess = true;
+      let usageError: string | null = null;
+      const servicePriceUyu = await getAdminServicePrice(db, offerType);
 
       try {
         result = await provider.generateOffer({
@@ -388,13 +475,15 @@ export async function outreachRoutes(app: FastifyInstance): Promise<void> {
           pitch_hook: (lead as Record<string, string | null>)["pitch_hook"] ?? null,
           offer_type: offerType,
           channel,
+          ...(servicePriceUyu != null ? { price_uyu: servicePriceUyu } : {}),
         });
-        if (result.source_llm === "template") status = "fallback";
       } catch (err) {
         request.log.error({ err }, "LLM generate-offer error");
         const templateProvider = (await import("../llm/template.js")).then(
           (m) => new m.TemplateProvider()
         );
+        usageSuccess = false;
+        usageError = err instanceof Error ? err.message : String(err);
         result = await (await templateProvider).generateOffer({
           lead_id: body.lead_id,
           lead_name: (lead as Record<string, string | null>)["name"] ?? "",
@@ -403,21 +492,23 @@ export async function outreachRoutes(app: FastifyInstance): Promise<void> {
           pitch_hook: (lead as Record<string, string | null>)["pitch_hook"] ?? null,
           offer_type: offerType,
           channel,
+          ...(servicePriceUyu != null ? { price_uyu: servicePriceUyu } : {}),
         });
-        status = "error";
       }
 
       // Log usage (best-effort — don't fail the request if logging fails)
       const usageRow: LlmUsageLog = {
-        lead_id: body.lead_id,
-        feature: "generate_offer",
         provider: result.provider ?? provider.name,
         model: result.model ?? provider.model,
-        tokens_in: result.tokens_in ?? 0,
-        tokens_out: result.tokens_out ?? 0,
-        cost_usd_estimated: result.cost_usd_estimated ?? 0,
-        status,
+        operation: "generate_offer",
+        lead_id: body.lead_id,
+        user_id: authUser.id,
+        prompt_tokens: result.tokens_in ?? 0,
+        completion_tokens: result.tokens_out ?? 0,
+        cost_usd: result.cost_usd_estimated ?? 0,
         duration_ms: Date.now() - startMs,
+        success: usageSuccess,
+        error: usageError,
       };
       db.from("llm_usage_log").insert(usageRow).then(({ error: logErr }) => {
         if (logErr) request.log.warn({ logErr }, "llm_usage_log insert failed");

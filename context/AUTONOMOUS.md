@@ -298,7 +298,7 @@ Si Fase 49 (backup automatizado) no está aplicada todavía:
 |------|-------|
 | **APIs con costo / gasto externo** | Google Places, modelos billables o cualquier ejecución con impacto financiero real. |
 | **Comandos bloqueados por `SECURITY.md` o instalación de paquetes** | La aprobación general no levanta `pnpm add`, comandos destructivos ni bloqueos del sandbox/política. |
-| **Research externo pendiente** | Fase 11 (IMM) y Fase 30 (DGI) siguen frenando hasta que exista el research en `context/research/`. |
+| **Research externo pendiente** | Fase 11 (IMM) sigue frenando hasta que exista el research en `context/research/`. |
 | **Input humano de negocio** | Ejemplo principal: `Fase 22-eval` se ejecuta sola, pero `Fase 22` no arranca hasta que Nicolás revise el reporte v1/v2. También aplica a Fase 42 y a cualquier criterio que dependa de juicio comercial. |
 | **Acciones manuales fuera del repo o del entorno local** | Producción/infra como Fase 48, cron fuera del flujo automatizable, PM2/Nginx/HTTPS, o configuraciones que solo el admin debe operar. |
 | **Cleanup v1** | `DROP COLUMN` manual/administrativo; el agente lo sigue salteando por diseño y avanza al item siguiente del canónico. |
@@ -349,9 +349,7 @@ Cuando se llega a una stop condition, NO continuar al siguiente paso. En cambio:
 | `criterio-imposible-de-cerrar` | La definición de listo del item canónico depende de algo que aún no existe (schema, fase anterior no aplicada) | Adelantar la fase faltante, ajustar `ROADMAP_CANONICAL.md` o reordenar el item antes de avanzar |
 | `manual-skip-cleanup-v1` | Item 31 (Cleanup v1) detectado como próximo en el canónico. El agente **no ejecuta esta fase** (modo `manual/approval`, solo Nicolás) pero **sí avanza al siguiente item** (32 = Fase 40 — Bloque 9). Registrar en ESTADO que se saltó por diseño y continuar — no es bloqueante. | Ignorar en la cadena autónoma; Nicolás ejecuta Cleanup v1 off-band cuando decida. |
 | `approval-required-fase-11-research` | Item 35 (Fase 11 IMM Habilitaciones) requiere Gemini DeepSearch del Tech Lead antes de implementar el provider. Sin research previo en `context/research/imm-habilitaciones.md`, no procede. | Tech Lead corre Gemini DeepSearch sobre IMM Habilitaciones (licencia, endpoint, frecuencia) y guarda resultado en `context/research/imm-habilitaciones.md`. Luego aprobar con `"ok proceder con Fase 11"`. |
-| `approval-required-fase-30-research` | **FASE 30 (DGI) DESCARTADA PERMANENTEMENTE.** Motivo: uso de datos DGI/BPS viola Ley 18.331 de protección de datos de Uruguay y condiciones de uso de DGI. No implementar bajo ninguna circunstancia. Stop condition final: `fases-completas`. | Sin acción. El roadmap canónico termina en item 41 (Fase 41). |
 | `approval-required-fase-42-data` | Item 42 (Fase 42 Scoring estacional) requiere ≥30 outreach cerrados en 2+ estaciones distintas para calibrar `seasonal_modifiers`. | Tech Lead valida el dataset de outreach (`SELECT EXTRACT(MONTH FROM closed_at), COUNT(*) FROM lead_outreach WHERE outcome IS NOT NULL GROUP BY 1`). Aprobar con `"ok proceder con Fase 42"`. |
-| `fases-completas-con-research-pendiente` | Items 0–41 completos. Item 42 (scoring estacional): bloqueado por data. Item 43 (Fase 30 DGI): **DESCARTADO permanentemente** — viola Ley 18.331 Uruguay. Stop condition final: declarar `fases-completas`. | Sin acción. El roadmap está completo. |
 
 ---
 
@@ -372,91 +370,23 @@ Cuando se llega a una stop condition, NO continuar al siguiente paso. En cambio:
 
 **Última actualización:** 2026-05-18
 
-**Sesiones autónomas completadas:** 35 (`Fase 49 — DB backup automatizado`, `Fase 22-pre — campos de versión y rollback de scoring`, `Fase 21 — PostGIS local + columna gps`, `Fase 47 — inferred_state a columna propia`, `Fase 15 — calidad de email + tipo de teléfono`, `Fase 6A — deduplicación cross-source para inserts nuevos`, `Fase 6B — reconciliación retroactiva local`, `Fase 22 — scoring v2 apply`, `Fase API-0 — schemas users/pipeline/outreach/audit_log`, `Fase 23 — core automation scheduler`, `Fase API APIA…APIE — Fastify completo + matriz auth verde`, `Admin MVP UI — User Management + Health + Audit Log Viewer`, `Fase 46 — Scraping hardening anti-detección`, `Fase 48 — Producción (artifacts)`, `Fase 39 — Webhook notificaciones externas`, `UI base`, `Pipeline Manager UI`, `Discovery Control Center UI`, `Fase 24 — batch discovery multi-ciudad`, `Fase 44 — budget tracker Google Places`, `Cost Dashboard UI`, `Fase 45-pre — pipeline_errors schema`, `Fase 45 — change detection en re-enrich`, `Performance Dashboard UI`, `Restart Actions UI + endpoints`, `Fase 40 — Full-text search (search_vector + GIN index)`, `Fase 26 — LLM offer generation con template fallback`, `Fase 28 — Sub-niche detection para leads other`, `Fase 29 — MINTUR TipoOperador extraction`, `Fase 38 — Geo-dedup ya implementada en commit previo (haversine + GPS filter)`, `Fase 37 — canonical_source (ALTER TABLE + backfill + VIEW + reconcileLeadIntoPrimary)`, `Fase 36 — days_in_pool scoring (timing_factor fresh/stale + score_breakdown.days_in_pool)`, `Fase 43 — Outreach campaigns (CREATE TABLE + CRUD API + UI selector)`, `Fase 41 — owner_group_id (ALTER TABLE + detectOwnerGroups + API owner-group + UI badge)`)
+**Estado real:** reauditoría/remediación en curso. Este archivo deja de tratar como cerradas fases cuya completitud todavía no fue revalidada contra el código actual.
 
-**Próxima fase a ejecutar:** Item 43 — Fase 30 (DGI). Research disponible en `context/research/dgi.md`. Leer ese archivo (Paso 4) y evaluar si la fuente es viable antes de implementar. Si es viable, implementar etapas A→B→C. Si no hay fuente oficial accesible → stop `fases-completas`. Item 42 (Fase 42 scoring estacional) sigue bloqueado por falta de data de conversión real.
+**Plan activo:** `context/prompts/plan-remediacion-auditoria-2026-05-18.md`
 
-**Orden por bloques (canónico — sincronizado con `ROADMAP_CANONICAL.md § Roadmap ejecutable`, 44 items 0–43):**
-- **Bloque 0:** Fase 49 (backup) — completada y verificada el 2026-05-17.
-- **Bloque 1 (aditivo):** Fase 22-pre y Fase 21 completadas y verificadas el 2026-05-17.
-- **Bloque 2 (destructivo, ÚNICO en el bloque):** Fase 47 — completada y verificada el 2026-05-17.
-- **Bloque 3 (calidad de inputs):** Fase 15, Fase 6A y Fase 6B completadas y verificadas el 2026-05-18.
-- **Bloque 4 (scoring único):** Fase 22-eval → Fase 22 — un solo `score --all`.
-- **Bloque 5 (API + core automation):** Fase API-0 (incluye `lead_outreach`) → Fase 23 → Fase API.
-- **Bloque 6 (operación segura):** Admin MVP UI → Fase 46 → Fase 48 → Fase 39 (webhooks).
-- **Bloque 7 (outreach + UI base):** Fase 25 → Fase 44-pre (`llm_usage_log`) → Fase 26 → Fase 27 → Fase 13 (PedidosYa escape) → UI base.
-- **Bloque 8 (Pipeline Manager + Discovery CC + dashboards avanzados):** Pipeline Manager UI → Discovery CC UI → Fase 24 (batch discovery) → Fase 44 → Cost Dashboard UI ✓ → Fase 45-pre ✓ → Fase 45 ✓ → Performance Dashboard UI ✓ → Restart Actions ✓ → Cleanup v1.
-- **Bloque 9 (enriquecimiento incremental + refinamientos — cierra el producto):** Fase 40 (FTS) → Fase 28 (sub-niche) → Fase 29 (MINTUR TipoOperador) → Fase 11 (IMM, requires research) → Fase 18 (cruce MINTUR×IMM) → Fase 38 (geo-dedup) → Fase 37 (canonical_source) → Fase 43 (campaigns) → Fase 36 (days_in_pool) → Fase 41 (owner_group_id) → Fase 42 (scoring estacional, requires conversion data) → Fase 30 (DGI, requires research).
-- Ver `FUTURE.md § Urgente — Flujo de ejecución por bloques` y `PROJECT_MASTER.md § Próximas acciones`.
+**Próxima fase a ejecutar:** Fase 1 del plan de remediación — contrato de datos `DB -> VIEW -> tipos -> API -> UI`.
 
-**Comportamiento al cerrar Bloque 7 (UI base):** el agente NO debe reportar "todas las fases completadas". Debe pasar al item 22 (Pipeline Manager UI) y continuar por el Bloque 8 según el canónico. La stop condition `fases-completas` solo se dispara cuando el último item del Bloque 9 (item 43 = Fase 30 DGI, o quedará en `approval-required-fase-30-research` si no hay fuente validada — eso NO es `fases-completas`).
+**Decisiones cerradas vigentes:**
+- La antigua Fase 30 `DGI/BPS` quedó descartada permanentemente el 2026-05-18 por decisión de producto/legal. No investigar ni implementar.
+- `fases-completas` no debe declararse mientras existan issues abiertos de remediación o contradicciones documentales/código.
 
-**Intervención humana todavía necesaria:** gasto externo / APIs billables, `pnpm add` o comandos bloqueados, research pendiente (IMM/DGI), revisión humana del reporte post-apply de `Fase 22` si se quiere recalibrar antes de API/UI, validación de data estacional para `Fase 42`, y acciones manuales de producción/cleanup como `Fase 48` y `Cleanup v1`. El resto debe continuar solo.
+**Bloqueos reales vigentes:**
+- Fase 11 (IMM) sigue requiriendo research externo previo.
+- Fase 42 (scoring estacional) sigue requiriendo data real de conversión antes de cualquier cierre.
+- Cualquier fase con gasto externo, instalación de dependencias o comandos bloqueados por `SECURITY.md` sigue requiriendo intervención explícita.
 
-**Estado conocido:**
-- Tests: 1068 passing, 7 skipped, 99 files
-- Typecheck: limpio
-- DB invariantes: todos en 0 (verificado 2026-05-18)
-- Directiva de sesión 2026-05-18: continuar el roadmap sin pausas por etiquetas `approval/manual` aisladas. Frenar solo por bloqueo real de seguridad, gasto externo, research pendiente, contradicción documental o input humano realmente necesario.
-- Fase 43: `outreach_campaigns` table + `lead_outreach.campaign_id` FK + CRUD API `/api/v1/campaigns*` + UI selector campaña en Outreach Tracker. 10 tests. Stub 501 eliminado.
-- Fase 41: `leads.owner_group_id uuid` + `detectOwnerGroups()` agrupa por phone/email canónico + `GET /leads/:id/owner-group` + badge "N negocios del mismo propietario" en Lead Detail. 8 tests.
-- Fase 49: `scripts/backup.sh` implementado, ejecutado con éxito y backup gzip validado en `$HOME/blindspot-backups`.
-- Fase 22-pre: columnas `leads.scoring_version`, `leads.contact_ready`, `leads.prospect_score_v1`, `leads.score_breakdown_v1` y `lead_buyer_scores.scoring_version` creadas; backfill de `scoring_version` verificado en `0 NULLs`.
-- Fase 21: `postgis` habilitado localmente, `leads.gps` creada con índice GIST, backfill aplicado sobre `535` filas OSM con `source_data.lat/lon`. Google Places queda sin backfill en esta fase porque el provider actual persiste coordenadas nulas; MINTUR sigue excluido por falta de GPS confiable.
-- Fase 47: backup `blindspot_pre-fase47_20260517_175205.sql.gz` creado y validado; `leads.inferred_state` creada e indexada; backfill aplicado sobre `2163` filas; cleanup de `digital_footprint.inferred_state` completado (`0` claves remanentes).
-- Fase 15: `email-quality.ts` y `shared/phone.ts` implementados; `enrich` persiste `digital_footprint.email_quality` + `phone_classification`; `updateLeadEnrichment()` y `updateLeadSocialSearch()` recalculan `contact_reliability_score` sin `score --all`; tags nuevos `mobile-phone`, `landline-phone`, `email-no-mx`.
-- Fase 6A: `discover-external` ahora deduplica solo cross-source con guardas por `source`, `niche`, ciudad/dirección y GPS (`<=500m` cuando ambos lados tienen coordenadas); si hay match usa el RPC `merge_corroborating_source()` para upsertar `lead_source_references` y actualizar atómicamente `corroborating_sources`, `canonical_fields`, `data_confidence_score` y `contact_reliability_score`.
-- Fase 6B: `blindspot reconcile-retroactive` implementado con `--dry-run/--apply`; usa `deduplication.name_threshold_retroactive=0.90`, planner keeper→secondary, guardas por ciudad/dirección/GPS y wildcard controlado para `mintur/other`. `src/storage/reconciliation.ts` mueve `lead_source_references` + `lead_field_evidences`, recalcula scores de confianza y elimina el secundario al final. Resultado real sobre la DB local 2026-05-18: `0` grupos candidatos, `0` leads absorbidos; query de sanidad por nombres normalizados cross-source también dio `0` overlaps exactos.
-- Fase 22-eval: CLI `blindspot score-eval` implementada y ejecutada contra la DB local. Reporte pre-apply en `reports/22-eval/2026-05-18T043126026Z/` y reporte post-apply en `reports/22-eval/2026-05-18T045722Z-post-apply/` con `summary.md`, `summary.json`, distribuciones CSV, `lead-deltas.csv`, `top-v1.csv`, `top-v2.csv`, `top-50-comparison.csv` y `gold-set.seed.csv`.
-- Resultado real de Fase 22-eval / post-apply (2026-05-18): `3493` leads evaluados; `Tier X >=55 = 0` (PASS), `score=100 = 6 / 3493 = 0.2%` (PASS), `avg franquicias = 36.8` (WARN), `avg car_dealer contactables = 44.3` (PASS), `top-50 overlap = 23/50`.
-- Fase 22: backup `blindspot_pre-fase22_20260518_015503.sql.gz` validado; snapshot `prospect_score_v1` / `score_breakdown_v1` completo (`missing_v1_snapshot = 0`); `pnpm dev score --all` ejecutado con `passed_not_v2 = 0`, `buyer_scores_not_v2 = 0`, `missing_contact_tier = 0`, `tier_x_hot = 0`.
-- Estado del gold set: bootstrap automático de `40` filas con `reviewStatus=pending_human`; útil para revisión humana del resultado ya aplicado.
-- Cron backup: instalado no interactivamente (`0 3 * * * /home/nicolasfalcioni/Documentos/blindspot/scripts/backup.sh >> $HOME/blindspot-backup.log 2>&1`).
-- Fase API-0: migración `014_api_0_schema.sql` aplicada. Tablas creadas: `users` (con admin `admin@blindspot.local`), `pipeline_runs`, `pipeline_config` (singleton con `enabled=false`), `discovery_jobs`, `audit_log`, `lead_outreach`. Columna `leads.contacted_by uuid REFERENCES users(id)` agregada. Tests: 917 passing, invariantes DB todos en 0.
-- Fase 23: `src/start.ts` (entry point long-running), `PipelineScheduler` (cron + polling 60s/30s + configWatcher), `PgListener` (pg LISTEN pipeline_trigger con reconexión), `run-executor.ts` (executeRun + transitionToPending), `crash-recovery.ts` (recoverOrphanedRuns al boot), `scheduled-for.ts` (nextCronRun via cron-parser). Paquetes instalados: `node-cron`, `cron-parser`, `pg`. CLI `blindspot pipeline --run-all [--dry-run]`. Tests: 921 passing, typecheck limpio.
-- `src/package.json` creado con `"name": "core"`. `pnpm-workspace.yaml` + workspace completo se finaliza en Fase API cuando se crea `api/`.
-- Fase API APIA: `api/` creado como workspace, `buildServer()` con cors/helmet/rate-limit/jwt, `POST /auth/login`, `POST /auth/refresh`, `GET /api/v1/health`. Supabase client con NoopWebSocket, `requireAuth`/`requireAdmin` middleware con DB lookup fresh por request.
-- Fase API APIB: migración `015_lead_dashboard_view.sql` (VIEW `lead_dashboard` con LEFT JOIN LATERAL `lead_buyer_scores`). `GET /api/v1/leads` (cursor-based, CM filter intersection, fail-closed para `lead_filter=null`). `GET /api/v1/leads/:id` (404 para lead fuera del filtro del CM). Zod validation de query params.
-- Fase API APIC: `GET/POST/PATCH /outreach`, `POST /outreach/generate-offer` (stub Fase 26). Status/outcome cross-field validation. CM 404 en otros registros. Fix Zod v4 UUID strictness con regex permissivo.
-- Fase API APID: `GET/PUT/PATCH /pipeline/config`, `POST /pipeline/run` (202 + pg_notify), `GET /pipeline/runs*`, `POST /pipeline/abort`. `GET/POST /discovery/jobs`, `PATCH /discovery/jobs/:id` (pause/resume/cancel). `GET/POST/PATCH/DELETE /users` (bcrypt, lead_filter validation, audit_log). `GET /campaigns*` (501 stub). Stats routes. `/admin/audit-log`, `/admin/system/status`, restart stubs (501 dev), costs/performance stubs.
-- Fase API APIE: 8 auth matrix tests — live lead_filter update con mismo JWT, active=false bloqueo inmediato, CM 403 en paths admin-only, intersección de filtros CM, 404 en lead fuera de filtro. Tests: 972 passing, typecheck limpio. Fase API COMPLETA.
-- Admin MVP UI (2026-05-18): `ui/` workspace Next.js 15 completado. Rutas: `/login`, `/admin/users` (CRUD + lead_filter + reset pwd + activate/deactivate), `/admin/health` (polling 10s, estado DB/cron/last_run), `/admin/audit-log` (filtros actor/action/from/to, tabla paginada cursor-based, modal diff before/after, export JSON). Build Next.js limpio. TypeCheck limpio.
-- Fase 48 (2026-05-18): `ecosystem.config.cjs` (pm2 apps blindspot-core + blindspot-api), `nginx/blindspot.conf` (rate limiting 30r/m API / 5r/m auth, TLS1.3, security headers HSTS/XFO/XCTO, proxy UI 3000 y API 3001), `scripts/production-setup.sh` (guía interactiva 8 pasos). pm2 e nginx no instalados en dev — artifacts del repo listos para deploy.
-- Fase 39 (2026-05-18): `src/modules/pipeline/webhook.ts` con `notifyWebhook()` HMAC-SHA256 + `loadWebhookConfig()`. `run-executor.ts` llama webhook al final de cada run (best-effort). `api/pipeline.ts` acepta `notify_webhook_{url,secret,events}` en PUT/PATCH + `POST /pipeline/webhook/test`. `ui/admin/pipeline/page.tsx` Pipeline Manager con estado del pipeline + sección webhook (URL, secreto, eventos, probar). Tests: 985 passing.
-- Cost Dashboard UI (2026-05-18): `api/src/routes/admin/costs.ts` ahora agrega por mes sin depender de nuevas tablas: budget GP + requests, `llm.by_provider`, `per_source`, top leads por costo (`llm_usage_log` + share del `first_seen_run_id`) e historial `monthly[12]`. `ui/src/app/admin/costs/page.tsx` consume el contrato nuevo y renderiza overview, barras por fuente, top leads y tendencia de 12 meses. Tests: 1010 passing, typecheck limpio.
-- Fase 45-pre (2026-05-18): migraciones `db/migrations/019_pipeline_errors.sql` y `supabase/migrations/20260518050000_pipeline_errors.sql` creadas y aplicadas localmente. Tabla `pipeline_errors` + índices (`run`, `occurred_at`, `phase`, `lead`) verificados con `to_regclass`. `src/storage/pipeline-errors.ts` expone `recordPipelineError()` y `tests/storage/pipeline-errors.test.ts` cubre insert normalizado, flags explícitos y error de DB.
-- Fase 45 (2026-05-18): `src/modules/enrichment/change-detection.ts` implementa el diff incremental de re-enrich. `updateLeadEnrichment()` ahora persiste `digital_footprint.last_change_diff`, agrega `state-changed-significant`, re-scorea automáticamente cambios críticos y recalcula `lead_buyer_scores`. `enrichCommand()` contabiliza `significant_changes` en `EnrichmentRunStats`, lo imprime en el summary y persiste errores recuperados en `pipeline_errors`. Se corrigió además el cleanup de listeners `SIGINT/SIGTERM` por invocación. Verificación final: `pnpm test` = `1019 passing, 7 skipped`; `pnpm typecheck` limpio; invariantes DB `0/0/0/0`.
-- Performance Dashboard UI (2026-05-18): `api/src/routes/admin/performance.ts` dejó de responder stub y ahora entrega overview, errores filtrables y quality summary usando `pipeline_runs`, `pipeline_errors`, `leads` y `digital_footprint.last_change_diff`. `ui/src/app/admin/performance/page.tsx` consume esos endpoints y renderiza runs, tiempo por fase, throughput, tasa de éxito por fuente, cobertura de datos, errores recientes y cambios significativos. Tests: `tests/api/performance.test.ts` cubre overview/errors/quality. Verificación final: `pnpm test` = `1022 passing, 7 skipped`; `pnpm typecheck` limpio.
-- Restart Actions UI + endpoints (2026-05-18): `api/src/routes/admin/system.ts` amplió `GET /api/v1/admin/system/status` con metadatos de server/procesos y activó `POST /api/v1/admin/system/restart-{core,api}` con códigos tipados (`restart_disabled_in_dev`, `pm2_not_found`, `process_not_registered`, `pm2_failed`, `timeout`) y audit log previo al intento. `ui/src/app/admin/health/page.tsx` migró a `/admin/system/status`, muestra procesos `core/api`, agrega confirmación de restart y polling post-reinicio. `tests/api/admin-system.test.ts` cubre status, 501 en dev y restart exitoso en producción mockeada. Verificación final: `pnpm test` = `1025 passing, 7 skipped`; `pnpm typecheck` limpio; invariantes DB `0/0/0/0`.
-- Fase 46 (2026-05-18): `src/shared/scraping.ts` con `jitter`, `randomBetween`, `pickRandom`, `backoffMs`, `isBlockedStatus`. `ScrapingConfig` en `types.ts` + `config/discovery.yaml` (5 UA discovery, 10 UA social, delays `[800,2500]ms`/`[1500,4000]ms`, max_retries 3/2). `YeluProvider`: `sleepFn` injectable (no-op en tests), delay entre páginas, retry+backoff en 429/403/503. `PedidosYaProvider`: mismo patrón + UA rotation al crear contexto Playwright. `social-enrich/browser.ts`: migrado a `playwright-extra` + stealth, UA rotado desde config. `social-enrich/index.ts`: delay aleatorio entre leads, `blocked` clasificado por señales (`blocked`, `captcha`, `denied`, `403`, `checkpoint`), `updateLeadSocialEnrichStatus` persiste `social_enrich_status: "blocked"` + tag `social-blocked`. `discover-external` pasa `sleepFn` real. Tests: 976 passing, typecheck limpio.
+**Regla operativa desde esta reauditoría:**
+- Tratar el roadmap histórico como antecedente, no como evidencia suficiente de cierre.
+- Solo volver a marcar una fase como cerrada cuando exista corrección funcional más auditoría de cierre con evidencia automatizada.
 
-**Contexto de la documentación:** los archivos context/ tienen 19 fixes de auditorías previas + reorganización 2026-05-16 (modelo "uso interno + socios"). Se eliminaron contradicciones C2–C5 detectadas en quinta auditoría:
-- Mono-repo confirmado (un directorio `blindspot/` con `src/`, `api/`, `ui/`) — `AUTONOMOUS.md` alineado.
-- `accessibility_factor` valores canónicos: X=0.30, D=0.65, C=0.90, B=1.15, A=1.30 (tiers **mutuamente excluyentes** — no existe A+B). Ajuste multiplicativo por reliability: `× (0.75 + 0.25 × contact_reliability_score)`. Ver `ARCHITECTURE_FUTURE.md § Componente 4`.
-- Schema canónico de `lead_outreach`: ver `ARCHITECTURE_FUTURE.md § Tabla lead_outreach — diseño final`.
-- Schemas canónicos de `pipeline_runs`, `pipeline_config`, `discovery_jobs`, `audit_log`: **FUTURE.md Fase API-0 step 6 y step 7 los crea con el schema completo desde el inicio** — no hay stubs reducidos. Naming canónico: `triggered_by` (no `trigger`), `phases` (no `phase_config`), `user_id` (no `created_by` en discovery_jobs), `log_lines jsonb` (no `text[]`), CHECK status incluye `'partial'`.
-- `ADMIN_PANEL.md` define endpoints `/api/v1/admin/*` y la lista canónica de `audit_log.action` (sincronizada con FUTURE.md Fase API-0 step 7).
-
-**Arquitectura objetivo (un repo, tres directorios — workspace pnpm):**
-- `src/` (este directorio) — core pipeline: discovery, enrichment, scoring. Proceso long-running. Escucha instrucciones via PostgreSQL (`LISTEN pipeline_trigger` + polling de fallback cada 60s + poll de `discovery_jobs` cada 30s).
-- `api/` (directorio nuevo) — gateway HTTP Fastify. Lee/escribe en la misma DB. Dispara pipeline via `pg_notify` + inserción en `pipeline_runs`. Sin Playwright ni lógica de scoring/discovery.
-- `ui/` (directorio nuevo) — frontend Next.js. Solo consume REST API de `api/` (puerto 3001).
-
-Coordinación entre procesos: PostgreSQL exclusivamente (`pg_notify` + tablas `pipeline_runs`, `discovery_jobs`, `pipeline_config`). `api/` y `src/` nunca se llaman por HTTP entre sí.
-
-`pnpm-workspace.yaml` en la raíz lista los tres directorios. Los `package.json` de cada directorio deben tener `"name"` igual a `core` / `api` / `ui` respectivamente para que `pnpm --filter <name>` funcione.
-
-**Archivos de contexto disponibles:**
-- `context/AUTONOMOUS.md` — este archivo, runbook del modo autónomo
-- `context/ROADMAP_CANONICAL.md` — fuente de verdad para orden, dependencias, estados y decisiones consolidadas
-- `context/PROJECT_MASTER.md` — modelo de uso, roles, próximas acciones priorizadas
-- `context/SECURITY.md` — reglas de seguridad, comandos bloqueados, presupuesto Google API
-- `context/ARCHITECTURE.md` — arquitectura implementada actualmente en este repo
-- `context/ARCHITECTURE_FUTURE.md` — arquitectura objetivo (un repo, tres directorios `src/`, `api/`, `ui/` + diseño de datos)
-- `context/ARCHITECTURE_FRONTEND.md` — diseño completo del frontend `ui/` (pantallas de uso normal)
-- `context/ADMIN_PANEL.md` — specs del panel de administración (gestión de socios, costos, performance, audit)
-- `context/FUTURE.md` — backlog priorizado de fases + sección de postpuestas
-- `context/LEADS_DATA.md` — snapshot de datos (cargar solo si la fase involucra análisis de leads concretos)
-- `context/research/<source>.md` — investigación por fuente externa (mintur, osm, yelu, pedidosya)
-
-**Stop condition activa:** `fases-completas` — Items 0–41 implementados. Item 42 (Fase 42 scoring estacional) bloqueado por falta de data de conversión real (≥30 outreach cerrados en 2+ estaciones). Item 43 (Fase 30 DGI) **DESCARTADO PERMANENTEMENTE** — viola Ley 18.331 de protección de datos de Uruguay. El roadmap canónico está efectivamente completo.
+**Stop condition activa:** ninguna de cierre global. La reauditoría/remediación sigue abierta y `fases-completas` no debe declararse mientras existan hallazgos pendientes.

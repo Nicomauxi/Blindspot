@@ -253,20 +253,26 @@ export async function patchPipelineConfig(
 
 export type PipelineRun = {
   id: string;
-  status: "pending" | "running" | "completed" | "failed" | "aborted";
-  scope: string;
-  dry_run: boolean;
+  status: "pending" | "running" | "completed" | "failed" | "partial" | "aborted";
+  triggered_by: "manual" | "cron" | "startup-recovery" | "api";
+  overrides: {
+    dry_run?: boolean;
+    phases?: string[];
+  } | null;
+  dashboard_stale: boolean;
   created_at: string;
   started_at: string | null;
   completed_at: string | null;
   phase_results: Record<string, unknown> | null;
-  error_message: string | null;
 };
 
 export async function triggerPipelineRun(token: string, dryRun = false) {
-  return request<{ run_id: string; status: string }>(
-    `/api/v1/pipeline/run${dryRun ? "?dry_run=true" : ""}`,
-    { method: "POST" },
+  return request<SingleResponse<{ run_id: string; dry_run: boolean }>>(
+    "/api/v1/pipeline/run",
+    {
+      method: "POST",
+      body: JSON.stringify(dryRun ? { dry_run: true } : {}),
+    },
     token
   );
 }
@@ -297,6 +303,7 @@ export type LeadDashboard = {
   name: string;
   niche: string | null;
   source: string;
+  canonical_source: string | null;
   address: string | null;
   phone: string | null;
   whatsapp: string | null;
@@ -316,6 +323,10 @@ export type LeadDashboard = {
   top_buyer_type: string | null;
   top_buyer_score: number | null;
   owner_group_id: string | null;
+  source_confidence: number | null;
+  data_confidence_score: number | null;
+  contact_reliability_score: number | null;
+  contact_ready: boolean | null;
 };
 
 export type LeadDetail = LeadDashboard & {
@@ -324,8 +335,6 @@ export type LeadDetail = LeadDashboard & {
   score_breakdown: Record<string, unknown> | null;
   notes: string | null;
   business_status: string | null;
-  source_confidence: number | null;
-  data_confidence_score: number | null;
 };
 
 export async function listLeads(

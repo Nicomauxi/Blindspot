@@ -106,6 +106,19 @@ describe("calculateDataConfidence — coverage", () => {
     expect(calculateDataConfidence(lead)).toBe(0.34);
   });
 
+  it("canonical phone, website and email count as coverage when direct fields are missing", () => {
+    const lead = base({
+      canonical_fields: {
+        phone: { value: "+59898000000" },
+        website: { value: "https://example.com.uy" },
+        email: { value: "hola@example.com" },
+      },
+    });
+
+    // name + phone(canonical) + website(canonical) + email(canonical) = 4/8 * 0.9 = 0.45
+    expect(calculateDataConfidence(lead)).toBe(0.45);
+  });
+
   it("fetch_error footprint does NOT count as enriched coverage", () => {
     const withError = base({ digital_footprint: enrichedFp({ fetch_error: "timeout" }) });
     const withoutFp = base();
@@ -200,8 +213,12 @@ describe("calculateContactReliability — contact channels", () => {
     expect(calculateContactReliability(base())).toBe(0);
   });
 
-  it("phone only → 0.30", () => {
-    expect(calculateContactReliability(base({ phone: "+59898000000" }))).toBe(0.3);
+  it("mobile phone only → 0.45", () => {
+    expect(calculateContactReliability(base({ phone: "+59898000000" }))).toBe(0.45);
+  });
+
+  it("landline only → 0.30", () => {
+    expect(calculateContactReliability(base({ phone: "+59824087679" }))).toBe(0.3);
   });
 
   it("whatsapp only → 0.30", () => {
@@ -227,6 +244,17 @@ describe("calculateContactReliability — contact channels", () => {
       digital_footprint: enrichedFp({ contact_emails: ["hola@negocio.com"] }),
     });
     expect(calculateContactReliability(lead)).toBe(0.1);
+  });
+
+  it("canonical email and phone contribute when corroboration fills missing direct contact data", () => {
+    const lead = base({
+      canonical_fields: {
+        phone: { value: "+59898000000" },
+        email: { value: "hola@negocio.com" },
+      },
+    });
+
+    expect(calculateContactReliability(lead)).toBe(0.55);
   });
 
   it("phone + whatsapp + email-found → 0.85", () => {
@@ -274,5 +302,46 @@ describe("calculateContactReliability — contact channels", () => {
     const result = calculateContactReliability(base());
     expect(result).toBeGreaterThanOrEqual(0);
     expect(result).toBeLessThanOrEqual(1);
+  });
+
+  it("applies email quality multipliers when assessments exist", () => {
+    const lead = base({
+      phone: "+59824087679",
+      digital_footprint: enrichedFp({
+        contact_emails: ["juan@negocio.uy"],
+        email_quality: [{
+          email: "juan@negocio.uy",
+          quality: "personal",
+          domain_match: false,
+          mx_valid: true,
+          reliability_multiplier: 1.5,
+        }],
+      }),
+    });
+
+    expect(calculateContactReliability(lead)).toBe(0.68);
+  });
+
+  it("adds a mobile bonus for direct contact numbers", () => {
+    const lead = base({ phone: "+59898000000" });
+    expect(calculateContactReliability(lead)).toBe(0.45);
+  });
+
+  it("subtracts reliability when all footprint emails lack MX", () => {
+    const lead = base({
+      phone: "+59824087679",
+      digital_footprint: enrichedFp({
+        contact_emails: ["info@negocio.uy"],
+        email_quality: [{
+          email: "info@negocio.uy",
+          quality: "generic",
+          domain_match: false,
+          mx_valid: false,
+          reliability_multiplier: 0.5,
+        }],
+      }),
+    });
+
+    expect(calculateContactReliability(lead)).toBe(0.23);
   });
 });

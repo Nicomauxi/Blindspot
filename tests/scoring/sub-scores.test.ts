@@ -191,6 +191,25 @@ describe("score_software", () => {
   it("capped at 100", () => {
     expect(calculateSubScores(lead({ tags: ["whatsapp-missing", "chat-widget-missing"] }), 95).software).toBe(100);
   });
+
+  it("reads inferred_state from top-level lead column", () => {
+    const result = calculateSubScores(
+      lead({
+        inferred_state: {
+          has_reservations: { value: true, confidence: 0.9, via: [] },
+          has_delivery: { value: false, confidence: 0.9, via: [] },
+          has_ecommerce: { value: false, confidence: 0.9, via: [] },
+          has_online_catalog: { value: false, confidence: 0.9, via: [] },
+          has_pos: { value: false, confidence: 0.9, via: [] },
+          has_chat_support: { value: false, confidence: 0.9, via: [] },
+          digitalization_level: "basic",
+          computed_at: "2026-01-01T00:00:00Z",
+        },
+      }),
+      50
+    );
+    expect(result.software).toBe(35);
+  });
 });
 
 // ─── score_catalogo ─────────────────────────────────────────────────────────
@@ -333,6 +352,7 @@ describe("calculateSubScores — integration", () => {
       marketing: 0,
       software: 0,
       catalogo: 0,
+      contacto_directo: 0,
       primary_offer: "none",
     });
   });

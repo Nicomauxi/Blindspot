@@ -1,17 +1,27 @@
 # Blindspot — Reglas de Seguridad para Ejecución Autónoma
 
 > Este archivo debe leerse ANTES de ejecutar cualquier acción en modo autónomo o manual.
-> Las reglas BLOQUEADAS son absolutas — no hay excepciones por conveniencia o eficiencia.
+> Las reglas BLOQUEADAS son absolutas para el modo autónomo — no hay excepciones por conveniencia o eficiencia.
+> En modo manual, una acción bloqueada solo puede ejecutarse si Nicolás la pide explícitamente y la fase la marca como `manual/approval`.
+> Para el orden canónico de fases y ownership de procesos, ver `ROADMAP_CANONICAL.md`.
 
 ---
 
-## Comandos BLOQUEADOS — nunca ejecutar
+## Comandos BLOQUEADOS — no ejecutar en modo autónomo
 
 ```
 BLOQUEADO: pnpm run discover
 BLOQUEADO: pnpm run discover-external -- --source google_places
+BLOQUEADO: pnpm run discover-external -- --source mintur
+BLOQUEADO: pnpm run discover-external -- --source osm
+BLOQUEADO: pnpm run discover-external -- --source yelu
+BLOQUEADO: pnpm run discover-external -- --source pedidosya
 BLOQUEADO: blindspot discover (cualquier variante)
 BLOQUEADO: blindspot discover-external --source google_places
+BLOQUEADO: blindspot discover-external --source mintur
+BLOQUEADO: blindspot discover-external --source osm
+BLOQUEADO: blindspot discover-external --source yelu
+BLOQUEADO: blindspot discover-external --source pedidosya
 BLOQUEADO: git push (ninguna variante — ni --force, ni --tags)
 BLOQUEADO: git push --force
 BLOQUEADO: pnpm add <paquete> (sin aprobación explícita del usuario)
@@ -89,7 +99,7 @@ Toda migración debe seguir el protocolo de AUTONOMOUS.md § "Migraciones de DB"
 - Si una fase requiere Google Places → STOP CONDITION `fase-bloqueada-google`.
 - El usuario decide manualmente cuándo y cuántos requests de Google Places ejecutar.
 
-### Fuentes GRATUITAS (permitidas en modo autónomo)
+### Fuentes sin costo (no autorizan discovery real automático)
 
 | Fuente | Costo | Notas |
 |--------|-------|-------|
@@ -102,6 +112,16 @@ Toda migración debe seguir el protocolo de AUTONOMOUS.md § "Migraciones de DB"
 
 Solo usar estas fuentes en tests controlados. Ver restricción de discovery más abajo.
 
+### Atribución obligatoria de OSM
+
+Si la UI muestra datos cuyo `source='osm'` o cuya corroboración incluye OSM, debe renderizar atribución visible:
+
+```text
+© Colaboradores de OpenStreetMap
+```
+
+No es opcional ni decorativo. Es un requisito de uso del dataset y debe mantenerse en cualquier implementación de `Lead Explorer`, `Lead Detail`, `Segment Explorer` o vistas derivadas.
+
 ---
 
 ## Discovery en modo autónomo — restricciones
@@ -112,6 +132,12 @@ El modo autónomo **NO ejecuta discovery real** salvo en tests controlados con f
 # BLOQUEADO en modo autónomo — llama fuentes externas reales
 pnpm run discover-external -- --source mintur
 pnpm run discover-external -- --source osm
+pnpm run discover-external -- --source yelu
+pnpm run discover-external -- --source pedidosya
+blindspot discover-external --source mintur
+blindspot discover-external --source osm
+blindspot discover-external --source yelu
+blindspot discover-external --source pedidosya
 
 # PERMITIDO — tests con fixtures locales (sin red real)
 pnpm test tests/discovery/providers/osm.test.ts
@@ -186,7 +212,7 @@ BLOQUEADO:  fetch/axios/got a URLs externas en código de producción (solo en t
 
 ## Entorno de DB
 
-Solo existe una DB: **local** (Docker, `supabase_db_gap-radar`).
+Solo existe una DB operativa para agentes: **local** (Docker, `supabase_db_gap-radar`). Cualquier referencia a Supabase cloud en documentos de arquitectura es futura/manual y no autoriza acciones cloud.
 
 ```bash
 # Único comando permitido para consultas directas
@@ -241,7 +267,7 @@ Antes de cada `git commit` en modo autónomo, verificar mentalmente:
 |--------|--------|--------|
 | `pnpm test` | ✅ SIEMPRE | Verificación estándar |
 | `pnpm typecheck` | ✅ SIEMPRE | Verificación estándar |
-| `pnpm run score -- --all` | ✅ PERMITIDO | Solo DB local |
+| `pnpm run score -- --all` | ⚠️ APROBACIÓN | Re-scoring masivo: modifica todos los leads aunque sea DB local |
 | `pnpm run enrich -- --limit 10` | ✅ PERMITIDO | Solo DB local |
 | `git commit` | ✅ PERMITIDO | Local, reversible |
 | `git push` | ❌ BLOQUEADO | Acción externa irreversible |

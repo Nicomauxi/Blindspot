@@ -5,17 +5,31 @@
 > Su función es servir de norte compartido para que cada fase se construya
 > en dirección correcta y los datos recopilados se usen a su máximo potencial.
 >
-> **Para el diseño del frontend:** ver `ARCHITECTURE_FRONTEND.md` (directorio `ui/` en este mismo repo).
+> **Modelo de uso (decidido 2026-05-16):** herramienta interna privada. 1 admin + 2–8 socios con accesos delimitados (`lead_filter`). NO se comercializa, NO hay self-registration. Ver `PROJECT_MASTER.md § Modelo de uso` para detalles.
+>
+> **Fuente canónica de ejecución:** `ROADMAP_CANONICAL.md`. Este archivo describe diseño objetivo; si contradice el roadmap canónico, gana `ROADMAP_CANONICAL.md`.
+>
+> **Documentos relacionados:**
+> - `ARCHITECTURE_FRONTEND.md` — pantallas de uso normal de la UI (`ui/`).
+> - `ADMIN_PANEL.md` — pantallas y endpoints específicos del panel admin (user management, costos, performance, audit log, system status).
+> - `FUTURE.md` — backlog priorizado de fases.
 >
 > Antes de implementar cualquier fase nueva: leer este archivo para verificar
 > que la implementación sea coherente con el diseño objetivo.
+>
+> **Schemas canónicos consolidados (octava auditoría 2026-05-16):**
+> - `accessibility_factor` valores: X=0.30, D=0.65, C=0.90, B=1.15, A=1.30 — **tiers mutuamente excluyentes, no existe combinación A+B**. Un solo set en `§ Componente 4 — accessibility_factor`. Ajuste por reliability: `× (0.75 + 0.25 × contact_reliability_score)`.
+> - `lead_outreach`: ver `§ Tabla lead_outreach — diseño final`. **Creada en Fase API-0** (movida desde Fase 25 por octava auditoría) para desbloquear la matriz de autorización de Fase API sin esperar a Bloque 7. Fase 25 ahora cubre solo trigger de `contacted_by` + CLI stats + verificación end-to-end.
+> - `pipeline_runs` / `pipeline_config` / `discovery_jobs` / `audit_log` / `lead_outreach`: todos creados en Fase API-0 con el schema canónico — sin stubs reducidos. Naming canónico: `triggered_by` (no `trigger`), `phases` (no `phase_config`), `user_id` (no `created_by` en discovery_jobs), `log_lines jsonb` (no `text[]`).
+> - `audit_log.action` lista canónica en FUTURE.md Fase API-0 step 7 (sincronizada con ADMIN_PANEL.md tabla de endpoints).
+> - `lead_filter = '{}'` requiere flag `acknowledge_unrestricted: true` en el body de `POST /api/v1/users` o `PATCH /api/v1/users/:id`. Ver `§ Validaciones en API antes de PATCH /users/:id`.
 
 ---
 
 ## Arquitectura: un repo, dos procesos
 
 El sistema vive en un único repositorio con tres directorios de código y dos procesos en producción.
-Contexto de uso: herramienta personal + acceso a usuarios seleccionados (baja concurrencia, 2-5 usuarios).
+Contexto de uso: herramienta personal + acceso a usuarios seleccionados (baja concurrencia, 2–8 usuarios).
 
 ```
 blindspot/                   ← repo único
@@ -118,20 +132,88 @@ CREATE TABLE users (
 );
 ```
 
-**`lead_filter`** permite que el admin defina qué ve cada CM sin tocar código:
-```json
-{ "primary_offer": ["marketing", "catalogo"], "contact_tier": ["A", "B"] }
+**`lead_filter`** permite que el admin defina qué ve cada CM sin tocar código. Schema canónico (todos los campos opcionales — ausentes ⇒ no se aplica el filtro):
+
+```typescript
+interface LeadFilter {
+  primary_offer?: PrimaryOffer[];           // OR entre valores; intersección con filtros del request
+  contact_tier?: ('A'|'B'|'C'|'D'|'X')[];   // tier permitido (típico: ['A','B','C'])
+  niche?: string[];                          // niches permitidos
+  detected_sub_niche?: string[];             // post-Fase 28 — coincide contra leads.lead_company_data->>'detected_sub_niche' (JSONB path, no FK)
+  min_prospect_score?: number;               // 0–100
+  max_prospect_score?: number;               // raro pero útil para pool intermedio
+  geo_radius?: {                             // requiere PostGIS (Fase 21) — validar en API antes de guardar
+    center: { lat: number; lng: number };
+    meters: number;
+  };
+  source?: DiscoverySource[];                // limitar a ciertas fuentes
+  exclude_franchises?: boolean;              // default true cuando se omite
+  exclude_contacted?: boolean;               // si true, oculta leads con contacted_at != null
+  max_leads_visible?: number | null;         // null = sin tope; aplica como LIMIT global
+  require_inferred_state?: {                 // requiere Fase 47 (columna inferred_state)
+    has_delivery?: boolean;
+    has_pos?: boolean;
+    has_reservations?: boolean;
+  };
+}
 ```
-Si `lead_filter` es null (admin), el CM ve todos los leads.
+
+**Traducción a SQL (aplicada en `api/src/routes/leads.ts` antes de los filtros del request):**
+
+```sql
+-- Si lead_filter.contact_tier = ['A','B'] →
+WHERE l.score_breakdown->>'contact_tier' = ANY(ARRAY['A','B'])
+
+-- Si lead_filter.geo_radius = { center: { lat, lng }, meters } →
+AND ST_DWithin(l.gps, ST_MakePoint($lng,$lat)::geography, $meters)
+
+-- Si lead_filter.exclude_franchises = true →
+AND NOT ('franchise-detected' = ANY(l.tags))
+
+-- Si lead_filter.exclude_contacted = true →
+AND l.contacted_at IS NULL
+
+-- Si lead_filter.require_inferred_state.has_delivery = true →
+AND (l.inferred_state->'has_delivery'->>'value')::boolean = true
+
+-- max_leads_visible se aplica como LIMIT MIN(request.limit, lead_filter.max_leads_visible)
+```
+
+**Validaciones en API antes de `POST /api/v1/users` y `PATCH /api/v1/users/:id`:**
+
+Para body con `lead_filter`:
+- Si `lead_filter` no está presente en `POST` → 400 con `error_code='lead_filter_required'` (CM sin filtro inválido — `IS NULL` también falla).
+- Si `lead_filter = '{}'` (objeto vacío) y el body NO incluye `acknowledge_unrestricted: true` → 400 con `error_code='lead_filter_empty_requires_ack'`, body de respuesta:
+  ```json
+  {
+    "error": "lead_filter empty requires explicit acknowledgement",
+    "error_code": "lead_filter_empty_requires_ack",
+    "hint": "Include 'acknowledge_unrestricted: true' in the request body to confirm the CM should see all leads without restriction."
+  }
+  ```
+  Con el flag presente, se guarda `lead_filter = '{}'` en DB y el CM queda sin restricciones. El flag NO se persiste — solo desbloquea el guardado en esa request específica.
+- Si algún campo de `lead_filter` es array vacío (ej. `{ primary_offer: [] }`) → 400 con `error_code='lead_filter_array_empty'` (configuración de error: 0 leads visibles para el CM). Distinto del caso `{}` que sí permite ver todos.
+- Si `geo_radius` está presente en el body, verificar que PostGIS esté activo (`SELECT extversion FROM pg_extension WHERE extname='postgis'`). Sino → 400 con `error_code='postgis_not_active'`.
+- En `PATCH /api/v1/users/:id`, esta validación solo corre si el request intenta crear o modificar `lead_filter.geo_radius`. Un `geo_radius` ya persistido no debe bloquear updates no relacionados (password, role, active o cambios en otras partes del filtro).
+- Si `detected_sub_niche` está presente, verificar que Fase 28 esté aplicada. `lead_company_data` es una columna JSONB en `leads`, no una tabla — usar `SELECT 1 FROM leads WHERE lead_company_data ? 'detected_sub_niche' LIMIT 1`. Si la query retorna 0 filas → 400 con `error_code='subniche_phase_pending'` y mensaje "Fase 28 pendiente — no hay leads con sub-niche detectado todavía".
+- Si `require_inferred_state` está presente, verificar que `leads.inferred_state` exista como columna (Fase 47). Sino → 400 con `error_code='inferred_state_column_missing'`.
+
+**Comportamiento canónico para CM (sincronizado con `ROADMAP_CANONICAL.md § Reglas de acceso`):**
+- `role='admin'`: ve todo, ignora `lead_filter`.
+- CM con `lead_filter IS NULL`: configuración inválida — `POST/PATCH` lo rechaza con `lead_filter_required`. Si existe por datos viejos, sus requests fallan cerrado (no ve ningún lead).
+- CM con `lead_filter = '{}'`: sin restricciones — equivale a ver todos los leads. Solo se persiste si fue creado/actualizado con `acknowledge_unrestricted: true`.
+- CM con algún campo array vacío: rechazado con `lead_filter_array_empty`.
+- CM con filtro válido: ve solo la intersección entre `lead_filter` y filtros del request.
+- **`lead_filter` se carga desde DB en cada request protegido.** Si admin lo cambia con `PATCH /api/v1/users/:id`, el siguiente request del CM (sin re-login, con el mismo JWT) ya usa el filtro nuevo. Test obligatorio en la matriz de Fase API — ver `ROADMAP_CANONICAL.md § Criterio obligatorio para Fase API` (test "Live update de lead_filter").
 
 ### JWT
 
 - Firmado con secret en `.env.API_JWT_SECRET`
-- Payload: `{ user_id, email, role, lead_filter }`
+- Payload: `{ user_id, email }` como identidad mínima. `role`, `active` y `lead_filter` se cargan desde DB en cada request protegido.
 - Expiración: 24h
 - Sin self-registration — admin crea cuentas vía `POST /api/v1/users`
-- Revocación: `UPDATE users SET active=false`. El middleware verifica `active` en la DB en cada request para que la revocación sea inmediata. Para 2-5 usuarios este hit a la DB es aceptable.
-- **`lead_filter` en payload es stale hasta expiración:** si admin cambia el `lead_filter` de un CM, el token actual del CM (hasta 24h de vida restante) usa el filtro viejo. Decisión de diseño: aceptable para uso interno de baja concurrencia. Si se necesita propagación inmediata, agregar `token_version smallint DEFAULT 1` a `users` e incrementarlo al cambiar `lead_filter`; el middleware rechaza tokens con versión menor a la actual.
+- Revocación: `UPDATE users SET active=false`. El middleware verifica `active` en la DB en cada request para que la revocación sea inmediata. Para 2–8 usuarios este hit a la DB es aceptable.
+- **No confiar en `lead_filter` dentro del JWT.** Si admin cambia el filtro de un CM, el siguiente request debe usar el filtro actualizado desde DB. Esto evita exposición accidental por tokens viejos sin necesidad de `token_version` en la etapa actual.
 
 ### Mapa de acceso por rol
 
@@ -141,7 +223,6 @@ Si `lead_filter` es null (admin), el CM ve todos los leads.
 | POST /auth/refresh | 🌐 público | 🌐 público |
 | GET /api/v1/leads (filtrado por lead_filter) | ✅ todos | ✅ su filtro |
 | GET /api/v1/leads/:id | ✅ | ✅ si pasa su filtro |
-| PATCH /api/v1/leads/:id/contact | ✅ | ✅ |
 | GET /api/v1/outreach | ✅ todos | ✅ solo propios |
 | POST /api/v1/outreach | ✅ | ✅ (user_id = suyo) |
 | PATCH /api/v1/outreach/:id | ✅ | ✅ solo propios |
@@ -153,16 +234,33 @@ Si `lead_filter` es null (admin), el CM ve todos los leads.
 | GET /api/v1/discovery/jobs | ✅ | ❌ |
 | POST /api/v1/discovery/jobs | ✅ | ❌ |
 | GET /api/v1/users | ✅ | ❌ |
+| GET /api/v1/users/:id | ✅ | ❌ |
 | POST /api/v1/users | ✅ | ❌ |
 | PATCH /api/v1/users/:id | ✅ | ❌ |
+| DELETE /api/v1/users/:id | ✅ | ❌ |
 | GET /api/v1/campaigns | ✅ todas | ✅ solo propias |
 | POST /api/v1/campaigns | ✅ | ✅ (user_id = suyo) |
 | GET /api/v1/campaigns/:id/stats | ✅ | ✅ solo propia |
+| GET /api/v1/admin/costs/overview | ✅ | ❌ |
+| GET /api/v1/admin/costs/history | ✅ | ❌ |
+| GET /api/v1/admin/performance/overview | ✅ | ❌ |
+| GET /api/v1/admin/performance/errors | ✅ | ❌ |
+| GET /api/v1/admin/performance/quality | ✅ | ❌ |
+| GET /api/v1/admin/system/status | ✅ | ❌ |
+| POST /api/v1/admin/system/restart-core | ✅ | ❌ |
+| POST /api/v1/admin/system/restart-api | ✅ | ❌ |
+| GET /api/v1/admin/audit-log | ✅ | ❌ |
 | GET /api/v1/health | 🌐 público | 🌐 público |
+
+**Regla `/api/v1/admin/*`:** todos requieren `role=admin` en el JWT. El middleware de Fastify (en `api/src/auth/middleware.ts`) rechaza con 403 antes de invocar el handler. Specs detalladas en `ADMIN_PANEL.md`.
+
+**Disponibilidad real de datos en endpoints admin:** que el endpoint exista desde Fase API no implica que todas sus métricas estén listas desde ese momento. `GET /api/v1/admin/costs/*` queda plenamente operativo recién con `Fase 44-pre` + `Fase 44`; `GET /api/v1/admin/performance/*` recién con `Fase 45-pre` + `Fase 45`. Antes de esos prerequisitos, el handler puede devolver métricas parciales derivables de tablas existentes o una respuesta explícita de "data not ready", pero no debe fabricar valores ni asumir tablas futuras.
 
 **`POST /auth/login`**: `body: { email, password }` → `{ token, user: { id, email, role, lead_filter } }`. Sin JWT — este endpoint lo emite.
 
-**`POST /auth/refresh`**: `body: { token }` (token válido o recién expirado, hasta 7 días desde emisión) → `{ token }` nuevo con 24h más. El CM no necesita re-autenticarse si usa la app diariamente. Si el token tiene más de 7 días → 401, re-login.
+**`POST /auth/refresh`**: `body: { token }` (token válido o recién expirado, hasta 7 días desde emisión) → `{ token }` nuevo con 24h más. Antes de emitir, volver a cargar `users.active` desde DB; si `active=false` → 401 con `error_code='account_inactive'`. El CM no necesita re-autenticarse si usa la app diariamente. Si el token tiene más de 7 días → 401, re-login.
+
+**Rate limiting canónico para auth:** `POST /auth/login` = 10 req/min por IP, `POST /auth/refresh` = 30 req/min por IP, resto de endpoints = 100 req/min por IP salvo override más restrictivo.
 
 **Nota — CM y su propia contraseña:** los CMs no tienen endpoint para cambiar su propia contraseña (decisión de diseño: uso interno, admin lo gestiona via `PATCH /api/v1/users/:id`). Si se requiere auto-servicio en el futuro, agregar `PATCH /api/v1/users/me` con body `{ current_password, new_password }` limitado al usuario autenticado.
 
@@ -198,29 +296,74 @@ GET  /api/v1/leads
 GET  /api/v1/leads/:id
      → Lead completo con score_breakdown + buyer_type_scores + corroborating_sources
 
-PATCH /api/v1/leads/:id/contact
-     body: { contacted_at, channel, notes }
+// ELIMINADO: PATCH /api/v1/leads/:id/contact — endpoint residual eliminado por auditoría.
+// Razón: se solapaba con POST /api/v1/outreach + trigger SQL contacted_by (Fase 25). El
+// único path para registrar contacto es POST /api/v1/outreach. El trigger SQL actualiza
+// leads.contacted_at y leads.contacted_by automáticamente al primer outreach del lead.
+// Mantener dos paths producía contacted_at inconsistente con lead_outreach.
 
-GET  /api/v1/outreach?status=pending,responded
+GET  /api/v1/outreach?status=contacted,responded
+     // status values del enum canónico de lead_outreach.status:
+     //   contacted | responded | interested | closed_won | closed_lost | no_response
 POST /api/v1/outreach  body: { lead_id, channel, offer_type, offer_package? }
      → offer_package: { text: string, source_llm: string|null, generated_at: string }
      → NO usar offer_text como campo separado — todo va dentro de offer_package
+     → IMPLEMENTACIÓN REAL desde Fase API (no stub): la tabla lead_outreach se crea
+       en Fase API-0 con schema canónico completo. El handler valida user_id contra
+       el JWT del CM y rechaza outreach de otros usuarios.
 PATCH /api/v1/outreach/:id  body: { status, outcome, service_sold, price_sold, notes }
+     → CM solo puede modificar sus propios outreach (filtra por user_id en el SELECT
+       previo al UPDATE; si el row pertenece a otro CM, retorna 404).
 POST /api/v1/outreach/generate-offer  body: { lead_id, offer_type?, channel }
-     → En Fase API: stub que devuelve template fijo (OfferPackage)
-     → En Fase 26: reemplaza el stub con lógica LLM real
+     → En Fase API: stub que devuelve template fijo (OfferPackage).
+       Los templates viven en `api/src/offer-templates.ts` (creado en Fase API), exportando
+       una función `renderTemplate(lead, offerType, channel): OfferPackage` que mapea
+       primary_offer → texto canónico (definido en `ARCHITECTURE_FRONTEND.md § Templates de oferta`
+       y `ARCHITECTURE_FUTURE.md § Estructura del OfferPackage`).
+     → En Fase 26: el handler intenta primero el LLMProvider; en caso de fallo cae a
+       `renderTemplate()` del mismo archivo (sin duplicación). El archivo no se mueve a `src/`.
 
 GET  /api/v1/campaigns
 POST /api/v1/campaigns  body: { name, segment_filter }
 GET  /api/v1/campaigns/:id/stats
--- NOTA: estos endpoints requieren tabla outreach_campaigns (Fase 43).
--- En Fase API implementar como stubs que retornan 501 Not Implemented hasta Fase 43.
+-- STUB hasta Fase 43: estos endpoints requieren tabla outreach_campaigns (Fase 43).
+-- En Fase API implementar como stubs que retornan:
+--   HTTP/1.1 501 Not Implemented
+--   { "error": "Not implemented until Fase 43",
+--     "error_code": "not_implemented_until_phase_43" }
+-- La matriz de auth de Fase API valida que estos endpoints respondan 501 con ese
+-- error_code (no falla — es stub esperado). Fase 43 reemplaza los handlers con
+-- la implementación real contra outreach_campaigns + lead_outreach.campaign_id.
 
 GET  /api/v1/discovery/jobs?status=running,queued
 POST /api/v1/discovery/jobs  body: { source, location, niche, profile, max_results }
 PATCH /api/v1/discovery/jobs/:id  body: { action: 'pause'|'resume'|'cancel' }
+
 GET  /api/v1/discovery/suggestions
+     → DiscoverySuggestion[] — zonas + niche con baja cobertura, ordenados por exploration_priority DESC
+     → Schema canónico (paginación cursor-based opcional):
+       {
+         location:             string,    // ej. "salto"
+         niche:                string,    // ej. "restaurant"
+         exploration_priority: number,    // AVG(prospect_score) × sources_gap, donde sources_gap = GREATEST(0, active_sources_count - COUNT(DISTINCT source))
+         estimated_new_leads:  number|null, // proyección basada en zonas similares ya exploradas
+         last_explored_at:     string|null, // ISO timestamp del último discovery_job ejecutado
+         sources_available:    string[]   // fuentes que pueden cubrir esta combinación
+       }[]
+
 GET  /api/v1/discovery/coverage
+     → DiscoveryCoverage[] — gauge de cobertura por (location, niche, source)
+     → Schema canónico:
+       {
+         location:       string,
+         niche:          string,
+         source:         string,         // 'google_places' | 'mintur' | 'osm' | 'yelu' | ...
+         leads_count:    number,         // leads existentes en esta combinación
+         passed_count:   number,         // leads con passed_filter=true
+         hot_count:      number,         // leads con prospect_score >= hot threshold
+         last_run_at:    string|null,    // último discovery_job completado para esta tupla
+         coverage_score: number          // 0–1, derivado de density + recency
+       }[]
 
 GET  /api/v1/stats/overview
 GET  /api/v1/stats/outreach
@@ -233,7 +376,7 @@ PATCH /api/v1/pipeline/config  body: campos parciales
 POST /api/v1/pipeline/run      body: { overrides? } → inserta pipeline_runs 'pending' + pg_notify
 POST /api/v1/pipeline/run/dry  body: { overrides? } → plan sin ejecutar
 POST /api/v1/pipeline/abort    → UPDATE pipeline_runs SET abort_requested=true WHERE status='running'
-POST /api/v1/pipeline/pause-phase  body: { phase: 1|2|3|4 }
+POST /api/v1/pipeline/pause-phase  body: { phase: 'refresh'|'discovery'|'enrich'|'score' }
 
 GET  /api/v1/pipeline/runs?status=completed,failed&limit=20&cursor=<id>
 GET  /api/v1/pipeline/runs/active
@@ -284,6 +427,11 @@ SELECT
   l.contact_reliability_score,
   l.contact_ready,
   l.contacted_at, l.created_at,
+  -- Atribución OSM: la UI debe mostrar "© Colaboradores de OpenStreetMap"
+  -- cuando este flag es true. Cubre tanto fuente primaria OSM como corroboración.
+  (l.source = 'osm'
+    OR l.corroborating_sources @> '[{"source":"osm"}]'::jsonb) AS has_osm_source,
+  l.corroborating_sources,
   lbs_top.buyer_type AS top_buyer_type,
   lbs_top.score      AS top_buyer_score
 FROM leads l
@@ -291,9 +439,15 @@ LEFT JOIN LATERAL (
   SELECT buyer_type, score FROM lead_buyer_scores
   WHERE lead_id = l.id ORDER BY score DESC LIMIT 1
 ) lbs_top ON true
-WHERE l.passed_filter = true
-  -- Incluir leads sin score_breakdown (NULL != 'X' = NULL = false en SQL, ocultaría leads válidos):
-  AND (l.score_breakdown IS NULL OR l.score_breakdown->>'contact_tier' != 'X');
+WHERE l.passed_filter = true;
+-- No excluir tier X en la VIEW base. Los endpoints/UI aplican default contact_tier=A,B,C,D
+-- y solo muestran X cuando el request lo pide explícitamente.
+--
+-- passed_filter=false EXCLUIDO de la VIEW: los leads descartados no son accionables y
+-- aparecerían como ruido en la UI principal. Para auditar descartados (debug pipeline,
+-- entender por qué un lead concreto no llegó al pool), usar el endpoint directo
+-- GET /api/v1/leads/:id con flag ?include_rejected=true que consulta tabla `leads`
+-- directamente, no la VIEW. Ese flag NO es accesible para CMs — solo admin.
 ```
 
 ---
@@ -374,13 +528,7 @@ Razón: un lead sin contacto no es un lead, es un dato. El multiplicador debe re
 
 #### `contact_reliability_score` → entra en la fórmula
 
-Hoy se calcula y se persiste pero no se usa. En el diseño objetivo:
-
-```
-contactability_multiplier(lead) *= (0.7 + 0.3 × contact_reliability_score)
-```
-
-Efecto: un lead con email verificado en 3 fuentes (reliability=0.9) multiplica ×1.3 × 0.97 ≈ ×1.26. Uno con email de baja confianza (reliability=0.3) multiplica ×1.3 × 0.79 ≈ ×1.03. La diferencia es real.
+Hoy se calcula y se persiste pero no se usa. En el diseño objetivo sí entra en la fórmula, pero **la definición canónica está en `§ Componente 4 — accessibility_factor`**. No reutilizar los coeficientes de esta sección analítica para implementación; sirven solo como razonamiento histórico de por qué la reliability debe afectar el score.
 
 ### Sub-scores — completar el modelo
 
@@ -452,6 +600,28 @@ Un lead con `primary_offer = "software"` pero `inferred_state.has_pos = true` no
 | — | has_reservations=false, niche=gym | "Sin sistema de reservas — pierden alumnos que no saben cómo agendar" | reservas_online |
 
 Este mapa debe vivir en `config/scoring.yaml` como `pitch_hooks`, no en código. El campo `score_breakdown.pitch_hook` persiste el hook seleccionado para que la UI lo muestre al agente de ventas.
+
+**Estructura canónica mínima en `config/scoring.yaml`:**
+```yaml
+pitch_hooks:
+  web_nuevo:
+    default: "No tienen web, están perdiendo clientes que buscan online."
+    overrides:
+      - when:
+          has_delivery: true
+        text: "Están pagando 30% a PedidosYa — con su propia web de pedidos, recuperan ese margen."
+  rediseno:
+    default: "Su web existe pero no convierte — responsive + SEO moderno."
+  marketing:
+    default: "Tienen web pero no redes activas — community management."
+  software:
+    default: "El negocio ya opera, pero sin sistema propio pierde control y eficiencia."
+  catalogo:
+    default: "Hoy obligan al cliente a preguntar lo básico; un catálogo claro reduce fricción de compra."
+  contacto_directo:
+    default: "El negocio existe y es contactable, pero no tiene activos digitales que lo ayuden a vender mejor."
+```
+`computePitchHook(primary_offer, inferred_state, niche)` debe resolver primero `overrides` por señales de `inferred_state` y luego caer al `default`.
 
 ### Urgency como priorización de outreach
 
@@ -697,10 +867,19 @@ interface LeadCard {
 
   // Score y oferta
   prospect_score: number
-  primary_offer: string                 // 'web_nuevo' | 'rediseno' | 'marketing' | 'software' | 'catalogo' | 'contacto_directo' | 'none'
+  primary_offer: 'web_nuevo' | 'rediseno' | 'marketing' | 'software' | 'catalogo' | 'contacto_directo' | 'none'
   pitch_hook: string                    // texto concreto del pitch
   urgency_signal: 'high' | 'medium' | 'low'
   buyer_type_scores: BuyerTypeScore[]   // top 3
+  detected_sub_niche?: string           // post-Fase 28; visible solo si lead.niche === 'other' y se detectó
+
+  // Score breakdown v2 (post-Fase 22 — campos para el panel de Lead Detail)
+  gap_depth?: number                    // 0–60
+  commercial_breadth?: number           // 0–12
+  business_quality_pts?: number         // 0–15
+  accessibility_factor?: number         // 0.225–1.30
+  timing_factor?: number                // 0.85–1.20
+  urgency_bonus?: number                // 0–5
 
   // Estado operativo
   digitalization_level: 'none' | 'basic' | 'intermediate' | 'advanced'
@@ -718,7 +897,7 @@ interface LeadCard {
 }
 ```
 
-Todo esto debe estar disponible en `leads` sin tocar tablas auxiliares para que la UI pueda paginar y filtrar eficientemente.
+Todo esto debe estar disponible en `leads` sin tocar tablas auxiliares para que la UI pueda paginar y filtrar eficientemente. Los campos opcionales de `Score breakdown v2` vienen de `leads.score_breakdown` (jsonb) — la API los aplana en la respuesta.
 
 ---
 
@@ -741,8 +920,10 @@ SELECT COUNT(*) FROM leads WHERE 'email-found' = ANY(tags)
 -- 4. Leads passed sin score (siempre debe ser 0)
 SELECT COUNT(*) FROM leads WHERE passed_filter = true AND prospect_score IS NULL;
 
--- 5. Leads con contact_tier X pero prospect_score >= 50 (señal de scoring roto)
--- Diseño futuro: SELECT COUNT(*) FROM leads WHERE score_breakdown->>'contact_tier' = 'X' AND prospect_score >= 50;
+-- 5. Leads con contact_tier X pero prospect_score >= 55 (señal de scoring roto, v2)
+-- Activar post-Fase 22 (hot threshold v2 = 55):
+-- SELECT COUNT(*) FROM leads WHERE score_breakdown->>'contact_tier' = 'X' AND prospect_score >= 55;
+-- Tolerancia: < 5 según ROADMAP_CANONICAL.md § Criterio obligatorio para Scoring v2.
 
 -- 6. Leads sin buyer_type_scores (debe ser 0 post Fase 12)
 SELECT COUNT(DISTINCT l.id) FROM leads l
@@ -865,38 +1046,57 @@ Capacidad de pago y confiabilidad del dato. Si el negocio no puede pagar, el gap
 
 ```
 pts = 0
-rating 4.0–4.39:  pts += 3
-rating 4.4–4.89:  pts += 6
-rating ≥ 4.9:     pts += 8
-review_count 10–50:   pts += 1
-review_count 51–200:  pts += 3
-review_count 201+:    pts += 5
-data_confidence ≥ 0.7: pts += 2
-corroborating_sources ≥ 2: pts += 2   // negocio verificado en 2+ fuentes
+rating ≥ 4.3:                                   pts += 5
+rating ≥ 4.0 (y < 4.3):                         pts += 2
+review_count ≥ 50:                              pts += 3
+review_count ≥ 20 (y < 50):                     pts += 1
+data_confidence:    floor(data_confidence_score × 3)     → 0–3 pts
+contact_reliability: floor(contact_reliability_score × 2) → 0–2 pts
+corroboration:      +2 si jsonb_array_length(corroborating_sources) >= 2
 cap: 15
 ```
 
-Car dealer con rating 4.6 + 312 reviews + 2 fuentes: 6+5+2+2 = 15/15.
-Restaurant OSM sin rating ni reviews: 0/15.
+**Componentes y maxima individuales (suma = 15 cuando todos al tope):**
+| Componente | Max | Origen |
+|---|---|---|
+| rating | 5 | Google Places rating |
+| review_count | 3 | Google Places review_count |
+| data_confidence | 3 | `data_confidence_score` (Fase 6 lo eleva con corroboración) |
+| contact_reliability | 2 | `contact_reliability_score` (Fase 15 lo calibra con email/phone quality) |
+| corroboration | 2 | `corroborating_sources >= 2` |
 
-### Componente 4 — `accessibility_factor` (0.3–1.4)
+Car dealer con rating 4.6 + 312 reviews + data_confidence=0.9 + reliability=1.0 + 2 fuentes: 5+3+2+2+2 = 14/15.
+Restaurant OSM sin rating ni reviews ni corroboración: 0/15.
+
+### Componente 4 — `accessibility_factor` (0.225–1.30)
 
 Penalización dura por inaccesibilidad. La clave: tier X nunca llega a hot.
 
 ```
-base_mult:
+base_mult (tiers MUTUAMENTE EXCLUYENTES — un lead cae en exactamente uno):
   X (sin contacto): 0.30
   D (solo dirección): 0.65
   C (phone):         0.90
   B (whatsapp):      1.15
   A (email):         1.30
-  A+B combinado:     1.40 (cap)
 
-ajuste por calidad:
+ajuste por reliability (multiplicativo, aplicado SIEMPRE):
   × (0.75 + 0.25 × contact_reliability_score)
+
+Rango efectivo: base × [0.75, 1.00] → mínimo X×0.75=0.225, máximo A×1.00=1.30.
 ```
 
-Con base X=0.30 y quality ajuste máximo (×1.0): 0.30. La suma gap+breadth+quality = 60+12+15=87. 87×0.30=26. Un lead tier X nunca supera 26, muy por debajo de hot (50).
+**Por qué tiers excluyentes:** `contact_tier` se computa como prioridad: A > B > C > D > X. Si un lead tiene email Y whatsapp, el tier es A (el más fuerte). El `contact_reliability_score` ya captura la riqueza multi-canal (más canales corroborados ⇒ reliability más alta ⇒ ajuste multiplicativo más cercano a 1.00). No hace falta una categoría A+B separada.
+
+**Doble rol de `contact_reliability_score`** (intencional, no redundante):
+1. **Aditivo en `business_quality_pts`**: `floor(contact_reliability_score × 2)` → 0–2 pts. Captura "confiamos en este dato".
+2. **Multiplicativo aquí**: escala la efectividad del canal. Captura "este canal probablemente funcione".
+
+Ambos efectos compuestos: lead con tier A pero reliability=0.0 → `1.30 × 0.75 = 0.975` (penalización efectiva) y +0 pts. Tier A con reliability=1.0 → `1.30 × 1.00 = 1.30` (máximo) y +2 pts.
+
+Con base X=0.30 y reliability máxima: 0.30. La suma gap+breadth+quality = 60+12+15=87. 87×0.30=26. Un lead tier X nunca supera 26, muy por debajo de hot (55).
+
+**Riesgo de saturación del techo:** con `gap_depth + commercial_breadth + business_quality_pts = 87`, `accessibility_factor=1.30`, `timing_factor=1.20` y `urgency_bonus=5`, el máximo teórico supera 100 antes del cap. Por eso Fase 22-eval debe verificar explícitamente que `prospect_score = 100` aparezca en `< 5%` del pool activo; si no, recalibrar antes de aplicar.
 
 ### Componente 5 — `timing_factor` (0.85–1.20)
 
@@ -955,15 +1155,21 @@ commercial_score:
     tertiary_threshold: 30
     tertiary_bonus: 4
   business_quality:
-    rating_tiers: [[4.0, 4.4, 3], [4.4, 4.9, 6], [4.9, 5.0, 8]]
-    review_tiers: [[10, 50, 1], [51, 200, 3], [201, null, 5]]
-    data_confidence_bonus: 2      # si data_confidence >= 0.7
-    corroboration_bonus: 2        # si corroborating_sources >= 2
+    # rating: 5 si >=4.3, 2 si >=4.0 (excluyentes — gana el tier más alto)
+    rating_tiers: [[4.0, 4.3, 2], [4.3, 5.01, 5]]
+    # review_count: 3 si >=50, 1 si >=20 (excluyentes)
+    review_tiers: [[20, 50, 1], [50, null, 3]]
+    # data_confidence: floor(score × 3) → 0–3 pts (continuo, no binario)
+    data_confidence_multiplier: 3
+    # contact_reliability: floor(score × 2) → 0–2 pts (Fase 15 lo calibra)
+    contact_reliability_multiplier: 2
+    # corroboration: +2 si corroborating_sources >= 2
+    corroboration_bonus: 2
     cap: 15
   accessibility:
+    # Tiers mutuamente excluyentes: A > B > C > D > X
     tier_base: { X: 0.30, D: 0.65, C: 0.90, B: 1.15, A: 1.30 }
-    ab_combined_cap: 1.40
-    reliability_adjustment: { base: 0.75, weight: 0.25 }
+    reliability_adjustment: { base: 0.75, weight: 0.25 }   # × (0.75 + 0.25 × reliability)
   timing:
     urgency_high: 0.15
     new_business_window: 0.05
@@ -1093,61 +1299,26 @@ value:         "Los gimnasios y peluquerías que implementan esto reducen el aus
 cta:           "¿Les muestro cómo quedó para una peluquería similar en Montevideo?"
 ```
 
-### Tabla `lead_outreach` (borrador — ver diseño final en `§ Tabla lead_outreach — diseño final`)
+### Tabla `lead_outreach`
 
-> Este schema es un borrador conceptual. El diseño definitivo está en la sección "Tabla lead_outreach — diseño final" más abajo. Usar ese schema para la implementación.
+> **El schema canónico está en `§ Tabla lead_outreach — diseño final` más abajo.** Esta sección sólo lista los campos que la pipeline de contacto consume del schema final — para el SQL de creación de la tabla, ver la sección "diseño final".
 
-```sql
-CREATE TABLE lead_outreach (
-  id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  lead_id       uuid REFERENCES leads(id) ON DELETE CASCADE,
-  user_id       uuid REFERENCES users(id) NOT NULL,  -- siempre requerido — quién contactó
-  created_at    timestamptz DEFAULT now(),
-  updated_at    timestamptz DEFAULT now(),
-  -- campaign_id se agrega en Fase 43 via ALTER TABLE (outreach_campaigns no existe en Fase 25)
-  
-  -- Oferta generada
-  offer_type    text NOT NULL CHECK (offer_type IN (
-                  'web_nuevo','rediseno','marketing','software','catalogo',
-                  'contacto_directo','delivery_propio','catalogo_digital','reservas_online'
-                )),
-  -- Nota: offer_type ≠ primary_offer. primary_offer es el gap del lead ('web_nuevo',etc.).
-  -- offer_type es lo que el agente ofrece — puede incluir 'delivery_propio' y 'reservas_online'
-  -- que son buyer_types convertidos en propuestas concretas de venta.
-  channel       text NOT NULL CHECK (channel IN ('email','whatsapp','phone')),
-  offer_package jsonb,
-  -- OfferPackage completo: { text: string, source_llm: string|null, generated_at: string }
-  -- nullable: permite registrar un contacto sin oferta generada formalmente
-  
-  -- Estado del pipeline
-  status        text NOT NULL DEFAULT 'pending',
-  -- 'pending' | 'approved' | 'sent' | 'responded' | 'interested' | 'closed_won' | 'closed_lost'
-  
-  -- Tracking
-  sent_at       timestamptz,
-  responded_at  timestamptz,
-  response_text text,
-  notes         text,
-  outcome       text,                      -- 'won' | 'lost_price' | 'lost_timing' | 'lost_interest'
-  
-  -- Cierre
-  service_sold  text,                      -- qué servicio se cerró (null si perdido)
-  price_sold    numeric(10,2),             -- precio acordado en UYU (null si perdido)
-  
-  -- Feedback para scoring
-  lead_quality_feedback smallint           -- -1/0/+1: el lead era tan bueno como prometía el score?
-);
+Campos relevantes para la pipeline de contacto (lectura desde aquí):
+- `id`, `lead_id`, `user_id`, `created_at`, `updated_at`
+- `offer_type`, `channel`, `offer_package` — la oferta generada
+- `status`, `responded`, `outcome`, `lost_reason`
+- `service_sold`, `price_sold`, `notes`
+- `contacted_at`, `responded_at`, `closed_at`
+- `lead_quality_signal` — feedback `-1/0/+1`
 
-CREATE INDEX lead_outreach_lead_id   ON lead_outreach(lead_id);
-CREATE INDEX lead_outreach_user_id   ON lead_outreach(user_id);
-CREATE INDEX lead_outreach_status    ON lead_outreach(status);
-CREATE INDEX lead_outreach_campaign  ON lead_outreach(campaign_id) WHERE campaign_id IS NOT NULL;
-```
+`campaign_id` se agrega en Fase 43 via `ALTER TABLE` (FK a `outreach_campaigns`, que no existe en Fase 25).
 
 ### API de outreach (Fastify `api/`)
 
 ```
-GET  /api/v1/outreach?status=pending&order=created_at.desc
+GET  /api/v1/outreach?status=contacted&order=created_at.desc
+     // status values del enum canónico de lead_outreach.status:
+     //   contacted | responded | interested | closed_won | closed_lost | no_response
 POST /api/v1/outreach                    — crear registro al generar oferta
 PATCH /api/v1/outreach/:id               — actualizar status, notas, outcome
 
@@ -1226,7 +1397,8 @@ CREATE TABLE discovery_jobs (
   cpu_budget   text,                    -- 'conservative'|'balanced'|'aggressive'
   
   -- Estado
-  status       text DEFAULT 'queued',   -- 'queued'|'running'|'completed'|'failed'|'paused'
+  status       text NOT NULL DEFAULT 'queued'
+               CHECK (status IN ('queued','running','completed','failed','cancelled','paused')),
   progress     integer DEFAULT 0,       -- 0–100
   
   -- Resultados
@@ -1237,7 +1409,8 @@ CREATE TABLE discovery_jobs (
   error_message      text,
   
   -- Meta
-  triggered_by text DEFAULT 'manual'   -- 'manual'|'scheduled'|'gap_analysis'
+  triggered_by text NOT NULL DEFAULT 'manual'
+               CHECK (triggered_by IN ('manual','scheduled','gap_analysis'))
 );
 ```
 
@@ -1257,13 +1430,15 @@ SELECT
   AVG(prospect_score) AS avg_score,
   COUNT(DISTINCT source) AS fuentes_cubiertas,
   -- Estimar potencial no descubierto: ciudades con score alto pero pocas fuentes
-  AVG(prospect_score) * (5 - COUNT(DISTINCT source)) AS exploration_priority
+  AVG(prospect_score) * GREATEST(0, active_sources_count - COUNT(DISTINCT source)) AS exploration_priority
 FROM leads
 WHERE passed_filter = true
 GROUP BY city, niche
 HAVING COUNT(DISTINCT source) < 3
 ORDER BY exploration_priority DESC;
 ```
+
+`active_sources_count` no debe ser un literal fijo si se agregan nuevas fuentes al sistema. Derivarlo de las fuentes realmente habilitadas para esa combinación o del set activo en configuración.
 
 **Modo automated (cola con CPU budget):** el sistema ejecuta la cola de exploración en background usando el CPU budget elegido. Si `cpu_budget=balanced`, calcula `concurrency = floor(freeCPU_pct × 0.5 / cpu_per_request)`. Pausa si CPU supera el threshold. Retoma cuando baja.
 
@@ -1300,7 +1475,7 @@ GET  /api/v1/discovery/coverage        — mapa de cobertura por zona+fuente
 
 ## Diseño — Generación de ofertas con IA (Fase futura)
 
-En primera versión, las ofertas se generan desde templates fijos (ver sección pipeline de contacto). En segunda versión, el sistema usa Claude API para generar textos personalizados.
+En primera versión, las ofertas se generan desde templates fijos (ver sección pipeline de contacto). En segunda versión, el sistema usa un `LLMProvider` configurable para generar textos personalizados; no acoplar a un proveedor específico.
 
 ### Input al modelo
 
@@ -1507,24 +1682,32 @@ blindspot score --all
     → D: solo address
     → X: nada
 
-  contactabilityMultiplier(lead): number          [REVISADO]
-    → X:         ×0.5
-    → C (phone): ×1.0
-    → B (WA):    ×1.2
-    → A (email): ×1.3
-    → A+B:       ×1.4 (cap)
-    × (0.7 + 0.3 × contact_reliability_score)    [ajuste por calidad]
+  accessibility_factor(lead): number              [v2 — canonical, ver § Componente 4]
+    contact_tier (mutuamente excluyente: A > B > C > D > X):
+    → X (sin contacto): ×0.30
+    → D (solo address): ×0.65
+    → C (phone):        ×0.90
+    → B (WA):           ×1.15
+    → A (email):        ×1.30
+    × (0.75 + 0.25 × contact_reliability_score)   [ajuste por reliability, siempre activo]
     │
     ▼
 
   // Fórmula v2 — ver §Diseño objetivo — fórmula de scoring comercial (v2) para detalle completo
   gap_depth = min(60, max(sub_scores) + source_quality_bonus)
   commercial_breadth = (sorted_subs[1] >= 30 ? 8 : 0) + (sorted_subs[2] >= 30 ? 4 : 0)
-  business_quality_pts = ratingPts + reviewPts + dataConfidencePts + corroborationPts   cap=15
+  business_quality_pts = min(15,
+    ratingPts + reviewPts + dataConfidencePts + contactReliabilityPts + corroborationPts
+  )
+  // ratingPts: ≥4.3 → 5, ≥4.0 → 2, else 0
+  // reviewPts: ≥50 → 3, ≥20 → 1, else 0
+  // dataConfidencePts: floor(data_confidence_score × 3) → 0–3
+  // contactReliabilityPts: floor(contact_reliability_score × 2) → 0–2
+  // corroborationPts: jsonb_array_length(corroborating_sources) >= 2 → 2, else 0
     │
     ▼
 
-  accessibility_factor(contact_tier, contact_reliability_score): 0.30–1.40
+  accessibility_factor(contact_tier, contact_reliability_score): 0.225–1.30
   timing_factor(urgency, new_business, competitive_pressure, franchise_penalty): 0.85–1.20
     │
     ▼
@@ -1613,10 +1796,11 @@ GET /api/v1/leads/:id
   → lead completo con score_breakdown expandido
   → buyer_type_scores ordenados por score DESC
   → corroborating_sources con labels
+  → si CM no pasa su lead_filter: 404 (no 403)
 
-PATCH /api/v1/leads/:id/contact
-  → { contacted_at, channel, notes }
-  → actualiza estado de outreach
+// Registrar contacto: usar POST /api/v1/outreach (no hay PATCH /leads/:id/contact).
+// El trigger SQL contacted_by (Fase 25) actualiza leads.contacted_at automáticamente
+// al primer outreach del lead.
 ```
 
 ---
@@ -1678,17 +1862,21 @@ Datos que ya tenemos o podemos extraer con poco esfuerzo y que hoy no alimentan 
 ```json
 {
   "commission_estimate": {
-    "monthly_orders_est": 200,
-    "avg_ticket_uyu": 500,
-    "monthly_revenue_est": 100000,
-    "commission_rate": 0.30,
-    "commission_monthly_uyu": 30000,
-    "system_cost_monthly_uyu": 3000,
-    "monthly_savings_est": 27000,
+    "monthly_orders_est": 200,            // estimado por review_count + niche
+    "avg_ticket_uyu": 500,                // estimado por niche
+    "monthly_revenue_est": 100000,        // monthly_orders_est × avg_ticket_uyu
+    "commission_rate": 0.30,              // fijo PedidosYa
+    "commission_monthly_uyu": 30000,      // revenue_est × commission_rate
+    "system_cost_monthly_uyu": null,      // <lookup: service_pricing.delivery_system.monthly_fee
+                                          //         para user_id=$auth.user_id — Fase 27>.
+                                          // El ejemplo "3000" es ilustrativo de mock UI.
+    "monthly_savings_est": null,          // commission_monthly_uyu - system_cost_monthly_uyu
     "pitch_hook": "Estás pagando ~$30.000 UYU/mes a PedidosYa"
   }
 }
 ```
+
+**Resolución de `system_cost_monthly_uyu`:** el valor no se infiere ni se hardcodea — viene de `service_pricing` (Fase 27) consultando con `user_id` del CM autenticado y `service_type='delivery_system'`. Si la fila no existe (Fase 27 sin seed completo), `system_cost_monthly_uyu = null` y la UI muestra "Configurar precio en Settings → Pricing" en lugar de un número falso. Los `3000` del ejemplo son solo para mocks visuales.
 
 ---
 
@@ -1753,19 +1941,19 @@ WHERE niche = $niche
 
 ### Mecanismo de trigger: DB como bus de mensajes
 
-`blindspot-api` y `blindspot` (core) nunca se comunican por HTTP. Todo se coordina via PostgreSQL usando dos mecanismos complementarios:
+Los procesos `api/` y `src/` (core) nunca se comunican por HTTP entre sí. Todo se coordina via PostgreSQL usando dos mecanismos complementarios:
 
 **1. pg_notify para ejecución inmediata (manual runs):**
 
 ```sql
--- blindspot-api: al recibir POST /api/v1/pipeline/run
+-- api/ (proceso 1): al recibir POST /api/v1/pipeline/run
 INSERT INTO pipeline_runs (status, triggered_by, config_snapshot, overrides)
 VALUES ('pending', 'manual', $config, $overrides)
 RETURNING id;
 
 SELECT pg_notify('pipeline_trigger', $run_id::text);
 
--- blindspot (core): al arrancar
+-- src/ (core, proceso 2): al arrancar
 LISTEN pipeline_trigger;
 -- Callback inmediato al recibir NOTIFY:
 client.on('notification', async (msg) => {
@@ -1777,7 +1965,7 @@ client.on('notification', async (msg) => {
 **2. Polling de `pipeline_config` para el cron:**
 
 ```typescript
-// blindspot (core) — loop principal cada 60s
+// src/ (core) — loop principal cada 60s
 async function configWatcher() {
   const config = await loadPipelineConfig()
   if (config.updated_at > lastKnownUpdatedAt) {
@@ -1791,7 +1979,7 @@ setInterval(configWatcher, 60_000)
 **3. Polling de `discovery_jobs` para jobs de exploración:**
 
 ```typescript
-// blindspot (core) — loop cada 30s
+// src/ (core) — loop cada 30s
 async function jobWatcher() {
   const job = await db
     .from('discovery_jobs')
@@ -1806,9 +1994,11 @@ async function jobWatcher() {
 }
 ```
 
-**Abort y pause:** `blindspot-api` escribe `pipeline_runs.abort_requested = true`. `blindspot` verifica este flag entre cada lead procesado y termina limpiamente si está activo.
+**Abort y pause:** `api/` escribe `pipeline_runs.abort_requested = true`. `src/` (core) verifica este flag entre cada lead procesado y termina limpiamente si está activo.
 
-**Regla absoluta:** `blindspot-api` nunca importa módulos de `blindspot`. Si necesita saber si el pipeline está corriendo, lee `pipeline_runs WHERE status='running'`. Si necesita el resultado, lee `leads`. Nunca invoca código de scoring o discovery directamente.
+**Regla absoluta:** `api/` nunca importa módulos de `src/` (excepto types compartidos en `shared/`). Si `api/` necesita saber si el pipeline está corriendo, lee `pipeline_runs WHERE status='running'`. Si necesita el resultado, lee `leads`. Nunca invoca código de scoring o discovery directamente.
+
+**Única excepción documentada:** los handlers `POST /api/v1/admin/system/restart-{core,api}` usan `child_process.exec('pm2 restart …')` para gestionar el ciclo de vida del proceso `src/`. Esto NO es importar módulos — es controlar el supervisor externo (pm2). Gated por `NODE_ENV='production'` (Fase 48 aplicada); en dev devuelve 501. Ver `ADMIN_PANEL.md § Pantalla F — Health & System Status` para forma canónica de respuesta y códigos de error tipados. No usar este patrón para ningún otro endpoint.
 
 ---
 
@@ -1822,12 +2012,12 @@ CREATE TABLE pipeline_runs (
   completed_at     timestamptz,
 
   -- Control
-  status           text NOT NULL DEFAULT 'pending',
-  -- 'pending' | 'running' | 'completed' | 'failed' | 'partial' | 'aborted'
-  triggered_by     text NOT NULL DEFAULT 'manual',
-  -- 'manual' | 'cron' | 'startup-recovery' | 'api'
+  status           text NOT NULL DEFAULT 'pending'
+                   CHECK (status IN ('pending','running','completed','failed','partial','aborted')),
+  triggered_by     text NOT NULL DEFAULT 'manual'
+                   CHECK (triggered_by IN ('manual','cron','startup-recovery','api')),
   abort_requested  boolean DEFAULT false,
-  dashboard_stale  boolean DEFAULT false,  -- true si el run falló a mitad del refresh
+  dashboard_stale  boolean DEFAULT false,  -- warning UI si un run falló; no refresca VIEW
 
   -- Config usada en este run
   config_snapshot  jsonb,   -- copia de pipeline_config al momento de iniciar
@@ -1852,7 +2042,7 @@ CREATE TABLE pipeline_runs (
 
   -- Notificaciones
   webhook_status   text DEFAULT 'not_configured'
-  -- 'not_configured' | 'sent' | 'failed'
+                   CHECK (webhook_status IN ('not_configured','sent','failed'))
 );
 
 CREATE INDEX pipeline_runs_status ON pipeline_runs(status);
@@ -1865,7 +2055,8 @@ CREATE INDEX pipeline_runs_created_at ON pipeline_runs(created_at DESC);
 
 ```sql
 CREATE TABLE pipeline_config (
-  id                    uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  id                    text PRIMARY KEY DEFAULT 'singleton'
+                        CHECK (id = 'singleton'),  -- impide múltiples filas
   updated_at            timestamptz DEFAULT now(),
 
   -- Schedule
@@ -1892,15 +2083,19 @@ CREATE TABLE pipeline_config (
   google_places_budget_spent     numeric(8,2) DEFAULT 0.00,
   google_places_alert_threshold  numeric(8,2) DEFAULT 10.00,
 
+  -- Costos manuales editables por admin (Cost Dashboard avanzado)
+  infra_monthly_cost_usd         numeric(8,2) DEFAULT 0.00,
+  backup_monthly_cost_usd        numeric(8,2) DEFAULT 0.00,
+
   -- Notificaciones
   notify_webhook_url     text,
   notify_webhook_secret  text,
   notify_webhook_events  text[] DEFAULT ARRAY['run_completed','new_hot_leads']
 );
 
--- Solo existe una fila — singleton pattern
--- Seed inicial:
-INSERT INTO pipeline_config DEFAULT VALUES;
+-- Solo existe una fila — singleton enforced por PK fijo 'singleton'.
+-- ON CONFLICT DO NOTHING permite que la migración sea idempotente (replay seguro).
+INSERT INTO pipeline_config (id) VALUES ('singleton') ON CONFLICT (id) DO NOTHING;
 
 CREATE TRIGGER pipeline_config_updated_at BEFORE UPDATE ON pipeline_config
   FOR EACH ROW EXECUTE FUNCTION set_updated_at();
@@ -1908,9 +2103,9 @@ CREATE TRIGGER pipeline_config_updated_at BEFORE UPDATE ON pipeline_config
 
 ---
 
-### `lead_dashboard` — VIEW normal (suficiente para 2-5 usuarios)
+### `lead_dashboard` — VIEW normal (suficiente para 2–8 usuarios)
 
-Para la concurrencia esperada (2-5 usuarios), una VIEW normal es suficiente. PostgreSQL optimiza el plan de query para las condiciones de filtro del request. Una MATERIALIZED VIEW agrega complejidad de refresh sin beneficio real a esta escala.
+Para la concurrencia esperada (2–8 usuarios), una VIEW normal es suficiente. PostgreSQL optimiza el plan de query para las condiciones de filtro del request. Una MATERIALIZED VIEW agrega complejidad de refresh sin beneficio real a esta escala.
 
 ```sql
 -- Crear como VIEW simple — sin MATERIALIZED
@@ -1918,9 +2113,9 @@ CREATE VIEW lead_dashboard AS
   SELECT ...   -- mismo SQL definido en § View lead_dashboard arriba
   FROM leads l
   LEFT JOIN LATERAL (...) lbs_top ON true
-  WHERE l.passed_filter = true
-    AND (l.score_breakdown IS NULL OR l.score_breakdown->>'contact_tier' != 'X');
-    -- NULL handling crítico: NULL != 'X' evalúa a NULL en SQL, ocultaría leads sin score_breakdown
+  WHERE l.passed_filter = true;
+  -- La VIEW base incluye tier X para auditoría y filtros explícitos.
+  -- Los endpoints aplican default contact_tier=A,B,C,D cuando el request no especifica tiers.
 
 -- Índices en la tabla leads (no en la view) — son los que importan para performance:
 CREATE INDEX leads_contact_tier ON leads ((score_breakdown->>'contact_tier'));
@@ -2000,6 +2195,13 @@ async function checkMissedRun(config: PipelineConfig) {
   }
 }
 ```
+
+**Crash recovery complementario al arrancar `src/`:**
+- Antes de `LISTEN pipeline_trigger` y antes de registrar el cron, ejecutar un cleanup de `pipeline_runs` huérfanos:
+  - `status='running'` → `status='aborted'`
+  - `dashboard_stale=true`
+  - append a `log_lines`: `"startup-crash-recovery"`
+- Sin este paso, la UI puede mostrar runs eternos y el operador no distingue un job activo de un zombie.
 
 ---
 
@@ -2111,7 +2313,7 @@ En Uruguay, muchas PyMEs tienen el mismo dueño con 2–3 negocios distintos. Co
 **Señales de mismo propietario:**
 - Mismo número de teléfono en 2+ leads
 - Mismo email en 2+ leads
-- Mismo RUT (cuando disponible vía MINTUR/DGI)
+- Mismo RUT (solo si en el futuro existiera una fuente oficial nueva y explícitamente aprobada; hoy no es una señal disponible)
 
 **Schema:**
 
@@ -2196,7 +2398,7 @@ Header: X-Blindspot-Signature: sha256={hmac}
 }
 ```
 
-Implementación: `src/api/pipeline/notifications.ts` → `notifyWebhook(run)`. Llamada como último paso en `completePipelineRun()`. Resultado persiste en `pipeline_runs.webhook_status`.
+Implementación: `src/modules/pipeline/notifications.ts` → `notifyWebhook(run)`. Llamada como último paso en `completePipelineRun()` dentro del proceso core. Resultado persiste en `pipeline_runs.webhook_status`.
 
 ---
 
@@ -2404,10 +2606,15 @@ El Pipeline Manager muestra barra de presupuesto y emite alerta (badge rojo) si 
 │  ─────────────────────                  marketing   ██████  41      │
 │  🚫 Sin web propia                      software    ████░░  28      │
 │  📘 FB: presente, sin actividad 8m      catalogo    ██░░░░  18      │
-│  📷 IG: no detectado                                                 │
-│  ⚠️  Web vía heurístico (score 0.71)   Contactabilidad:  ×1.28     │
-│  🗓  Copyright 2019 detectado          Review mult:       ×1.20     │
-│  ⭐ Rating 4.4 · 87 reviews                                          │
+│  📷 IG: no detectado                    contacto_d  ░░░░░░   0      │
+│  ⚠️  Web vía heurístico (score 0.71)                                │
+│  🗓  Copyright 2019 detectado          Fórmula v2 (Fase 22):        │
+│  ⭐ Rating 4.4 · 87 reviews              gap_depth:        41/60    │
+│                                          breadth:          +8       │
+│                                          quality_pts:     12/15     │
+│                                          accessibility:   ×1.30     │
+│                                          timing:          ×1.05     │
+│                                          urgency_bonus:    +5       │
 │                                        Oferta principal:             │
 │  ESTADO OPERATIVO                      Marketing social              │
 │  ─────────────────────                                               │
@@ -2500,7 +2707,7 @@ Vista agregada para identificar oportunidades de campaña, no leads individuales
 
 El contrato mínimo de datos que el backend debe exponer para la UI (sin joins) está definido en `§ Contrato de datos para la UI` más arriba en este archivo.
 
-**View `lead_dashboard`** (VIEW normal — no MATERIALIZED para 2-5 usuarios): desnormaliza todos los campos del LeadCard para evitar joins en cada request del frontend. Definida en `§ View lead_dashboard` arriba.
+**View `lead_dashboard`** (VIEW normal — no MATERIALIZED para 2–8 usuarios): desnormaliza todos los campos del LeadCard para evitar joins en cada request del frontend. Definida en `§ View lead_dashboard` arriba.
 
 ---
 
@@ -2508,7 +2715,7 @@ El contrato mínimo de datos que el backend debe exponer para la UI (sin joins) 
 
 ### Principio de diseño
 
-El generador de ofertas no debe acoplarse a ningún proveedor de IA específico. La misma funcionalidad debe correr con Gemini free tier (sin costo), con un modelo local vía Ollama (sin API key), o con cualquier API OpenAI-compatible.
+El generador de ofertas no debe acoplarse a ningún proveedor de IA específico. La misma funcionalidad debe correr con Gemini si el plan/límites vigentes lo permiten, con un modelo local vía Ollama (sin API key), o con cualquier API OpenAI-compatible.
 
 ### Interfaz `LLMProvider`
 
@@ -2527,13 +2734,13 @@ interface LLMProvider {
 
 ### Implementaciones
 
-**GeminiProvider** — free tier recomendado para empezar
+**GeminiProvider** — proveedor posible, elegido por configuración
 ```typescript
-// gemini-1.5-flash: 15 RPM, 1.000.000 tokens/día gratis
-// Ideal para generar ~50 ofertas por sesión sin costo
+// El modelo y los límites se revalidan al implementar.
+// No hardcodear modelos deprecated; leer LLM_MODEL desde env/config.
 class GeminiProvider implements LLMProvider {
   name = 'gemini'
-  // POST https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent
+  // POST https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent
   // Headers: { 'x-goog-api-key': process.env.GEMINI_API_KEY }
 }
 ```
@@ -2660,13 +2867,18 @@ El formulario es el mismo para todos los leads. No hay campos obligatorios más 
 
 ### Tabla `lead_outreach` — diseño final
 
+**Creada en Fase API-0** (movida desde Fase 25 por octava auditoría 2026-05-16). Fase 25 ahora cubre solo el trigger de `contacted_by`, CLI stats y verificación end-to-end. Razón del movimiento: la matriz de auth de Fase API exige tests sobre `lead_outreach` (CM solo puede leer/modificar el propio) y Fase 25 vive dos bloques después de Fase API en el orden canónico — antes del movimiento, la matriz era inalcanzable.
+
 ```sql
--- NOTA: campaign_id NO entra en el CREATE TABLE — se agrega en Fase 43 via ALTER TABLE
--- (outreach_campaigns no existe en Fase 25; la FK fallaría en la creación)
+-- NOTA: campaign_id NO entra en el CREATE TABLE de Fase API-0 — se agrega en Fase 43 via ALTER TABLE
+-- (outreach_campaigns no existe en Fase API-0; la FK fallaría en la creación)
 CREATE TABLE lead_outreach (
   id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   lead_id       uuid NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
-  user_id       uuid NOT NULL REFERENCES users(id),  -- quién hizo el contacto
+  user_id       uuid NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  -- ON DELETE RESTRICT: borrar un user con outreach asociado falla con FK error.
+  -- DELETE /api/v1/users/:id ya está gated en el handler (ADMIN_PANEL.md) — "solo si no tiene
+  -- lead_outreach registrado". El RESTRICT es la red de seguridad a nivel DB.
   created_at    timestamptz DEFAULT now(),
   updated_at    timestamptz DEFAULT now(),
 
@@ -2679,16 +2891,25 @@ CREATE TABLE lead_outreach (
   -- source_llm: 'gemini' | 'ollama' | null (= template o manual)
 
   -- Estado del pipeline
-  status        text NOT NULL DEFAULT 'contacted',
-  -- 'contacted' | 'responded' | 'interested' | 'closed_won' | 'closed_lost' | 'no_response'
+  status        text NOT NULL DEFAULT 'contacted'
+                CHECK (status IN ('contacted','responded','interested','closed_won','closed_lost','no_response')),
+  -- semántica: status es el "tablero" del lead — el estado actual en el funnel.
 
-  -- Resultado (todos opcionales)
+  -- Resultado (todos opcionales — capturan detalles de cómo se llegó al status)
   responded     boolean,
-  outcome       text,              -- 'closed_won' | 'closed_lost' | 'not_now' | 'has_provider'
-  lost_reason   text,              -- 'price' | 'timing' | 'no_interest' | 'competitor' | other
+  outcome       text                          -- detalle granular cuando hay cierre o pausa
+                CHECK (outcome IS NULL OR outcome IN ('closed_won','closed_lost','not_now','has_provider')),
+  lost_reason   text                          -- 'price' | 'timing' | 'no_interest' | 'competitor' | other
+                CHECK (lost_reason IS NULL OR lost_reason IN ('price','timing','no_interest','competitor','other')),
   service_sold  text,              -- descripción libre del servicio vendido
   price_sold    integer,           -- precio en UYU (opcional)
   notes         text,              -- notas libres
+
+  -- Invariante de consistencia (enforced en el handler API, no en SQL):
+  -- - Si status='closed_won', outcome debe ser 'closed_won' o NULL.
+  -- - Si status='closed_lost', outcome debe ser 'closed_lost' o NULL; lost_reason puede tener valor.
+  -- - Si status NOT IN ('closed_won','closed_lost'), outcome puede ser 'not_now' o 'has_provider' o NULL.
+  -- El API PATCH /api/v1/outreach/:id valida esta consistencia antes de guardar — un mismatch devuelve 400.
 
   -- Timestamps
   contacted_at  timestamptz DEFAULT now(),
@@ -2756,7 +2977,7 @@ PIPELINE COMPLETO (cron configurable, ej: domingo 02:00)
               ↓ cuando termina
   ┌─ FASE 2: DISCOVERY (nuevos leads) ──────────────────────────────┐
   │                                                                   │
-  │  Para cada job en discovery_queue WHERE status='queued'           │
+  │  Para cada job en discovery_jobs WHERE status='queued'            │
   │  (ordenado por exploration_priority DESC):                        │
   │    discover-external --source X --location Y --niche Z            │
   │    updateAllLeads() + cross-source dedup                          │
@@ -2774,8 +2995,9 @@ PIPELINE COMPLETO (cron configurable, ej: domingo 02:00)
               ↓ cuando termina
   ┌─ FASE 4: SCORE ALL UPDATED ─────────────────────────────────────┐
   │                                                                   │
-  │  score --all --changed-since <pipeline_start_timestamp>           │
+  │  score --changed-since <pipeline_start_timestamp>                 │
   │  score --buyer-types --changed-since <pipeline_start_timestamp>   │
+  │  (Fase 23 debe implementar --changed-since si no existe todavía)  │
   │                                                                   │
   └───────────────────────────────────────────────────────────────────┘
               ↓ cuando termina
@@ -2793,123 +3015,55 @@ PIPELINE COMPLETO (cron configurable, ej: domingo 02:00)
   └───────────────────────────────────────────────────────────────────┘
 ```
 
-### Tabla `pipeline_config` (nueva — configuración persistida)
+### Tablas `pipeline_config` y `pipeline_runs`
 
-Config editable desde la UI. Una sola fila. El servidor la lee al arrancar y cada vez que el frontend la actualiza.
+> **Los schemas canónicos están en `§ Schema completo — pipeline_runs` y `§ Schema completo — pipeline_config` más arriba.** Esta sección sólo documenta la forma esperada de `phase_results` (jsonb) y la semántica de los campos que la UI consume — no duplica el SQL.
 
-```sql
-CREATE TABLE pipeline_config (
-  id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  updated_at      timestamptz DEFAULT now(),
-  updated_by      text DEFAULT 'system',  -- 'system' | 'ui' | 'cli'
-
-  -- Schedule
-  enabled         boolean DEFAULT true,
-  cron_expression text DEFAULT '0 2 * * 0',   -- domingo 02:00 UYU
-
-  -- CPU Budget global
-  cpu_budget      text DEFAULT 'balanced',     -- 'conservative'|'balanced'|'aggressive'
-  concurrency_override integer,                -- null = calculado por cpu_budget
-
-  -- Timeouts
-  timeout_per_lead_sec integer DEFAULT 120,
-  max_retries          integer DEFAULT 2,
-
-  -- Fases habilitadas y sus parámetros
-  phase_config    jsonb DEFAULT '{
-    "refresh": {
-      "enabled": true,
-      "sources": ["google_places","mintur","yelu","osm"],
-      "priority_tiers_first": true
+**`pipeline_runs.phase_results` (forma esperada del jsonb):**
+```jsonc
+{
+  "refresh": {
+    "by_source": {
+      "google_places": { "leads": 45, "duration_ms": 1380000, "cost_usd": 0.90 },
+      "mintur":         { "leads": 32, "duration_ms": 1680000, "cost_usd": 0    },
+      "yelu":           { "leads": 28, "duration_ms": 2460000, "cost_usd": 0    },
+      "osm":            { "leads": 22, "duration_ms":  360000, "cost_usd": 0    }
     },
-    "discovery": {
-      "enabled": true,
-      "max_jobs_per_run": 5,
-      "respect_priority": true
-    },
-    "enrich_new": {
-      "enabled": true,
-      "with_heuristic": false,
-      "concurrency": 5
-    },
-    "score": {
-      "enabled": true,
-      "recalculate_buyer_types": true
-    }
-  }',
-
-  -- Presupuesto Google Places
-  google_places_budget_total     numeric(8,2) DEFAULT 200.00,  -- crédito total disponible USD
-  google_places_budget_spent     numeric(8,2) DEFAULT 5.16,    -- acumulado gastado
-  google_places_alert_threshold  numeric(8,2) DEFAULT 20.00,   -- alerta cuando queda menos de esto
-  -- Worker incrementa budget_spent += 0.02 × requests_made al terminar cada discovery run de Google Places
-
-  -- Notificaciones
-  notify_ui_badge boolean DEFAULT true,
-  notify_email    text                          -- null = deshabilitado
-);
+    "total_leads": 127, "duration_ms": 5880000, "total_cost_usd": 0.90
+  },
+  "discovery": {
+    "jobs": [{ "source": "yelu", "location": "salto", "niche": "restaurant",
+               "leads_new": 12, "leads_corroborated": 3, "cost_usd": 0 }],
+    "total_new": 14, "total_corroborated": 8, "total_cost_usd": 0
+  },
+  "enrich":  { "leads_processed": 14, "duration_ms": 1080000 },
+  "score":   { "leads_scored": 3141, "new_hot": 3, "score_changes_up": 28, "score_changes_down": 12 }
+}
 ```
 
-### Tabla `pipeline_runs` (nueva — historial)
+**Quién escribe `cost_usd`:** los workers de `refresh` y `discovery` calculan `requests_made × 0.02` (rate Google Places) por source/job y lo persisten en `phase_results`. Para fuentes sin costo (mintur/osm/yelu/pedidosya scraping local) el valor es `0`. Fase 44 conecta este campo con `pipeline_config.google_places_budget_spent` (sumando `total_cost_usd` al final del run). El Cost Dashboard (item 26 del canónico) lee este campo para mostrar costo por fuente histórico.
 
-```sql
-CREATE TABLE pipeline_runs (
-  id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  created_at      timestamptz DEFAULT now(),
-  started_at      timestamptz,
-  completed_at    timestamptz,
-  trigger         text DEFAULT 'manual',  -- 'manual' | 'cron' | 'ui'
-  config_snapshot jsonb,                  -- snapshot de pipeline_config al momento del run
-  overrides       jsonb,                  -- overrides aplicados (si fue manual con overrides)
-  status          text DEFAULT 'queued',  -- 'queued'|'running'|'completed'|'failed'|'partial'
+**Notas para implementación (no en el schema):**
+- `log_lines` se rota a máximo 200 entradas en el worker — más viejas se descartan en memoria, no se borra de la DB hasta que el run completa.
+- `dashboard_stale=true` indica warning operativo en UI. No dispara refresh de `lead_dashboard`: la vista es normal y refleja DB actual.
+- `phase_results` se va poblando mientras el run corre — la UI lee este campo cada 3s para mostrar progreso parcial.
 
-  -- Resultados por fase (se va poblando mientras corre)
-  phase_results   jsonb DEFAULT '{}',
-  -- {
-  --   refresh: {
-  --     by_source: { google_places: { leads: 45, duration_ms: 1380000 }, ... },
-  --     total_leads: 127, duration_ms: 5880000
-  --   },
-  --   discovery: {
-  --     jobs: [{ source, location, niche, leads_new, leads_corroborated }],
-  --     total_new: 14, total_corroborated: 8
-  --   },
-  --   enrich:  { leads_processed: 14, duration_ms: 1080000 },
-  --   score:   { leads_scored: 3141, new_hot: 3, score_changes_up: 28, score_changes_down: 12 }
-  -- }
-
-  -- Control de ejecución
-  abort_requested    boolean DEFAULT false,   -- true = terminar limpiamente después del lead actual
-  dashboard_stale    boolean DEFAULT false,   -- true = la VIEW lead_dashboard necesita refresh
-
-  -- Estado en tiempo real
-  current_phase   integer,                -- 1..4, null si no está corriendo
-  current_job     jsonb,                  -- { source, location, niche, progress, leads_found }
-  log_lines       jsonb DEFAULT '[]',     -- array de { ts, message } — rotar a máximo 200 entradas en el worker
-
-  -- Invariantes post-run
-  invariants_ok      boolean,
-  invariant_details  jsonb,
-
-  error_message   text
-);
-
-CREATE INDEX pipeline_runs_status     ON pipeline_runs(status);
-CREATE INDEX pipeline_runs_created_at ON pipeline_runs(created_at DESC);
-```
+**Diferencias con el snapshot anterior de esta sección (eliminado, marzo 2026):**
+- Antes había duplicación con `§ Schema completo` arriba en este mismo documento. Se consolidó.
+- Naming canónico: `triggered_by` (no `trigger`), `notify_webhook_url/secret/events` (no `notify_ui_badge`/`notify_email`), `phases` (no `phase_config`).
 
 ### API de pipeline (backend)
 
 ```typescript
-// src/api/routes/pipeline.ts
+// api/src/routes/pipeline.ts
 
 GET  /api/v1/pipeline/config         → PipelineConfig desde tabla pipeline_config
-PUT  /api/v1/pipeline/config         → guardar config, reconfigurar cron en memoria
+PUT  /api/v1/pipeline/config         → guardar config; `src/` detecta el cambio y reconfigura cron
 PATCH /api/v1/pipeline/config        → actualización parcial
 
 POST /api/v1/pipeline/run
      body: { overrides?: Partial<PhaseConfig & { cpu_budget, phases }> }
-     → inserta pipeline_runs row (status='queued'), dispara ejecución en background
+     → inserta pipeline_runs row (status='pending'), emite pg_notify; `src/` ejecuta en background
      → responde { run_id } inmediatamente
 
 POST /api/v1/pipeline/run/dry
@@ -2917,9 +3071,10 @@ POST /api/v1/pipeline/run/dry
      → calcula qué haría: cuántos leads refreshearía, qué jobs discovery correría
      → responde { plan: { refresh_count, discovery_jobs, enrich_estimate, duration_estimate } }
 
-POST /api/v1/pipeline/abort          → marca run activo como 'aborting', espera al lead actual
+POST /api/v1/pipeline/abort          → setea abort_requested=true en el run activo; `src/` deja status='aborted'
 POST /api/v1/pipeline/pause-phase
-     body: { phase: 1|2|3|4 }    → pausa la fase, continúa con la siguiente al retomar
+     body: { phase: 'refresh'|'discovery'|'enrich'|'score' }    → pausa la fase, continúa con la siguiente al retomar
+     // Naming alineado con phase_results jsonb keys. Fase 5 (report) no es pausable.
 
 GET  /api/v1/pipeline/runs?status=completed,failed&limit=20&cursor=<id>
 GET  /api/v1/pipeline/runs/active    → run con status='running', null si no hay
@@ -2929,10 +3084,10 @@ GET  /api/v1/pipeline/runs/:id/log?since=<iso> → log_lines nuevas desde timest
 
 ### Configuración del cron en el servidor
 
-El cron se configura en memoria al arrancar el servidor API. Si `pipeline_config.enabled=true`, registra el job con la expresión cron guardada. Cuando el frontend actualiza la config vía `PUT /api/v1/pipeline/config`, el servidor recalcula y reregistra el cron job en memoria sin reiniciar.
+El cron se configura en memoria al arrancar el proceso `src/` (core). Si `pipeline_config.enabled=true`, `src/` registra el job con la expresión cron guardada. Cuando el frontend actualiza la config vía `PUT /api/v1/pipeline/config`, `api/` solo guarda la config; `src/` detecta el cambio con `configWatcher()` y reregistra el cron en memoria sin reiniciar.
 
 ```typescript
-// src/api/pipeline/scheduler.ts
+// src/modules/pipeline/scheduler.ts
 import { schedule } from 'node-cron'
 
 let currentCronJob: ScheduledTask | null = null
@@ -2941,7 +3096,7 @@ export function reconfigureCron(config: PipelineConfig): void {
   currentCronJob?.stop()
   if (!config.enabled) return
   currentCronJob = schedule(config.cron_expression, () => {
-    triggerPipelineRun({ trigger: 'cron', config })
+    triggerPipelineRun({ triggered_by: 'cron', config })
   })
 }
 ```
@@ -2967,41 +3122,26 @@ blindspot pipeline --status
 
 ---
 
-## Diseño — DGI + RUT (enriquecimiento fiscal)
+## Diseño — RUT / enriquecimiento fiscal
 
-### Estrategia: traer datos primero, procesar después
+### Estado canónico al 2026-05-18
 
-El procesamiento es costoso de implementar, pero traer y guardar los datos es gratis. MINTUR ya incluye RUT en muchos registros. La estrategia en fases:
+La antigua línea de trabajo `DGI/BPS` quedó descartada permanentemente por decisión de producto/legal y no forma parte del roadmap ejecutable. No asumir que MINTUR aporta RUT: `context/research/mintur.md` documenta que el RUT no está expuesto públicamente.
 
-**Fase inmediata (costo: 0):**
-- Extraer RUT de `source_data` de leads MINTUR durante el enrich
-- Guardar en `lead_company_data.rut`
-- No procesar nada todavía
+Reglas vigentes:
+- no implementar parser RUT ni scraping/ingesta de DGI/BPS;
+- no inferir RUT por nombre comercial;
+- no dejar features futuras dependiendo de una fase DGI/BPS inexistente.
 
-**Fase mediano plazo (costo: bajo):**
-- Dataset DGI en datos.gub.uy: descarga única de RUT → razón social → CIIU
-- Script de resolución batch: para cada lead con RUT → buscar en dataset → guardar
-  - `lead_company_data.razon_social`
-  - `lead_company_data.ciiu` (código de actividad económica CIIU4)
-- CIIU → `niche` refinado automáticamente para leads "other"
+Si en el futuro apareciera una fuente oficial nueva, permitida y explícitamente aprobada, deberá abrirse como decisión de producto nueva y no como reactivación automática de esta documentación.
 
-**Fase largo plazo (costo: medio, alto valor):**
-- Régimen fiscal (monotributo / IRAE / IVA mínimo) como señal de deal size
-- Fuente: BPS dataset o DGI API (requiere gestión de acceso)
-- Resultado: `lead_company_data.regimen_fiscal` → factor en `business_quality_pts`
+### Nota histórica sobre valor fiscal para scoring
 
-### Tabla de valor del régimen fiscal para scoring
+Esta tabla se conserva solo como referencia histórica de diseño. No hay fase activa que la implemente mientras DGI/BPS permanezca descartado.
 
-| Régimen | Proxy de facturación | `business_quality` ajuste |
-|---------|---------------------|--------------------------|
-| Monotributo | < $200.000 UYU/mes | ×0.7 — presupuesto limitado |
-| IVA mínimo | $200k–$500k/mes | ×1.0 — neutro |
-| IRAE pequeña empresa | $500k–$2M/mes | ×1.3 — tiene presupuesto real |
-| IRAE régimen general | > $2M/mes | ×1.5 — deal size alto |
+### Nota histórica sobre CIIU → sub-niche
 
-### CIIU → sub-niche para leads "other"
-
-El código CIIU4 resuelve el problema del niche "other" para leads con RUT:
+El mapeo siguiente queda como referencia teórica. No debe tratarse como dependencia activa del roadmap actual:
 
 | CIIU4 range | Sub-niche | Sub-scores activados |
 |-------------|-----------|---------------------|
@@ -3013,24 +3153,9 @@ El código CIIU4 resuelve el problema del niche "other" para leads con RUT:
 | 9511–9529 | repair_services | marketing, web_nuevo |
 | 6910–6920 | legal_accounting | web_nuevo, marketing |
 
-### Diseño del parser RUT en enrich
+### Parser RUT
 
-```typescript
-// src/modules/enrichment/parsers/rut.ts
-// Extrae RUT del source_data de MINTUR y normaliza formato
-function parseRutFromMintur(sourceData: Record<string, unknown>): string | null {
-  // MINTUR usa campo "RUT" o "rut" en distintas versiones del dataset
-  const raw = sourceData['RUT'] ?? sourceData['rut'] ?? sourceData['Rut']
-  if (!raw) return null
-  // Formato UY: 12 dígitos o con guiones XX.XXX.XXX-X
-  return normalizeRut(String(raw))
-}
-
-function normalizeRut(raw: string): string {
-  // Eliminar puntos, guiones, espacios → solo dígitos
-  return raw.replace(/[\.\-\s]/g, '').padStart(12, '0')
-}
-```
+No implementar mientras la decisión de descarte siga vigente.
 
 ---
 
@@ -3047,7 +3172,7 @@ Muchos pueden resolverse con CIIU (si tienen RUT). Para los que no, usamos clasi
 ```
 Al enriquecer un lead con niche='other':
 
-  1. Si tiene RUT y CIIU resuelto → sub_niche del mapa CIIU (ver sección DGI)
+  1. Si en un futuro existiera una fuente aprobada con RUT y CIIU resuelto → sub_niche del mapa CIIU
 
   2. Si no tiene RUT o CIIU:
      → Llamar LLMProvider.generate(subNichePrompt(lead))
@@ -3066,7 +3191,7 @@ Al enriquecer un lead con niche='other':
 ### Costo estimado de la clasificación batch
 
 - 2.034 leads "other" × ~50 tokens input + 5 tokens output = ~112k tokens total
-- Gemini free tier: 1M tokens/día → procesable en 1 corrida sin costo
+- Costo/límites se revalidan al implementar según `LLM_PROVIDER`/`LLM_MODEL`; no hardcodear un modelo específico en el roadmap.
 - Ollama local: sin costo, ~2 segundos por lead con Mistral 7B → ~68 minutos total
 - Resultado: 2.034 leads potencialmente activados
 

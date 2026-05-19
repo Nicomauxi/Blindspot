@@ -27,6 +27,20 @@ export interface LLMProvider {
 }
 
 export interface LlmUsageLog {
+  provider: string;
+  model: string;
+  operation: string;
+  lead_id: string | null;
+  user_id: string | null;
+  prompt_tokens: number;
+  completion_tokens: number;
+  cost_usd: number;
+  duration_ms: number | null;
+  success: boolean;
+  error: string | null;
+}
+
+export interface LegacyLlmUsageLog {
   lead_id: string;
   feature: string;
   provider: string;
