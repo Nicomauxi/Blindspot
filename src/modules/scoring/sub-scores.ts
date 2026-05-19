@@ -1,6 +1,7 @@
 import type { DigitalFootprintEnriched, Lead } from "../../shared/types.js";
-import { resolveField } from "./evaluator.js";
-import type { PrimaryOffer, SubScores } from "./types.js";
+import { hasKnownDigitalAssets } from "./contact.js";
+import { getLeadInferredState, inferredBool } from "./state.js";
+import type { ContactTier, PrimaryOffer, SubScores } from "./types.js";
 
 function hasTag(lead: Lead, tag: string): boolean {
   return lead.tags.includes(tag);
@@ -22,11 +23,6 @@ function getEnrichedFootprint(lead: Lead): DigitalFootprintEnriched | null {
   return fp;
 }
 
-// Gracefully handles inferred_state from Fase F (not yet implemented — always false until then)
-function inferredBool(lead: Lead, path: string): boolean {
-  return resolveField(lead, `digital_footprint.inferred_state.${path}.value`) === true;
-}
-
 function scoreWebNuevo(lead: Lead): number {
   let score = 0;
   if (hasTag(lead, "no-website")) score += 35;
@@ -38,7 +34,7 @@ function scoreWebNuevo(lead: Lead): number {
   ) {
     score += 15;
   }
-  if (inferredBool(lead, "has_ecommerce")) score = Math.round(score * 0.3);
+  if (inferredBool(getLeadInferredState(lead), "has_ecommerce")) score = Math.round(score * 0.3);
   return score;
 }
 
@@ -81,8 +77,9 @@ function scoreSoftware(lead: Lead, sgScore: number): number {
   if (hasTag(lead, "whatsapp-missing")) score += 10;
   if (hasTag(lead, "chat-widget-missing")) score += 3;
   score = Math.min(100, score);
-  if (inferredBool(lead, "has_reservations")) score = Math.round(score * 0.7);
-  if (inferredBool(lead, "has_delivery")) score = Math.round(score * 0.8);
+  const state = getLeadInferredState(lead);
+  if (inferredBool(state, "has_reservations")) score = Math.round(score * 0.7);
+  if (inferredBool(state, "has_delivery")) score = Math.round(score * 0.8);
   return score;
 }
 
@@ -102,22 +99,48 @@ function scoreCatalogo(lead: Lead): number {
   return score;
 }
 
+function scoreContactoDirecto(lead: Lead, contactTier: ContactTier | null): number {
+  if (contactTier !== "B" && contactTier !== "C") return 0;
+  if (hasKnownDigitalAssets(lead)) return 0;
+
+  let score = 20;
+  if ((lead.niche ?? "other") !== "other") score += 5;
+  if (lead.source !== "google_places") score += 5;
+  score += 10;
+
+  return Math.min(40, score);
+}
+
 const OFFER_NAMES = [
   "web_nuevo",
   "rediseno",
   "marketing",
   "software",
   "catalogo",
+  "contacto_directo",
 ] as const;
 type OfferName = (typeof OFFER_NAMES)[number];
 
-export function calculateSubScores(lead: Lead, sgScore: number): SubScores {
+interface CalculateSubScoresOptions {
+  includeDirectContact?: boolean;
+  contactTier?: ContactTier;
+}
+
+export function calculateSubScores(
+  lead: Lead,
+  sgScore: number,
+  options: CalculateSubScoresOptions = {}
+): SubScores {
+  const includeDirectContact = options.includeDirectContact ?? true;
   const scores: Record<OfferName, number> = {
     web_nuevo: scoreWebNuevo(lead),
     rediseno: scoreRediseno(lead),
     marketing: scoreMarketing(lead),
     software: scoreSoftware(lead, sgScore),
     catalogo: scoreCatalogo(lead),
+    contacto_directo: includeDirectContact
+      ? scoreContactoDirecto(lead, options.contactTier ?? null)
+      : 0,
   };
 
   const maxScore = Math.max(...(Object.values(scores) as number[]));

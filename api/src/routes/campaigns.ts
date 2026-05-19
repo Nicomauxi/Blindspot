@@ -23,6 +23,15 @@ const patchSchema = z.object({
   status: z.enum(CAMPAIGN_STATUSES).optional(),
 });
 
+function asNumber(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim() !== "") {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
 export async function campaignsRoutes(app: FastifyInstance): Promise<void> {
   // GET /api/v1/campaigns — list campaigns (admin sees all, cm sees own)
   app.get("/campaigns", { preHandler: requireAuth }, async (request, reply) => {
@@ -102,7 +111,7 @@ export async function campaignsRoutes(app: FastifyInstance): Promise<void> {
     // Compute stats from lead_outreach
     const { data: stats, error: statsErr } = await db
       .from("lead_outreach")
-      .select("status, outcome, prospect_score_at_contact")
+      .select("lead_id, status, outcome")
       .eq("campaign_id", id);
 
     if (statsErr) {
@@ -113,9 +122,30 @@ export async function campaignsRoutes(app: FastifyInstance): Promise<void> {
     const contacted = rows.length;
     const responded = rows.filter((r) => r.status !== "contacted" && r.status !== "no_response").length;
     const closedWon = rows.filter((r) => r.outcome === "closed_won").length;
-    const scoresAtContact = rows
-      .map((r) => (r as Record<string, unknown>)["prospect_score_at_contact"])
-      .filter((s): s is number => typeof s === "number");
+    const leadIds = Array.from(
+      new Set(
+        rows
+          .map((row) => (row as Record<string, unknown>)["lead_id"])
+          .filter((leadId): leadId is string => typeof leadId === "string" && leadId.length > 0)
+      )
+    );
+    let scoresAtContact: number[] = [];
+
+    if (leadIds.length > 0) {
+      const { data: leadRows, error: leadErr } = await db
+        .from("leads")
+        .select("id, prospect_score")
+        .in("id", leadIds);
+
+      if (leadErr) {
+        request.log.warn({ leadErr }, "campaign lead score query failed");
+      } else {
+        scoresAtContact = (leadRows ?? [])
+          .map((row) => asNumber((row as Record<string, unknown>)["prospect_score"]))
+          .filter((score): score is number => score !== null);
+      }
+    }
+
     const avgScore = scoresAtContact.length > 0
       ? Math.round(scoresAtContact.reduce((a, b) => a + b, 0) / scoresAtContact.length)
       : null;

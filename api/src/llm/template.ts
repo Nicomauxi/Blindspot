@@ -29,7 +29,7 @@ export class TemplateProvider implements LLMProvider {
       "una solución digital";
 
     const hook = req.pitch_hook ? ` Notamos que ${req.pitch_hook.toLowerCase()}.` : "";
-    const price = req.price_uyu ? ` Inversión desde UYU ${req.price_uyu.toLocaleString("es-UY")}.` : "";
+    const price = req.price_uyu != null ? ` Inversión desde UYU ${req.price_uyu.toLocaleString("es-UY")}.` : "";
 
     const text =
       `${greeting}, somos Blindspot.${hook} ` +

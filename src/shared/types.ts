@@ -439,6 +439,46 @@ export interface Lead {
   updated_at: string;
 }
 
+export interface LeadDashboardRecord {
+  id: string;
+  name: string;
+  niche: string | null;
+  source: string;
+  canonical_source: string | null;
+  address: string | null;
+  phone: string | null;
+  whatsapp: string | null;
+  website: string | null;
+  rating: number | null;
+  review_count: number | null;
+  tags: string[];
+  state: LeadState;
+  business_status: string | null;
+  source_confidence: number | null;
+  data_confidence_score: number | null;
+  contact_reliability_score: number | null;
+  contact_ready: boolean | null;
+  prospect_score: number | null;
+  contact_tier: string | null;
+  primary_offer: string | null;
+  pitch_hook: string | null;
+  urgency_signal: string | null;
+  contacted_at: string | null;
+  contacted_by: string | null;
+  created_at: string;
+  corroborating_sources: CorroboratingSource[];
+  top_buyer_type: string | null;
+  top_buyer_score: number | null;
+  owner_group_id: string | null;
+}
+
+export interface LeadDetailRecord extends LeadDashboardRecord {
+  notes: string | null;
+  digital_footprint: DigitalFootprint | Record<string, unknown> | null;
+  inferred_state: InferredState | Record<string, unknown> | null;
+  score_breakdown: Record<string, unknown> | null;
+}
+
 export interface LeadUpsert {
   candidate: PlaceCandidate;
   passed: boolean;

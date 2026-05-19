@@ -115,6 +115,7 @@ export default function LeadDetailPage() {
           <Section title="Información básica">
             <KV label="Niche" value={lead.niche} />
             <KV label="Fuente" value={lead.source} />
+            <KV label="Fuente canónica" value={lead.canonical_source} />
             <KV label="Dirección" value={lead.address} />
             <KV label="Teléfono" value={lead.phone} />
             <KV label="WhatsApp" value={lead.whatsapp} />
@@ -137,8 +138,9 @@ export default function LeadDetailPage() {
             <KV label="Oferta principal" value={lead.primary_offer} />
             <KV label="Pitch hook" value={lead.pitch_hook} />
             <KV label="Urgencia" value={lead.urgency_signal} />
+            <KV label="Confianza fuente" value={lead.source_confidence != null ? `${(lead.source_confidence * 100).toFixed(0)}%` : null} />
             <KV label="Confianza datos" value={lead.data_confidence_score != null ? `${(lead.data_confidence_score * 100).toFixed(0)}%` : null} />
-            <KV label="Confianza contacto" value={lead.source_confidence != null ? `${(lead.source_confidence * 100).toFixed(0)}%` : null} />
+            <KV label="Confiabilidad contacto" value={lead.contact_reliability_score != null ? `${(lead.contact_reliability_score * 100).toFixed(0)}%` : null} />
           </Section>
         </div>
 

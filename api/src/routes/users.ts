@@ -13,7 +13,7 @@ const permissiveUuid = z
 
 const createUserSchema = z.object({
   email: z.string().email(),
-  password: z.string().min(8),
+  password: z.string().min(12),
   role: z.enum(["admin", "cm"]).default("cm"),
   lead_filter: z.record(z.string(), z.unknown()).nullable().optional(),
   acknowledge_unrestricted: z.boolean().optional(),
@@ -21,7 +21,7 @@ const createUserSchema = z.object({
 
 const patchUserSchema = z.object({
   email: z.string().email().optional(),
-  password: z.string().min(8).optional(),
+  password: z.string().min(12).optional(),
   active: z.boolean().optional(),
   role: z.enum(["admin", "cm"]).optional(),
   lead_filter: z.record(z.string(), z.unknown()).nullable().optional(),
@@ -37,23 +37,53 @@ const listQuerySchema = z.object({
     .pipe(z.number().int().min(1).max(200)),
 });
 
-function validateLeadFilter(
-  role: string,
-  lead_filter: Record<string, unknown> | null | undefined,
-  acknowledge_unrestricted: boolean | undefined
+function validateLeadFilterShape(
+  leadFilter: Record<string, unknown> | null,
+  acknowledgeUnrestricted: boolean | undefined
 ): string | null {
-  if (role !== "cm") return null;
-  if (lead_filter === undefined) return null;
-  if (lead_filter === null) return "lead_filter_required";
-  if (Object.keys(lead_filter).length === 0 && !acknowledge_unrestricted) {
+  if (leadFilter === null) return "lead_filter_required";
+  if (Object.keys(leadFilter).length === 0 && !acknowledgeUnrestricted) {
     return "lead_filter_empty_requires_ack";
   }
-  // Check for empty arrays in known array fields
-  for (const [k, v] of Object.entries(lead_filter)) {
+  for (const [, v] of Object.entries(leadFilter)) {
     if (Array.isArray(v) && v.length === 0) {
       return "lead_filter_array_empty";
     }
   }
+  return null;
+}
+
+function validateLeadFilterForCreate(
+  role: string,
+  leadFilter: Record<string, unknown> | null | undefined,
+  acknowledgeUnrestricted: boolean | undefined
+): string | null {
+  if (role !== "cm") return null;
+  if (leadFilter === undefined || leadFilter === null) {
+    return "lead_filter_required";
+  }
+  return validateLeadFilterShape(leadFilter, acknowledgeUnrestricted);
+}
+
+function validateLeadFilterForPatch(
+  effectiveRole: string,
+  existingLeadFilter: Record<string, unknown> | null,
+  patchLeadFilter: Record<string, unknown> | null | undefined,
+  acknowledgeUnrestricted: boolean | undefined
+): string | null {
+  if (effectiveRole !== "cm") return null;
+
+  const resultingLeadFilter =
+    patchLeadFilter !== undefined ? patchLeadFilter : existingLeadFilter;
+
+  if (resultingLeadFilter === null) {
+    return "lead_filter_required";
+  }
+
+  if (patchLeadFilter !== undefined) {
+    return validateLeadFilterShape(resultingLeadFilter, acknowledgeUnrestricted);
+  }
+
   return null;
 }
 
@@ -157,7 +187,11 @@ export async function usersRoutes(app: FastifyInstance): Promise<void> {
 
     const { email, password, role, lead_filter, acknowledge_unrestricted } = parseResult.data;
 
-    const filterError = validateLeadFilter(role, lead_filter, acknowledge_unrestricted);
+    const filterError = validateLeadFilterForCreate(
+      role,
+      lead_filter,
+      acknowledge_unrestricted
+    );
     if (filterError) {
       return reply.status(400).send({
         error: "Invalid lead_filter",
@@ -175,7 +209,7 @@ export async function usersRoutes(app: FastifyInstance): Promise<void> {
         email,
         password_hash: hash,
         role,
-        lead_filter: lead_filter ?? null,
+        lead_filter: role === "cm" ? lead_filter ?? null : null,
         active: true,
       })
       .select("id, email, role, lead_filter, active, created_at")
@@ -232,9 +266,10 @@ export async function usersRoutes(app: FastifyInstance): Promise<void> {
     const effectiveRole =
       patch.role ?? (existing as { role: string }).role;
 
-    if ("lead_filter" in patch) {
-      const filterError = validateLeadFilter(
+    if ("lead_filter" in patch || patch.role === "cm") {
+      const filterError = validateLeadFilterForPatch(
         effectiveRole,
+        (existing as { lead_filter: Record<string, unknown> | null }).lead_filter,
         patch.lead_filter,
         patch.acknowledge_unrestricted
       );
@@ -341,6 +376,40 @@ export async function usersRoutes(app: FastifyInstance): Promise<void> {
 
     if (!existing) {
       return reply.status(404).send({ error: "User not found", error_code: "not_found" });
+    }
+
+    const historyChecks = [
+      { table: "lead_outreach", column: "user_id", label: "lead_outreach" },
+      { table: "audit_log", column: "actor_user_id", label: "audit_log" },
+      { table: "service_pricing", column: "user_id", label: "service_pricing" },
+      { table: "outreach_campaigns", column: "user_id", label: "outreach_campaigns" },
+      { table: "discovery_jobs", column: "user_id", label: "discovery_jobs" },
+      { table: "llm_usage_log", column: "user_id", label: "llm_usage_log" },
+    ] as const;
+
+    const blockers: string[] = [];
+    for (const check of historyChecks) {
+      const { data, error } = await db
+        .from(check.table)
+        .select("id")
+        .eq(check.column, id)
+        .limit(1);
+
+      if (error) {
+        return reply.status(500).send({ error: "Database error", error_code: "db_error" });
+      }
+
+      if (Array.isArray(data) && data.length > 0) {
+        blockers.push(check.label);
+      }
+    }
+
+    if (blockers.length > 0) {
+      return reply.status(409).send({
+        error: "User has related history",
+        error_code: "user_has_history",
+        blockers,
+      });
     }
 
     // Write audit log BEFORE destructive action

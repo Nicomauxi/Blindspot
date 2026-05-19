@@ -1,191 +1,230 @@
 # blindspot
 
-CLI para identificar negocios locales con buena reputación offline pero pobre presencia digital.
+Blindspot detecta negocios locales con reputación offline fuerte y brechas digitales accionables. El repo tiene tres superficies:
 
-**Lógica totalmente determinística** — sin LLMs, sin magia. Reglas con pesos configurables. Vos leés los reportes y tomás las decisiones comerciales.
+- `src/`: CLI y pipeline principal
+- `api/`: API Fastify para panel/admin
+- `ui/`: panel Next.js
 
----
+El stack real usa Supabase/Postgres local, discovery multi-source, enriquecimiento heurístico/social, scoring v2, buyer scores, campañas y panel admin.
 
 ## Requisitos
 
 - Node.js 20+
-- pnpm 9+
-- Una cuenta de Supabase (puede ser free tier)
-- Una API Key de Google Places (New)
+- `pnpm` 10+
+- Supabase CLI
+- Una `.env` válida
+- Google Places API Key si vas a correr `discover-google-places`
 
----
+## Variables de entorno
 
-## Setup
+Variables mínimas para desarrollo local:
 
-### 1. Clonar e instalar dependencias
+| Variable | Uso |
+| --- | --- |
+| `SUPABASE_URL` | URL del stack local o remoto de Supabase |
+| `SUPABASE_SERVICE_ROLE_KEY` | Service role key |
+| `DATABASE_URL` | Conexión directa a Postgres |
+| `API_JWT_SECRET` | Obligatoria para levantar `api/` |
+| `GOOGLE_PLACES_API_KEY` | Obligatoria para discovery con Google Places |
+| `LOG_LEVEL` | `info`, `debug`, `warn`, `error` |
+| `CORS_ORIGIN` | Opcional, default `http://localhost:3000` |
+| `PORT` | Opcional, default `3001` para el API |
+| `NEXT_PUBLIC_API_URL` | Opcional en UI, default `http://localhost:3001` |
+
+## Base local
+
+Levantar Supabase local:
 
 ```bash
-git clone <repo>
-cd gap-radar
-pnpm install
+supabase start
 ```
 
-### 2. Variables de entorno
+Aplicar el schema local desde `supabase/migrations/`:
 
 ```bash
-cp .env.example .env
-# Editá .env con tus valores reales
+supabase db reset
 ```
 
-Variables requeridas:
-
-| Variable | Descripción |
-|---|---|
-| `SUPABASE_URL` | URL del proyecto Supabase (e.g. `https://xyz.supabase.co`) |
-| `SUPABASE_SERVICE_ROLE_KEY` | Service role key (en Settings > API de tu proyecto Supabase) |
-| `GOOGLE_PLACES_API_KEY` | API Key con Places API (New) habilitada |
-| `LOG_LEVEL` | `info` (default), `debug`, `warn`, `error` |
-
-### 3. Base de datos — correr la migración
-
-**Opción A — Supabase Dashboard (recomendada para empezar):**
-
-1. Ir a [supabase.com](https://app.supabase.com) → tu proyecto → SQL Editor
-2. Copiar y ejecutar el contenido de `db/migrations/001_initial.sql`
-
-**Opción B — Supabase CLI:**
+Si trabajás contra un proyecto remoto linkeado:
 
 ```bash
-# Si tenés Supabase CLI instalada y el proyecto vinculado
 supabase db push
 ```
 
-### 4. Cómo obtener la API Key de Google Places
+Si `supabase db push` falla con `Cannot find project ref`, no está linkeado; usá `supabase db reset` para local o conectate por `psql`/SQL Editor al destino correcto.
 
-1. Ir a [Google Cloud Console](https://console.cloud.google.com/)
-2. Crear o seleccionar un proyecto
-3. Ir a **APIs & Services → Library**
-4. Buscar y habilitar **"Places API (New)"** (¡ojo: es la nueva, no la legacy!)
-5. Ir a **APIs & Services → Credentials → Create Credentials → API Key**
-6. Opcional pero recomendado: restringir la key a Places API (New) solamente
-7. Copiar la key y pegarla en `GOOGLE_PLACES_API_KEY` en tu `.env`
+## Bootstrap de usuario admin
 
-> **Costos estimados:** Text Search cuesta ~$0.032/solicitud, Place Details ~$0.017/solicitud.
-> Para 50 resultados con detalles, estimá ~$1 por run. Activá alertas de billing en GCP.
+No hay self-registration. Para entrar al panel necesitás un usuario en la tabla `users`.
 
----
-
-## Uso
-
-### Comando `discover`
+Generá el hash:
 
 ```bash
-# Perfil A — "Joya escondida" (rating alto, pocas reseñas, sin web real)
-blindspot discover \
-  --niche "peluquería" \
-  --location "Montevideo Uruguay" \
-  --profile a
+node -e "import bcrypt from 'bcryptjs'; bcrypt.hash('tu_password_segura', 12).then(console.log)"
+```
 
-# Perfil B — "Saturado sin web" (muchas reseñas, sin website)
-blindspot discover \
+Insertalo:
+
+```sql
+INSERT INTO users (email, password_hash, role)
+VALUES ('admin@blindspot.local', '$2b$12$<hash>', 'admin');
+```
+
+## Instalar dependencias
+
+```bash
+pnpm install
+```
+
+## Levantar el sistema
+
+CLI / comandos manuales:
+
+```bash
+pnpm dev -- --help
+```
+
+API:
+
+```bash
+API_JWT_SECRET=tu_secreto_largo pnpm --dir api start
+```
+
+UI:
+
+```bash
+NEXT_PUBLIC_API_URL=http://127.0.0.1:3001 pnpm --dir ui dev
+```
+
+URLs locales:
+
+- UI: `http://localhost:3000/login`
+- API health: `http://127.0.0.1:3001/api/v1/health`
+- Supabase Studio: `http://127.0.0.1:54403`
+
+## Comandos útiles
+
+Discovery Google Places:
+
+```bash
+node --env-file=.env --import tsx/esm src/cli/index.ts discover-google-places \
   --niche "restaurante" \
-  --location "Buenos Aires Argentina" \
+  --location "Montevideo Uruguay" \
   --profile b \
-  --max-results 100
-
-# Con overrides de rating
-blindspot discover \
-  --niche "taller mecánico" \
-  --location "Salto Uruguay" \
-  --profile a \
-  --min-rating 4.5 \
-  --max-results 30
+  --max-results 5
 ```
 
-#### Opciones
-
-| Flag | Descripción | Default |
-|---|---|---|
-| `--niche` | Rubro a buscar | requerido |
-| `--location` | Ubicación geográfica | requerido |
-| `--profile` | `a` (joya escondida) o `b` (saturado sin web) | requerido |
-| `--max-results` | Máximo de lugares a consultar en Places | `50` |
-| `--min-rating` | Rating mínimo (override sobre el perfil) | `4.0` |
-
-#### Perfiles de filtro
-
-**Perfil A — "Joya escondida"**
-- Rating ≥ 4.3
-- Entre 10 y 50 reseñas
-- Sin web real (ausente, o apunta a facebook.com / instagram.com / etc.)
-
-**Perfil B — "Saturado sin web"**
-- Más de 100 reseñas
-- Sin website
-
-#### Output de ejemplo
-
-```
-Run 3fa85f64-5717-4562-b3fc-2c963f66afa6 completado.
-Descubiertos:      47
-Pasaron filtros:   12
-Nuevos:            9
-Ya existían:       3
-```
-
-### Modo dev (sin build)
+Pipeline integral:
 
 ```bash
-pnpm dev -- discover --niche "panadería" --location "Punta del Este" --profile a
+node --env-file=.env --import tsx/esm src/cli/index.ts run \
+  --niche "restaurante" \
+  --location "Montevideo Uruguay" \
+  --profile b \
+  --max-results 5
 ```
 
----
-
-## Desarrollo
+Enriquecimiento:
 
 ```bash
-pnpm test           # correr tests (vitest)
-pnpm test:watch     # modo watch
-pnpm typecheck      # TypeScript strict check
-pnpm build          # producción (tsup → dist/)
+node --env-file=.env --import tsx/esm src/cli/index.ts enrich \
+  --run <run_id> \
+  --with-heuristic \
+  --force-refresh \
+  --concurrency 1
 ```
 
----
+Social enrich:
 
-## Estructura del proyecto
-
-```
-src/
-  cli/
-    index.ts                    # entrypoint Commander
-    commands/
-      discover.ts               # comando discover
-  modules/
-    discovery/
-      places.ts                 # cliente Google Places API (New)
-      filters.ts                # perfiles A/B con thresholds configurables
-  shared/
-    config.ts                   # validación zod de process.env
-    logger.ts                   # pino singleton
-    supabase.ts                 # cliente supabase singleton
-    types.ts                    # tipos compartidos
-  storage/
-    leads.ts                    # CRUD leads (con dedupe por place_id)
-    runs.ts                     # CRUD runs
-  pipeline/
-    run.ts                      # orquestador (esqueleto — Fase 2+)
-config/
-  scoring.yaml                  # placeholder pesos de scoring (Fase 3)
-db/
-  migrations/
-    001_initial.sql             # schema inicial
-tests/
-  discovery/
-    filters.test.ts             # tests de perfiles A y B
-    fixtures/places.ts          # datos de prueba
+```bash
+node --env-file=.env --import tsx/esm src/cli/index.ts social-enrich \
+  --all \
+  --limit 10 \
+  --force
 ```
 
----
+Inferencia de estado:
 
-## Roadmap
+```bash
+node --env-file=.env --import tsx/esm src/cli/index.ts infer-state \
+  --all \
+  --force \
+  --concurrency 20
+```
 
-- **Fase 1** (actual): Discovery via Google Places + filtros por perfil + persistencia Supabase
-- **Fase 2**: Análisis de presencia digital (scraping web, detección de píxeles, WhatsApp, etc.)
-- **Fase 3**: Scoring determinístico con pesos configurables via `config/scoring.yaml`
-- **Fase 4**: Reportes (Handlebars templates, CSV export)
-- **Fase 5**: Estado de leads (contactado, calificado, descartado) + notas
+Scoring:
+
+```bash
+node --env-file=.env --import tsx/esm src/cli/index.ts score \
+  --run <run_id> \
+  --buyer-types
+```
+
+Reportes:
+
+```bash
+node --env-file=.env --import tsx/esm src/cli/index.ts report \
+  --run <run_id> \
+  --format all
+```
+
+Listar leads de una corrida:
+
+```bash
+node --env-file=.env --import tsx/esm src/cli/index.ts leads list \
+  --seen-in <run_id> \
+  --passed-only \
+  --format json
+```
+
+## Verificación
+
+Suite principal:
+
+```bash
+pnpm test
+pnpm typecheck
+```
+
+Frontend:
+
+```bash
+pnpm --dir ui typecheck
+pnpm --dir ui build
+```
+
+Health check en vivo:
+
+```bash
+curl http://127.0.0.1:3001/api/v1/health
+```
+
+El `health` valida también que `lead_dashboard` tenga el schema esperado. Si `invariants.lead_dashboard_schema_current=false`, hay drift de migraciones entre código y base.
+
+## Smoke test E2E recomendado
+
+Secuencia mínima validada en local:
+
+1. `supabase start`
+2. `supabase db reset`
+3. `pnpm install`
+4. Levantar API con `API_JWT_SECRET=... pnpm --dir api start`
+5. Levantar UI con `NEXT_PUBLIC_API_URL=http://127.0.0.1:3001 pnpm --dir ui dev`
+6. Correr discovery real pequeño con Google Places
+7. Correr `enrich --run <run_id> --with-heuristic`
+8. Correr `social-enrich --all --limit 1 --force`
+9. Correr `infer-state --all --force`
+10. Correr `score --run <run_id> --buyer-types`
+11. Correr `report --run <run_id> --format all`
+12. Verificar `/api/v1/health`, login en `/login` y lectura de un lead por API
+
+## Costos
+
+`discover-google-places` consume Google Places. Para pruebas manuales:
+
+- usá `--max-results` bajo
+- evitá repetir búsquedas amplias sin necesidad
+- monitoreá billing en GCP
+
+Referencia práctica: `max-results 3..5` sirve para smoke tests con costo bajo.

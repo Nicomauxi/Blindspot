@@ -170,10 +170,10 @@ describe("findCrossSourceMatch", () => {
     expect(findCrossSourceMatch(candidate, [lead])).toBeNull();
   });
 
-  it("does NOT ignore a lead with same source but different external_id", () => {
+  it("ignores leads from the same source even when external_id differs", () => {
     const candidate = makeCandidate({ name: "La Palma", source: "google_places", external_id: "ext-1" });
     const lead = makeLead({ name: "La Palma", source: "google_places", external_id: "ext-99" });
-    expect(findCrossSourceMatch(candidate, [lead])).toBe(lead);
+    expect(findCrossSourceMatch(candidate, [lead])).toBeNull();
   });
 
   it("returns a lead with identical name from a different source", () => {
@@ -226,6 +226,87 @@ describe("findCrossSourceMatch", () => {
     const lead = makeLead({ name: "Restaurante La Pena", source: "google_places", external_id: "ChIJabc" });
     const result = findCrossSourceMatch(candidate, [lead]);
     expect(result).toBe(lead);
+  });
+
+  it("does not match when the niche differs", () => {
+    const candidate = makeCandidate({
+      name: "La Palma",
+      source: "mintur",
+      niche: "restaurant",
+    });
+    const lead = makeLead({
+      name: "La Palma",
+      source: "google_places",
+      niche: "gym",
+    });
+
+    expect(findCrossSourceMatch(candidate, [lead])).toBeNull();
+  });
+
+  it("allows wildcard niche compatibility for mintur other against a typed lead", () => {
+    const candidate = makeCandidate({
+      name: "La Palma",
+      source: "mintur",
+      niche: "other",
+    });
+    const lead = makeLead({
+      name: "La Palma",
+      source: "google_places",
+      niche: "restaurant",
+    });
+
+    expect(findCrossSourceMatch(candidate, [lead])).toBe(lead);
+  });
+
+  it("does not match when normalized city/address points to a different city", () => {
+    const candidate = makeCandidate({
+      name: "La Palma",
+      source: "mintur",
+      address: "Av. 18 de Julio 1234, Montevideo",
+    });
+    const lead = makeLead({
+      name: "La Palma",
+      source: "google_places",
+      address: "Av. Gorlero 10, Punta del Este",
+    });
+
+    expect(findCrossSourceMatch(candidate, [lead])).toBeNull();
+  });
+
+  it("does not match when both leads have GPS and are farther than 500m apart", () => {
+    const candidate = makeCandidate({
+      name: "La Palma",
+      source: "osm",
+      latitude: -34.9011,
+      longitude: -56.1645,
+      address: "Av. 18 de Julio 1234, Montevideo",
+    });
+    const lead = makeLead({
+      name: "La Palma",
+      source: "google_places",
+      address: "Av. 18 de Julio 1234, Montevideo",
+      gps: "SRID=4326;POINT(-56.1920562 -34.9117128)",
+    });
+
+    expect(findCrossSourceMatch(candidate, [lead])).toBeNull();
+  });
+
+  it("matches when city aligns and GPS is within the guard radius", () => {
+    const candidate = makeCandidate({
+      name: "La Palma",
+      source: "osm",
+      latitude: -34.9011,
+      longitude: -56.1645,
+      address: "Av. 18 de Julio 1234, Montevideo",
+    });
+    const lead = makeLead({
+      name: "La Palma",
+      source: "google_places",
+      address: "18 de Julio 1234, Montevideo",
+      gps: "SRID=4326;POINT(-56.1649 -34.9013)",
+    });
+
+    expect(findCrossSourceMatch(candidate, [lead])).toBe(lead);
   });
 
   it("does not match below default threshold even from different source", () => {

@@ -160,17 +160,12 @@ export async function pipelineRoutes(app: FastifyInstance): Promise<void> {
     }
 
     const { overrides, dry_run } = parseResult.data;
-    const authUser = getAuthUser(request);
+    const queryDryRun = request.query && typeof request.query === "object"
+      ? (request.query as Record<string, unknown>)["dry_run"] === "true"
+      : false;
+    const effectiveDryRun = dry_run === true || queryDryRun;
 
-    if (dry_run) {
-      return reply.status(200).send({
-        data: {
-          dry_run: true,
-          planned_phases: overrides ?? {},
-          note: "Dry run — no run created",
-        },
-      });
-    }
+    const authUser = getAuthUser(request);
 
     const db = getDb();
 
@@ -195,9 +190,19 @@ export async function pipelineRoutes(app: FastifyInstance): Promise<void> {
       .insert({
         status: "pending",
         triggered_by: "manual",
-        triggered_by_user_id: authUser.id,
-        overrides: overrides ?? null,
-        log_lines: [],
+        overrides: {
+          ...(overrides ?? {}),
+          ...(effectiveDryRun ? { dry_run: true } : {}),
+        },
+        log_lines: [
+          {
+            ts: new Date().toISOString(),
+            level: "info",
+            msg: effectiveDryRun
+              ? `Dry-run queued by ${authUser.email}`
+              : `Run queued by ${authUser.email}`,
+          },
+        ],
       })
       .select()
       .single();
@@ -214,12 +219,20 @@ export async function pipelineRoutes(app: FastifyInstance): Promise<void> {
       // pg_notify via RPC may not exist — core will pick it up via polling
     }
 
-    return reply.status(202).send({ data: { run_id: (run as { id: string }).id } });
+    return reply.status(202).send({
+      data: {
+        run_id: (run as { id: string }).id,
+        dry_run: effectiveDryRun,
+      },
+    });
   });
 
   // POST /pipeline/run/dry — admin only
   app.post("/pipeline/run/dry", { preHandler: requireAdmin }, async (request, reply) => {
-    const parseResult = runBodySchema.safeParse(request.body ?? {});
+    const parseResult = runBodySchema.safeParse({
+      ...(typeof request.body === "object" && request.body ? request.body as Record<string, unknown> : {}),
+      dry_run: true,
+    });
     if (!parseResult.success) {
       return reply.status(400).send({
         error: "Validation error",
@@ -227,13 +240,19 @@ export async function pipelineRoutes(app: FastifyInstance): Promise<void> {
         details: parseResult.error.flatten().fieldErrors,
       });
     }
-    return reply.status(200).send({
-      data: {
-        dry_run: true,
-        planned_phases: parseResult.data.overrides ?? {},
-        note: "Dry run — no run created",
+
+    const token = request.headers.authorization;
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/pipeline/run",
+      headers: {
+        ...(token ? { authorization: token } : {}),
+        "content-type": "application/json",
       },
+      payload: JSON.stringify(parseResult.data),
     });
+
+    return reply.status(res.statusCode).send(res.json());
   });
 
   // POST /pipeline/abort — admin only

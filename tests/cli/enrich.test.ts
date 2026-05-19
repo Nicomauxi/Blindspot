@@ -34,6 +34,10 @@ vi.mock("../../src/modules/enrichment/index.js", () => ({
   enrichLead: vi.fn(),
 }));
 
+vi.mock("../../src/storage/owner-group.js", () => ({
+  detectOwnerGroups: vi.fn(),
+}));
+
 import { enrichCommand } from "../../src/cli/commands/enrich.js";
 import { getRunById, createEnrichmentRun, completeRun } from "../../src/storage/runs.js";
 import { loadLeadsByRunId, loadLeadsBySource, loadAllPassedLeads, updateLeadEnrichment } from "../../src/storage/leads.js";
@@ -41,6 +45,7 @@ import { recordPipelineError } from "../../src/storage/pipeline-errors.js";
 import { loadFilterWordsForNiche } from "../../src/storage/vocabulary.js";
 import { detectAndSeedEmailProviders, loadAllRuntime, retroactiveEmailCleanup, detectAndSeedHeuristicDomains } from "../../src/storage/system-lists.js";
 import { enrichLead } from "../../src/modules/enrichment/index.js";
+import { detectOwnerGroups } from "../../src/storage/owner-group.js";
 
 const RUN_ID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
 const ENRICH_RUN_ID = "11111111-2222-3333-4444-555555555555";
@@ -83,6 +88,7 @@ function makeLead(overrides: Partial<Lead> = {}): Lead {
 
 const baseEnrichResult = {
   digital_footprint: { skipped: true, reason: "no-website", fetched_at: "2026-01-01T00:00:00.000Z" },
+  inferred_state: null,
   tags_to_add: [],
   whatsapp_from_site: null,
   outcome: "skipped-no-website" as const,
@@ -138,6 +144,7 @@ beforeEach(() => {
   vi.mocked(enrichLead).mockResolvedValue(baseEnrichResult);
   vi.mocked(loadFilterWordsForNiche).mockResolvedValue(new Set());
   vi.mocked(loadAllRuntime).mockResolvedValue(baseRuntime);
+  vi.mocked(detectOwnerGroups).mockResolvedValue({ groups_created: 0, leads_assigned: 0 } as never);
   vi.mocked(detectAndSeedEmailProviders).mockResolvedValue(0);
   vi.mocked(retroactiveEmailCleanup).mockResolvedValue(0);
   vi.mocked(detectAndSeedHeuristicDomains).mockResolvedValue(0);
@@ -255,6 +262,14 @@ describe("enrichCommand — vocabulary loading", () => {
         }),
       })
     );
+  });
+
+  it("refreshes owner groups after processing leads", async () => {
+    vi.mocked(loadLeadsByRunId).mockResolvedValue([makeLead({ niche: "hairdresser" })]);
+
+    await enrichCommand({ run: RUN_ID, forceRefresh: false, withHeuristic: false, concurrency: 1 });
+
+    expect(detectOwnerGroups).toHaveBeenCalledOnce();
   });
 
   it("does not include extraStopWords key when vocabulary is empty", async () => {

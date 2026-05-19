@@ -1,0 +1,11 @@
+-- Migration 010: scoring v2 prep
+-- Adds versioning and rollback columns required before the v2 scoring rollout.
+
+ALTER TABLE leads
+  ADD COLUMN IF NOT EXISTS scoring_version SMALLINT NOT NULL DEFAULT 1,
+  ADD COLUMN IF NOT EXISTS contact_ready BOOLEAN,
+  ADD COLUMN IF NOT EXISTS prospect_score_v1 SMALLINT,
+  ADD COLUMN IF NOT EXISTS score_breakdown_v1 JSONB;
+
+ALTER TABLE lead_buyer_scores
+  ADD COLUMN IF NOT EXISTS scoring_version SMALLINT NOT NULL DEFAULT 1;

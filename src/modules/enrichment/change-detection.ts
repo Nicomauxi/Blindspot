@@ -1,4 +1,4 @@
-import type { DigitalFootprint } from "../../shared/types.js";
+import type { DigitalFootprint, InferredState } from "../../shared/types.js";
 
 export type EnrichmentChangeSignificance = "critical" | "high" | "low";
 
@@ -32,14 +32,16 @@ function firstContactEmail(footprint: DigitalFootprint | null): string | null {
   return emails[0] ?? null;
 }
 
-function hasDelivery(footprint: DigitalFootprint | null): boolean {
-  return footprint?.skipped !== true && footprint?.inferred_state?.has_delivery.value === true;
+function hasDelivery(state: InferredState | null): boolean {
+  return state?.has_delivery?.value === true;
 }
 
 export function createEnrichmentDiff(
   leadId: string,
   previous: DigitalFootprint | null,
-  next: DigitalFootprint
+  next: DigitalFootprint,
+  previousState: InferredState | null = null,
+  nextState: InferredState | null = null
 ): EnrichmentDiff | null {
   const changes: EnrichmentChange[] = [];
 
@@ -65,8 +67,10 @@ export function createEnrichmentDiff(
     });
   }
 
-  const hadDelivery = hasDelivery(previous);
-  const hasDeliveryNow = hasDelivery(next);
+  const previousDeliveryState = previousState ?? ((previous as { inferred_state?: InferredState | null } | null)?.inferred_state ?? null);
+  const nextDeliveryState = nextState ?? ((next as { inferred_state?: InferredState | null }).inferred_state ?? null);
+  const hadDelivery = hasDelivery(previousDeliveryState);
+  const hasDeliveryNow = hasDelivery(nextDeliveryState);
   if (!hadDelivery && hasDeliveryNow) {
     changes.push({
       field: "inferred_state.has_delivery",

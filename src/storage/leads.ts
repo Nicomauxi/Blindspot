@@ -298,14 +298,20 @@ export function cleanupMergedTagsForEnrichment(
   return Array.from(set);
 }
 
-function extractInferredState(footprint: DigitalFootprint): Lead["inferred_state"] {
-  return footprint.skipped === true ? null : (footprint.inferred_state ?? null);
-}
-
 function withoutLastChangeDiff(footprint: DigitalFootprint): DigitalFootprint {
   if (!("last_change_diff" in footprint)) return footprint;
   const { last_change_diff: _ignored, ...rest } = footprint;
   return rest;
+}
+
+function withoutLegacyInferredState(footprint: DigitalFootprint): DigitalFootprint {
+  if (!("inferred_state" in footprint)) return footprint;
+  const { inferred_state: _ignored, ...rest } = footprint;
+  return rest;
+}
+
+function sanitizeFootprint(footprint: DigitalFootprint): DigitalFootprint {
+  return withoutLegacyInferredState(withoutLastChangeDiff(footprint));
 }
 
 function currentContactTier(scoreBreakdown: Record<string, unknown> | null): string | null {
@@ -317,7 +323,7 @@ function applyLastChangeDiff(
   footprint: DigitalFootprint,
   diff: EnrichmentDiff | null
 ): DigitalFootprint {
-  const base = withoutLastChangeDiff(footprint);
+  const base = sanitizeFootprint(footprint);
   if (diff === null) return base;
   return { ...base, last_change_diff: diff };
 }
@@ -629,20 +635,31 @@ export async function updateLeadEnrichment(
   leadId: string,
   footprint: DigitalFootprint,
   newTags: string[],
-  whatsappFromSite: string | null
+  whatsappFromSite: string | null,
+  inferredState: Lead["inferred_state"] = null
 ): Promise<{ last_change_diff: EnrichmentDiff | null; critical_change: boolean; rescored: boolean }> {
   const db = getSupabase();
+  const nextInferredState =
+    inferredState ??
+    ((footprint as { inferred_state?: Lead["inferred_state"] | null }).inferred_state ?? null);
   const { data: current, error: fetchErr } = await db
     .from("leads")
-    .select("tags, whatsapp, phone, canonical_fields, digital_footprint, score_breakdown")
+    .select("tags, whatsapp, phone, canonical_fields, digital_footprint, score_breakdown, inferred_state")
     .eq("id", leadId)
     .single();
   if (fetchErr) throw new Error(`Failed to load lead ${leadId}: ${fetchErr.message}`);
 
   const existingFootprint = (current?.digital_footprint as DigitalFootprint | null) ?? null;
-  const mergedFootprint = withoutLastChangeDiff(mergeFootprint(existingFootprint, footprint));
+  const mergedFootprint = sanitizeFootprint(mergeFootprint(existingFootprint, footprint));
+  const previousInferredState = (current?.inferred_state as Lead["inferred_state"]) ?? null;
   const previousContactTier = currentContactTier((current?.score_breakdown as Record<string, unknown> | null) ?? null);
-  let changeDiff = createEnrichmentDiff(leadId, existingFootprint, mergedFootprint);
+  let changeDiff = createEnrichmentDiff(
+    leadId,
+    existingFootprint,
+    mergedFootprint,
+    previousInferredState,
+    nextInferredState
+  );
 
   const currentTags: string[] = Array.isArray(current?.tags) ? (current?.tags as string[]) : [];
   const mergedTags = cleanupMergedTagsForEnrichment([...currentTags, ...newTags], mergedFootprint);
@@ -673,7 +690,7 @@ export async function updateLeadEnrichment(
     .from("leads")
     .update({
       digital_footprint: mergedFootprint,
-      inferred_state: extractInferredState(mergedFootprint),
+      inferred_state: nextInferredState,
       contact_reliability_score,
       tags: finalTags,
       whatsapp: mergedWhatsapp,
@@ -697,7 +714,13 @@ export async function updateLeadEnrichment(
   }
 
   let rescored = false;
-  const updatedLead = ("data" in updateResult ? updateResult.data : null) as Lead | null;
+  const updatedLeadBase = ("data" in updateResult ? updateResult.data : null) as Lead | null;
+  const updatedLead = updatedLeadBase
+    ? {
+        ...updatedLeadBase,
+        inferred_state: updatedLeadBase.inferred_state ?? nextInferredState,
+      }
+    : null;
 
   if (updatedLead && changeDiff && hasCriticalEnrichmentChange(changeDiff)) {
     const scoreResult = scoreLead(updatedLead);
@@ -813,8 +836,7 @@ export async function updateLeadSocialSearch(
   const { error } = await db
     .from("leads")
     .update({
-      digital_footprint: footprint,
-      inferred_state: extractInferredState(footprint),
+      digital_footprint: sanitizeFootprint(footprint),
       contact_reliability_score,
       tags: finalTags,
       whatsapp: mergedWhatsapp,
@@ -847,21 +869,22 @@ export async function updateLeadSocialEnrichStatus(
 
   const { error } = await db
     .from("leads")
-    .update({ digital_footprint: footprint, tags: newTags })
+    .update({ digital_footprint: sanitizeFootprint(footprint), tags: newTags })
     .eq("id", leadId);
   if (error) throw new Error(`Failed to update social_enrich_status for lead ${leadId}: ${error.message}`);
 }
 
 export async function patchLeadInferredState(
   leadId: string,
-  footprint: DigitalFootprint
+  footprint: DigitalFootprint,
+  inferredState: Lead["inferred_state"]
 ): Promise<void> {
   const db = getSupabase();
   const { error } = await db
     .from("leads")
     .update({
-      digital_footprint: footprint,
-      inferred_state: extractInferredState(footprint),
+      digital_footprint: sanitizeFootprint(footprint),
+      inferred_state: inferredState,
     })
     .eq("id", leadId);
   if (error) throw new Error(`Failed to patch inferred_state for lead ${leadId}: ${error.message}`);

@@ -13,6 +13,7 @@ import {
   loadAllPassedLeads,
   updateLeadEnrichment,
 } from "../../storage/leads.js";
+import { detectOwnerGroups } from "../../storage/owner-group.js";
 import { recordPipelineError, type PipelineErrorType } from "../../storage/pipeline-errors.js";
 import { loadFilterWordsForNiche } from "../../storage/vocabulary.js";
 import { enrichLead } from "../../modules/enrichment/index.js";
@@ -297,7 +298,8 @@ export async function enrichCommand(rawArgs: RawEnrichArgs): Promise<void> {
               lead.id,
               result.digital_footprint,
               result.tags_to_add,
-              result.whatsapp_from_site
+              result.whatsapp_from_site,
+              result.inferred_state
             );
             if (enrichmentUpdate?.critical_change) {
               significant_changes += 1;
@@ -388,6 +390,10 @@ export async function enrichCommand(rawArgs: RawEnrichArgs): Promise<void> {
     await completeRun(enrichRun.id, stats);
     if (leads_processed > 0) {
       try {
+        const ownerGroups = await detectOwnerGroups();
+        if (ownerGroups.leads_assigned > 0) {
+          log.info(ownerGroups, "owner groups refreshed after enrichment");
+        }
         const seeded = await detectAndSeedEmailProviders();
         if (seeded > 0) {
           log.info({ count: seeded }, "email provider domains auto-detected after enrichment");

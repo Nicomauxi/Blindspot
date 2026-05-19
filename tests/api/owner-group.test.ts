@@ -29,6 +29,7 @@ const mockSibling = {
   contact_tier: "B",
   prospect_score: 65,
   owner_group_id: GROUP_ID,
+  score_breakdown: { contact_tier: "B" },
 };
 
 vi.mock("../../api/src/db/client.js", () => ({
@@ -87,6 +88,13 @@ describe("GET /api/v1/leads/:id/owner-group", () => {
     expect(res.statusCode).toBe(200);
     const body = JSON.parse(res.body);
     expect(Array.isArray(body.data)).toBe(true);
+    expect(body.data[0]).toEqual(
+      expect.objectContaining({
+        id: SIBLING_ID,
+        owner_group_id: GROUP_ID,
+        contact_tier: "B",
+      })
+    );
     await app.close();
   });
 

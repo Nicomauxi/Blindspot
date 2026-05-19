@@ -20,6 +20,12 @@ export interface DiscoverExternalOptions {
   locationListFile?: string;
 }
 
+export interface ExternalDiscoveryExecutionSummary {
+  fetched: number;
+  inserted: number;
+  corroborated: number;
+}
+
 function buildProvider(source: string) {
   const sleepFn = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
   if (source === "mintur") return new MINTURProvider();
@@ -88,14 +94,35 @@ async function runSingleLocation(opts: {
   return { fetched: candidates.length, inserted, corroborated };
 }
 
-export async function discoverExternalCommand(opts: DiscoverExternalOptions): Promise<void> {
-  const locations = loadLocations(opts);
-  const isBatch = locations.length > 1;
-
+export async function executeExternalDiscovery(opts: {
+  source: string;
+  location: string;
+  niche: string;
+  limit?: number;
+  dryRun: boolean;
+}): Promise<ExternalDiscoveryExecutionSummary> {
   const allLeads = await loadAllLeads();
   const runtimeLists = await loadRuntimeLists();
   const dedupThreshold = getOnlineDedupThreshold();
   const geoRadiusMeters = getDedupGeoRadiusMeters();
+
+  const singleOpts: Parameters<typeof runSingleLocation>[0] = {
+    source: opts.source,
+    location: opts.location,
+    niche: opts.niche,
+    dryRun: opts.dryRun,
+    allLeads,
+    runtimeLists,
+    dedupThreshold,
+    geoRadiusMeters,
+  };
+  if (opts.limit != null) singleOpts.limit = opts.limit;
+  return runSingleLocation(singleOpts);
+}
+
+export async function discoverExternalCommand(opts: DiscoverExternalOptions): Promise<void> {
+  const locations = loadLocations(opts);
+  const isBatch = locations.length > 1;
 
   const dryLabel = opts.dryRun ? " (dry-run)" : "";
 
@@ -123,18 +150,13 @@ export async function discoverExternalCommand(opts: DiscoverExternalOptions): Pr
     }
 
     try {
-      const singleOpts: Parameters<typeof runSingleLocation>[0] = {
+      const result = await executeExternalDiscovery({
         source: opts.source,
         location,
         niche: opts.niche,
         dryRun: opts.dryRun,
-        allLeads,
-        runtimeLists,
-        dedupThreshold,
-        geoRadiusMeters,
-      };
-      if (opts.limit != null) singleOpts.limit = opts.limit;
-      const result = await runSingleLocation(singleOpts);
+        ...(opts.limit != null ? { limit: opts.limit } : {}),
+      });
 
       console.log(`Discover-external [${opts.source}] — ${location}`);
       console.log(`  Fetched:      ${result.fetched}`);
