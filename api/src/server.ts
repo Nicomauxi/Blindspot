@@ -16,6 +16,7 @@ import { auditLogRoutes } from "./routes/admin/audit-log.js";
 import { systemRoutes } from "./routes/admin/system.js";
 import { costsRoutes } from "./routes/admin/costs.js";
 import { performanceRoutes } from "./routes/admin/performance.js";
+import { monitoringRoutes } from "./routes/admin/monitoring.js";
 import { servicePricingRoutes } from "./routes/service-pricing.js";
 import { backupsRoutes } from "./routes/admin/backups.js";
 import { getBackupScheduler } from "./modules/backups/runtime.js";
@@ -83,6 +84,7 @@ export async function buildServer() {
   await app.register(backupsRoutes, { prefix: "/api/v1" });
   await app.register(costsRoutes, { prefix: "/api/v1" });
   await app.register(performanceRoutes, { prefix: "/api/v1" });
+  await app.register(monitoringRoutes, { prefix: "/api/v1" });
   await app.register(servicePricingRoutes, { prefix: "/api/v1" });
 
   return app;

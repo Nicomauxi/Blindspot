@@ -13,6 +13,7 @@ const REPO_ROOT = fileURLToPath(new URL("../../../../", import.meta.url));
 const DEFAULT_CRON = "0 3 * * *";
 const DEFAULT_MAX_BACKUPS = 7;
 const MAX_BACKUPS_LIMIT = 365;
+const RETENTION_SCAN_LIMIT = MAX_BACKUPS_LIMIT * 2 + 50;
 const BACKUP_SCHEDULER_STALE_MS = 5 * 60 * 1000;
 const BACKUP_SYNC_LIMIT = 500;
 const TIMESTAMP_PATTERN = /(\d{8}_\d{6})\.sql\.gz$/;
@@ -47,6 +48,8 @@ export type BackupConfigRow = {
   scheduled_for: string | null;
   directory: string | null;
   max_backups: number;
+  max_manual_backups: number;
+  max_scheduled_backups: number;
   last_started_at: string | null;
   last_completed_at: string | null;
   last_successful_at: string | null;
@@ -116,6 +119,13 @@ export type BackupOverview = {
     next_backup_at: string | null;
     backup_count: number;
     max_backups: number;
+    manual_backup_count: number;
+    scheduled_backup_count: number;
+    restore_checkpoint_count: number;
+    retention: {
+      manual: { count: number; max: number };
+      scheduled: { count: number; max: number };
+    };
     last_restore: BackupRestoreRow | null;
   };
   restore: {
@@ -144,6 +154,8 @@ type UpdateBackupConfigInput = Partial<{
   cron_expression: string;
   directory: string | null;
   max_backups: number;
+  max_manual_backups: number;
+  max_scheduled_backups: number;
   scheduled_for: string | null;
   last_started_at: string | null;
   last_completed_at: string | null;
@@ -166,6 +178,11 @@ type DirectoryValidation = {
   resolvedPath: string;
 };
 
+type RetentionSummary = {
+  manual: { count: number; max: number };
+  scheduled: { count: number; max: number };
+};
+
 type BackupRunInsert = {
   id?: string;
   trigger: BackupTrigger;
@@ -183,7 +200,16 @@ type BackupRunInsert = {
 };
 
 function asBackupConfigRow(value: unknown): BackupConfigRow {
-  return value as BackupConfigRow;
+  const row = value as Record<string, unknown>;
+  const legacyMax = Number(row.max_backups ?? DEFAULT_MAX_BACKUPS);
+  const maxManual = Number(row.max_manual_backups ?? legacyMax);
+  const maxScheduled = Number(row.max_scheduled_backups ?? legacyMax);
+  return {
+    ...(row as BackupConfigRow),
+    max_backups: legacyMax,
+    max_manual_backups: Number.isFinite(maxManual) ? maxManual : DEFAULT_MAX_BACKUPS,
+    max_scheduled_backups: Number.isFinite(maxScheduled) ? maxScheduled : DEFAULT_MAX_BACKUPS,
+  };
 }
 
 function asBackupRunRow(value: unknown): BackupRunRow {
@@ -368,6 +394,20 @@ function inferTimestampFromFilename(filename: string, statsMtimeIso: string): st
   return Number.isNaN(new Date(normalized).getTime()) ? statsMtimeIso : normalized;
 }
 
+function getRetentionSummary(config: Pick<BackupConfigRow, "max_backups" | "max_manual_backups" | "max_scheduled_backups">): RetentionSummary {
+  const fallback = Number.isFinite(config.max_backups) ? config.max_backups : DEFAULT_MAX_BACKUPS;
+  const manual = Number.isFinite(config.max_manual_backups) ? config.max_manual_backups : fallback;
+  const scheduled = Number.isFinite(config.max_scheduled_backups) ? config.max_scheduled_backups : fallback;
+  return {
+    manual: { count: 0, max: Math.min(Math.max(manual, 1), MAX_BACKUPS_LIMIT) },
+    scheduled: { count: 0, max: Math.min(Math.max(scheduled, 1), MAX_BACKUPS_LIMIT) },
+  };
+}
+
+function getLegacyMaxBackups(retention: Pick<RetentionSummary, "manual" | "scheduled">): number {
+  return retention.manual.max + retention.scheduled.max;
+}
+
 export async function fetchBackupConfig(): Promise<BackupConfigRow> {
   const db = getDb();
   const { data, error } = await db
@@ -391,6 +431,17 @@ export async function patchBackupConfig(update: UpdateBackupConfigInput): Promis
 
   for (const [key, value] of Object.entries(update)) {
     if (value !== undefined) payload[key] = value;
+  }
+
+  const nextManual = Number(payload.max_manual_backups ?? payload.max_backups);
+  const nextScheduled = Number(payload.max_scheduled_backups ?? payload.max_backups);
+  if (Number.isFinite(nextManual) || Number.isFinite(nextScheduled)) {
+    const current = await fetchBackupConfig();
+    const manual = Number.isFinite(nextManual) ? nextManual : current.max_manual_backups;
+    const scheduled = Number.isFinite(nextScheduled) ? nextScheduled : current.max_scheduled_backups;
+    payload.max_manual_backups = manual;
+    payload.max_scheduled_backups = scheduled;
+    payload.max_backups = manual + scheduled;
   }
 
   const { data, error } = await db
@@ -556,9 +607,15 @@ async function markBackupFailure(runId: string, message: string): Promise<Backup
 }
 
 async function applyRetention(config: BackupConfigRow): Promise<{ deletedCount: number; errorMessage: string | null }> {
-  const recent = await listBackupRuns(MAX_BACKUPS_LIMIT + 50, false);
+  const recent = await listBackupRuns(RETENTION_SCAN_LIMIT, false);
   const completed = recent.filter((row) => row.status === "completed" && row.path);
-  const toDelete = completed.slice(Math.max(config.max_backups, 0));
+  const retention = getRetentionSummary(config);
+  const manualCompleted = completed.filter((row) => row.trigger === "manual");
+  const scheduledCompleted = completed.filter((row) => row.trigger === "scheduled");
+  const toDelete = [
+    ...manualCompleted.slice(retention.manual.max),
+    ...scheduledCompleted.slice(retention.scheduled.max),
+  ];
   const effectiveDirectory = getEffectiveBackupDirectory(config);
   let deletedCount = 0;
   const errors: string[] = [];
@@ -1005,6 +1062,10 @@ export async function buildBackupOverview(scheduler: BackupSchedulerSnapshot): P
   const lastBackup = recent[0] ?? null;
   const lastRestore = restores[0] ?? null;
   const alerts: string[] = [];
+  const retention = getRetentionSummary(config);
+  const manualBackups = recent.filter((row) => row.trigger === "manual");
+  const scheduledBackups = recent.filter((row) => row.trigger === "scheduled");
+  const restoreCheckpoints = manualBackups.filter((row) => row.purpose === "restore_checkpoint");
 
   if (!validation.ok) alerts.push("backup_directory_invalid");
   if (config.last_error_at && (!config.last_successful_at || config.last_error_at >= config.last_successful_at)) {
@@ -1035,7 +1096,14 @@ export async function buildBackupOverview(scheduler: BackupSchedulerSnapshot): P
       last_backup: lastBackup,
       next_backup_at: config.scheduled_for,
       backup_count: recent.filter((row) => !row.deleted_at).length,
-      max_backups: config.max_backups,
+      max_backups: getLegacyMaxBackups(retention),
+      manual_backup_count: manualBackups.length,
+      scheduled_backup_count: scheduledBackups.length,
+      restore_checkpoint_count: restoreCheckpoints.length,
+      retention: {
+        manual: { count: manualBackups.length, max: retention.manual.max },
+        scheduled: { count: scheduledBackups.length, max: retention.scheduled.max },
+      },
       last_restore: lastRestore,
     },
     restore: {

@@ -8,11 +8,11 @@ import { isAdminRouteAllowed } from "@/lib/admin-access";
 
 function AccessDenied() {
   return (
-    <div className="flex min-h-screen items-center justify-center bg-slate-100 px-6">
-      <div className="w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-8 shadow-sm">
+    <div className="theme-page flex min-h-screen items-center justify-center px-6">
+      <div className="theme-panel w-full max-w-lg rounded-2xl p-8">
         <p className="text-xs font-semibold uppercase tracking-[0.2em] text-rose-700">Sin acceso</p>
-        <h1 className="mt-3 text-2xl font-semibold text-slate-950">Esta sección requiere permisos de administrador.</h1>
-        <p className="mt-3 text-sm text-slate-600">
+        <h1 className="mt-3 text-2xl font-semibold theme-text-strong">Esta sección requiere permisos de administrador.</h1>
+        <p className="mt-3 text-sm theme-text-muted">
           Tu sesión sigue activa, pero la ruta solicitada no está habilitada para tu rol actual.
         </p>
       </div>
@@ -31,7 +31,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
 
   if (!hasHydrated) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-slate-100 px-6 text-sm text-slate-500">
+      <div className="theme-page flex min-h-screen items-center justify-center px-6 text-sm theme-text-muted">
         Restableciendo sesión…
       </div>
     );
@@ -44,7 +44,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   }
 
   return (
-    <div className="flex min-h-screen bg-slate-100">
+    <div className="theme-page flex min-h-screen">
       <AdminSidebar />
       <main className="min-w-0 flex-1 overflow-auto p-6">{children}</main>
     </div>
