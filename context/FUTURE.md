@@ -9,16 +9,16 @@
 ## Estado del programa
 
 - `CTX-0` — done 2026-05-22
-- `NAV-1` — pending
-- `THEME-1` — pending
-- `MON-1` — pending
-- `MON-2` — pending
+- `NAV-1` — done 2026-05-22
+- `THEME-1` — done 2026-05-22
+- `MON-1` — done 2026-05-22
+- `MON-2` — done 2026-05-22
 - `BKP-1` — pending
-- `MAP-1` — pending
 - `DISC-1` — pending
+- `MINTUR-1` — pending
+- `MAP-1` — pending
 - `DISC-2` — pending
 - `DISC-3` — pending
-- `MINTUR-1` — pending
 - `FDBK-1` — pending
 - `FDBK-2` — pending
 - `FDBK-3` — pending
@@ -53,7 +53,7 @@
 
 ## NAV-1 — Sidebar operacional y fix de navegación
 
-**Status:** `pending`
+**Status:** `done`
 
 **Objetivo**
 - Reorganizar el sidebar admin para que sea más usable con crecimiento de producto.
@@ -87,11 +87,17 @@
 - `ADMIN_PANEL.md`
 - `PROJECT_MASTER.md`
 
+**Cierre**
+- Sidebar reorganizado en grupos colapsables con buscador e iconografía consistente.
+- La ruta activa deja su grupo abierto por defecto y el estado de colapso persiste por sesión.
+- La entrada `/admin/health` se rotula como `Monitoreo` sin cambiar slug ni guards actuales.
+- Se corrige el warning potencial de keys duplicadas en la pantalla `Estado del sistema`.
+
 ---
 
 ## THEME-1 — Dark mode del dashboard
 
-**Status:** `pending`
+**Status:** `done`
 
 **Objetivo**
 - Agregar modo oscuro real y consistente al dashboard/admin.
@@ -121,11 +127,16 @@
 - hardcodes de color en páginas existentes
 - textos de bajo contraste en estados degradados/error
 
+**Cierre**
+- Theme toggle persistido con `localStorage` y script de hidratación temprana para evitar flash incorrecto.
+- Tokens compartidos y overrides globales de dark mode aplicados al shell admin y superficies reutilizables.
+- Shell, Inicio, Backups y Discovery quedan cubiertos por la nueva infraestructura sin cambiar rutas ni contratos.
+
 ---
 
 ## MON-1 — Contrato backend unificado de monitoreo
 
-**Status:** `pending`
+**Status:** `done`
 
 **Objetivo**
 - Unificar la información de observabilidad bajo un modelo explícito de `monitoring` sin obligar a la UI a pegarse a endpoints dispersos y heterogéneos.
@@ -166,11 +177,16 @@
 - duplicar lógica de agregación en varios handlers
 - esconder fallos reales detrás de estados `ok`
 
+**Cierre**
+- Nuevo contrato `GET /api/v1/admin/monitoring/overview` expone un read model unificado de health, procesos, pipeline, discovery, backups, costos, performance y logs recientes.
+- Los endpoints existentes (`health`, `admin/system`, `admin/costs`, `admin/performance`, `admin/backups`) siguen vigentes para compatibilidad durante la transición.
+- Verificación: `pnpm typecheck`, test focalizado de monitoring y suite completa en verde; `pnpm smoke:api` sigue rojo por un estado degradado preexistente de `/health` asociado a `backup_restore_failed`.
+
 ---
 
 ## MON-2 — Pantalla Monitoreo unificada
 
-**Status:** `pending`
+**Status:** `done`
 
 **Objetivo**
 - Reemplazar conceptualmente `Estado del sistema` por una pantalla `Monitoreo` unificada, clara y operativa.
@@ -202,6 +218,11 @@
 - `pnpm --dir ui build`
 - tests de render/carga/error
 - smoke admin de monitoreo
+
+**Cierre**
+- Nueva ruta `ui/src/app/admin/monitoring/page.tsx` centraliza procesos, pipeline, discovery, backups, costos, performance y logs recientes sobre `admin/monitoring/overview`.
+- `/admin/health` queda como alias con redirect a `/admin/monitoring`.
+- El sidebar y RBAC pasan a usar `Monitoreo` como entrypoint técnico principal.
 
 ---
 
@@ -243,21 +264,70 @@
 
 ---
 
-## MAP-1 — Mapa real para densidad comercial
+## DISC-1 — Workspace de discovery: UX y persistencia
 
 **Status:** `pending`
 
 **Objetivo**
-- Que la densidad comercial se vea sobre un mapa geográfico real y útil para ubicación.
+- Mejorar la usabilidad del workspace de discovery sin tocar todavía la orquestación profunda ni el mapa real.
 
 **Alcance**
-- Reemplazar visualización abstracta por mapa real.
-- Definir contrato backend adecuado para puntos/áreas/capas según datos existentes.
-- Respetar atribución de fuentes cartográficas, especialmente OSM si corresponde.
-- Preparar la base para que Discovery “Contexto y mapa” use esta misma infraestructura.
+- Tooltip/hover en contador de nichos sugeridos con breakdown por fuente.
+- El composer no resetea sus configuraciones tras crear un batch.
+- Retirar `jobs legacy` de la experiencia principal.
 
 **No hacer en esta fase**
-- No mezclar con toda la UX de discovery.
+- No encadenar todavía enrichment automático.
+- No rediseñar aún la infraestructura cartográfica.
+- No cambiar todavía el backend central de jobs más de lo necesario para soportar el detalle por fuente.
+
+**Validación mínima**
+- `pnpm --dir ui typecheck`
+- `pnpm --dir ui build`
+- tests UI del workspace
+- smoke creando batches repetidos sin perder draft
+
+---
+
+## MINTUR-1 — Mejorar lógica de nichos MINTUR
+
+**Status:** `pending`
+
+**Objetivo**
+- Reducir `other` y mejorar la utilidad comercial de leads MINTUR.
+
+**Alcance**
+- Mejorar parser y mapeo de nichos/tipo de operador.
+- Usar señales disponibles en `source_data` sin inventar taxonomía arbitraria.
+- Mantener normalización canónica hacia los nichos usados por discovery/scoring/UI.
+
+**No hacer en esta fase**
+- No tocar scoring salvo ajustes inevitables por el nuevo mapeo.
+- No depender de fuentes externas nuevas.
+
+**Validación mínima**
+- tests unitarios de parser/mapeo
+- `pnpm test`
+- `pnpm typecheck`
+- comparar reducción del bucket `other` en fixture o snapshot controlado
+
+---
+
+## MAP-1 — Mapa real para densidad comercial y contexto
+
+**Status:** `pending`
+
+**Objetivo**
+- Que la densidad comercial y `Contexto y mapa` se vean sobre un mapa geográfico real y útil para ubicación.
+
+**Alcance**
+- Reemplazar visualizaciones abstractas por mapa real donde corresponda.
+- Definir contrato backend adecuado para puntos/áreas/capas según datos existentes.
+- Respetar atribución de fuentes cartográficas, especialmente OSM si corresponde.
+- En `Contexto y mapa`, agregar lista lateral con límite visual, scroll y filtros/orden útiles, incluyendo métricas agregadas cuando la data exista.
+
+**No hacer en esta fase**
+- No mezclar con el encadenamiento de enrichment del composer.
 - No introducir una dependencia cartográfica sin justificarla y sin aprobación si es nueva.
 
 **Validación mínima**
@@ -266,32 +336,6 @@
 - `pnpm typecheck`
 - `pnpm --dir ui typecheck`
 - `pnpm --dir ui build`
-
----
-
-## DISC-1 — Workspace de discovery: UX y persistencia
-
-**Status:** `pending`
-
-**Objetivo**
-- Mejorar la usabilidad del workspace de discovery sin tocar todavía la orquestación profunda.
-
-**Alcance**
-- Tooltip/hover en contador de nichos sugeridos con breakdown por fuente.
-- El composer no resetea sus configuraciones tras crear un batch.
-- En `Contexto y mapa`, la lista lateral tiene límite visual y scroll.
-- Agregar filtros/orden útiles en esa lista, incluyendo promedio de scores si existe la data.
-- Retirar `jobs legacy` de la experiencia principal.
-
-**No hacer en esta fase**
-- No encadenar todavía enrichment automático.
-- No cambiar todavía el backend central de jobs más de lo necesario para soportar el detalle por fuente.
-
-**Validación mínima**
-- `pnpm --dir ui typecheck`
-- `pnpm --dir ui build`
-- tests UI del workspace
-- smoke creando batches repetidos sin perder draft
 
 ---
 
@@ -348,30 +392,6 @@
 - `pnpm --dir ui typecheck`
 - `pnpm --dir ui build`
 - `pnpm smoke:api`
-
----
-
-## MINTUR-1 — Mejorar lógica de nichos MINTUR
-
-**Status:** `pending`
-
-**Objetivo**
-- Reducir `other` y mejorar la utilidad comercial de leads MINTUR.
-
-**Alcance**
-- Mejorar parser y mapeo de nichos/tipo de operador.
-- Usar señales disponibles en `source_data` sin inventar taxonomía arbitraria.
-- Mantener normalización canónica hacia los nichos usados por discovery/scoring/UI.
-
-**No hacer en esta fase**
-- No tocar scoring salvo ajustes inevitables por el nuevo mapeo.
-- No depender de fuentes externas nuevas.
-
-**Validación mínima**
-- tests unitarios de parser/mapeo
-- `pnpm test`
-- `pnpm typecheck`
-- comparar reducción del bucket `other` en fixture o snapshot controlado
 
 ---
 
@@ -539,7 +559,7 @@
 **Alcance**
 - Modal o panel con detalle editable.
 - Notas tipo Jira.
-- Adjuntos/imagenes si el patrón actual lo soporta razonablemente.
+- Adjuntos/imagenes si el patrón técnico lo soporta razonablemente.
 - Campo de canal exitoso.
 - Caso “ningún canal funcionó” que deriva a `observed`.
 - `observed` con fecha de recordatorio.

@@ -53,11 +53,11 @@
 | 3 | Monitoreo | MON-1 | autonomous | Contrato backend unificado para monitoreo (`monitoring`) definido e implementado sin romper compatibilidad actual. |
 | 4 | Monitoreo | MON-2 | autonomous | Pantalla `Monitoreo` tipo observabilidad unificada reemplaza la dispersión actual de Health/estado, con logs y métricas operativas claras. |
 | 5 | Backups | BKP-1 | autonomous | Retención separada para backups manuales y programados, peso actual de DB expuesto y UI/admin coherentes. |
-| 6 | Geografía | MAP-1 | dependency-approval | El mapa de densidad comercial usa un mapa real del mundo por ubicación, con atribución correcta y contratos backend/UI estables. |
-| 7 | Discovery UX | DISC-1 | autonomous | Workspace de discovery mejora ergonomía: detalles por fuente en hover, composer persistente, lista lateral limitada con scroll/filtros y sin `jobs legacy`. |
-| 8 | Discovery Orchestration | DISC-2 | autonomous | Composer puede encadenar discovery + enrichment mediante toggle default-on, con estado claro por batch/job. |
-| 9 | Discovery Enrichment | DISC-3 | autonomous | Existe un flujo dedicado para enriquecer colecciones de leads por filtros relevantes desde la UI admin. |
-| 10 | Discovery Data | MINTUR-1 | autonomous | Lógica de nichos MINTUR mejorada, baja el bucket `other` y quedan tests de parser/mapeo sólidos. |
+| 6 | Discovery UX | DISC-1 | autonomous | Workspace de discovery mejora ergonomía: detalles por fuente en hover, composer persistente, lista lateral limitada con scroll/filtros y sin `jobs legacy`. |
+| 7 | Discovery Data | MINTUR-1 | autonomous | Lógica de nichos MINTUR mejorada, baja el bucket `other` y quedan tests de parser/mapeo sólidos. |
+| 8 | Geografía | MAP-1 | dependency-approval | El mapa de densidad comercial usa un mapa real del mundo por ubicación, con atribución correcta y contratos backend/UI estables. |
+| 9 | Discovery Orchestration | DISC-2 | autonomous | Composer puede encadenar discovery + enrichment mediante toggle default-on, con estado claro por batch/job. |
+| 10 | Discovery Enrichment | DISC-3 | autonomous | Existe un flujo dedicado para enriquecer colecciones de leads por filtros relevantes desde la UI admin. |
 | 11 | Feedback | FDBK-1 | autonomous | Schema y API de retroalimentación de calidad de datos por lead disponibles con auditoría y RBAC. |
 | 12 | Feedback | FDBK-2 | autonomous | Lead Detail permite marcar datos buenos/malos con contexto operativo claro. |
 | 13 | Feedback | FDBK-3 | autonomous | El sistema consume feedback humano en agregados/reglas operativas sin romper scoring ni enriquecimiento existentes. |
@@ -70,9 +70,9 @@
 
 - `NAV-1` antes de `THEME-1`, `MON-2`, `DISC-1` y `CRM-3`.
 - `MON-1` antes de `MON-2` y `BKP-1`.
-- `MAP-1` antes de cerrar completamente `DISC-1` si la sección “Contexto y mapa” cambia de contrato.
-- `DISC-1` antes de `DISC-2` y `DISC-3`.
-- `MINTUR-1` puede correr después de `DISC-1`; idealmente antes de campañas fuertes de repoblación.
+- `DISC-1` antes de `MINTUR-1`, `DISC-2` y `DISC-3`.
+- `MINTUR-1` antes de campañas fuertes de repoblación futuras y antes de cerrar del todo `DISC-3` si se apoya en la taxonomía mejorada.
+- `MAP-1` después de `DISC-1` para aislar el riesgo cartográfico y antes de cerrar cualquier rediseño final de `Contexto y mapa`.
 - `FDBK-1` antes de `FDBK-2`; `FDBK-2` antes de `FDBK-3`.
 - `CRM-1` antes de `CRM-2`; `CRM-2` antes de `CRM-3`; `CRM-3` antes de `CRM-4`.
 

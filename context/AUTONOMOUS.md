@@ -41,8 +41,9 @@ sin reabrir caos arquitectónico ni agrandar diffs innecesariamente.
 6. No cerrar una fase sin validación real acorde al área.
 7. No cerrar una fase sin actualizar `context/`.
 8. Si aparece drift entre contexto y repo, corregir el contexto antes de seguir acumulando trabajo.
-9. Si una fase es demasiado grande, partirla internamente y dejar explícito el sub-paquete que se está ejecutando.
-10. Después de cerrar una fase, seguir automáticamente a la siguiente pendiente salvo stop condition.
+9. Si el worktree ya está sucio, no revertir ni pisar cambios ajenos; entenderlos y trabajar alrededor salvo conflicto real.
+10. Si una fase es demasiado grande, partirla internamente y dejar explícito el sub-paquete que se está ejecutando.
+11. Después de cerrar una fase, seguir automáticamente a la siguiente pendiente salvo stop condition.
 
 ## Stop conditions
 
@@ -60,15 +61,16 @@ Detenerse y pedir input solo si ocurre alguno de estos casos:
 
 1. Leer los contextos requeridos.
 2. Inspeccionar el estado del repo y del worktree.
-3. Confirmar que la fase a ejecutar no esté ya hecha en código.
-4. Si la fase toca código, correr una verificación base acorde al área:
+3. Si hay cambios ajenos/unrelated en el worktree, registrarlos mentalmente y no revertirlos; si chocan con la fase, detenerse solo cuando el conflicto sea real.
+4. Confirmar que la fase a ejecutar no esté ya hecha en código.
+5. Si la fase toca código, correr una verificación base acorde al área:
    - general: `pnpm test` y `pnpm typecheck`
    - UI-only: al menos `pnpm --dir ui typecheck`
    - si el baseline ya viene roto, registrar el problema antes de seguir
 
 ### Paso 2 — Selección de fase
 
-- Tomar la primera fase `pending` de `ROADMAP_CANONICAL.md`.
+- Tomar la primera fase del orden canónico cuyo estado figure como `pending` en `FUTURE.md`.
 - Buscar su detalle en `FUTURE.md`.
 - Si el roadmap y el future no coinciden, corregir contexto antes de tocar código.
 
@@ -89,6 +91,7 @@ Antes de editar:
 - leer archivos reales del área
 - revisar tipos/contratos/tests relevantes
 - auditar si el diseño del phase packet es demasiado grande
+- si la fase proyecta más de 12 archivos de código, más de 600 líneas netas o mezcla schema + backend + UI, partirla antes de editar
 - si hace falta, partir el trabajo en un sub-paquete explícito sin cambiar el orden canónico
 
 ### Paso 5 — Implementación

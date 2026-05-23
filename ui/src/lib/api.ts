@@ -139,6 +139,13 @@ export type HealthStatus = {
     directory_valid: boolean;
     count: number;
     max_backups: number;
+    retention: {
+      manual: { count: number; max: number };
+      scheduled: { count: number; max: number };
+    };
+    manual_backup_count: number;
+    scheduled_backup_count: number;
+    restore_checkpoint_count: number;
     alerts: string[];
     maintenance_mode: boolean;
     last_restore: BackupRestoreRun | null;
@@ -232,6 +239,8 @@ export type AdminSystemStatus = {
       directory: string;
       directory_valid: boolean;
       max_backups: number;
+      max_manual_backups: number;
+      max_scheduled_backups: number;
     };
     summary: BackupOverview["summary"];
     recent: BackupRun[];
@@ -261,6 +270,145 @@ export async function getSystemStatus(token: string) {
 
 export async function restartSystemProcess(token: string, target: "core" | "api") {
   return request<RestartResponse>(`/api/v1/admin/system/restart-${target}`, { method: "POST" }, token);
+}
+
+export type MonitoringOverview = {
+  status: "ok" | "degraded";
+  generated_at: string;
+  server: {
+    uptime_seconds: number;
+    version: string;
+    node_env: string;
+    pm2_managed: boolean;
+  };
+  health: {
+    db_connected: boolean;
+    db_latency_ms: number;
+    cron_missed: boolean;
+    dashboard_stale: boolean;
+    last_run_status: string | null;
+    backup_alerts: string[];
+  };
+  processes: AdminSystemStatus["processes"];
+  pipeline: {
+    cron_enabled: boolean;
+    cron_expression: string | null;
+    next_run_at: string | null;
+    last_run_at: string | null;
+    last_completed_at: string | null;
+    last_status: string | null;
+    active_run: PipelineRun | null;
+    recent: PipelineRun[];
+    runs_by_trigger: Record<string, { total: number; last_status: string | null; last_run_at: string | null }>;
+  };
+  discovery: {
+    summary: Record<string, number>;
+    backlog: number;
+    recent_manual: DiscoveryJob[];
+    recent_failed: DiscoveryJob[];
+  };
+  backups: {
+    alerts: string[];
+    scheduler: BackupSchedulerState;
+    config: {
+      enabled: boolean;
+      cron_expression: string;
+      next_backup_at: string | null;
+      directory: string;
+      directory_valid: boolean;
+      max_backups: number;
+      max_manual_backups: number;
+      max_scheduled_backups: number;
+      maintenance_mode: boolean;
+    };
+    summary: BackupOverview["summary"];
+    restore: BackupOverview["restore"];
+    recent: BackupRun[];
+  } | null;
+  costs: {
+    month: string;
+    totals: {
+      llm_usd: number;
+      google_places_usd: number;
+      infra_usd: number;
+      backup_usd: number;
+      total_usd: number;
+    };
+    google_places: {
+      budget_total: number | null;
+      budget_spent: number | null;
+      budget_remaining: number | null;
+      alert_threshold: number | null;
+      over_alert: boolean;
+      request_count: number;
+    };
+  };
+  performance: {
+    window_days: number;
+    runs: {
+      total: number;
+      successful: number;
+      failed: number;
+      partial: number;
+      aborted: number;
+      pending: number;
+      running: number;
+    };
+    duration: {
+      avg_min: number;
+      total_hours: number;
+    };
+    throughput: {
+      enrich_per_hour: number;
+      score_per_hour: number;
+      discovery_per_min: number;
+    };
+    recent_errors: Array<{
+      id: string;
+      occurred_at: string;
+      run_id: string | null;
+      phase: string;
+      source: string | null;
+      lead_id: string | null;
+      error_type: string;
+      message: string;
+      recovered: boolean;
+    }>;
+  };
+  operational: {
+    llm: {
+      provider_active: string;
+      model: string | null;
+      key_configured: boolean;
+    };
+    webhook: {
+      configured: boolean;
+      events: string[];
+      url: string | null;
+    };
+    concurrency: {
+      discovery_default: number;
+      discovery_google_default: number;
+      active_pipeline_workers: number;
+    };
+  };
+  logs: {
+    recent: Array<{
+      id: string;
+      occurred_at: string;
+      run_id: string | null;
+      phase: string;
+      source: string | null;
+      lead_id: string | null;
+      error_type: string;
+      message: string;
+      recovered: boolean;
+    }>;
+  };
+};
+
+export async function getMonitoringOverview(token: string) {
+  return request<{ data: MonitoringOverview }>("/api/v1/admin/monitoring/overview", {}, token);
 }
 
 export type BackupRun = {
@@ -318,6 +466,8 @@ export type BackupOverview = {
     directory_valid: boolean;
     directory_error: string | null;
     max_backups: number;
+    max_manual_backups: number;
+    max_scheduled_backups: number;
     last_started_at: string | null;
     last_completed_at: string | null;
     last_successful_at: string | null;
@@ -337,6 +487,13 @@ export type BackupOverview = {
     next_backup_at: string | null;
     backup_count: number;
     max_backups: number;
+    manual_backup_count: number;
+    scheduled_backup_count: number;
+    restore_checkpoint_count: number;
+    retention: {
+      manual: { count: number; max: number };
+      scheduled: { count: number; max: number };
+    };
     last_restore: BackupRestoreRun | null;
   };
   restore: {
@@ -369,6 +526,8 @@ export async function patchBackupConfig(
     cron_expression: string;
     directory: string | null;
     max_backups: number;
+    max_manual_backups: number;
+    max_scheduled_backups: number;
   }>
 ) {
   return request<{ data: { config: BackupOverview["config"]; overview: BackupOverview } }>("/api/v1/admin/backups/config", {

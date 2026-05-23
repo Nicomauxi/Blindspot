@@ -21,6 +21,8 @@ const updateBackupConfigSchema = z.object({
   cron_expression: z.string().trim().min(1).optional(),
   directory: z.string().trim().min(1).nullable().optional(),
   max_backups: z.number().int().min(1).max(MAX_BACKUPS_LIMIT).optional(),
+  max_manual_backups: z.number().int().min(1).max(MAX_BACKUPS_LIMIT).optional(),
+  max_scheduled_backups: z.number().int().min(1).max(MAX_BACKUPS_LIMIT).optional(),
 });
 
 const idParamSchema = z.object({
@@ -71,6 +73,8 @@ export async function backupsRoutes(app: FastifyInstance): Promise<void> {
       const nextCron = parsed.data.cron_expression ?? current.cron_expression;
       const nextDirectory = parsed.data.directory === undefined ? current.directory : parsed.data.directory;
       const nextMaxBackups = parsed.data.max_backups ?? current.max_backups ?? DEFAULT_MAX_BACKUPS;
+      const nextManualBackups = parsed.data.max_manual_backups ?? parsed.data.max_backups ?? current.max_manual_backups ?? nextMaxBackups ?? DEFAULT_MAX_BACKUPS;
+      const nextScheduledBackups = parsed.data.max_scheduled_backups ?? parsed.data.max_backups ?? current.max_scheduled_backups ?? nextMaxBackups ?? DEFAULT_MAX_BACKUPS;
       const effectiveDirectory = (nextDirectory ?? "").trim().length > 0 ? nextDirectory : null;
       const resolvedDirectory = effectiveDirectory ?? current.directory ?? null;
 
@@ -89,7 +93,9 @@ export async function backupsRoutes(app: FastifyInstance): Promise<void> {
         enabled: nextEnabled,
         cron_expression: nextCron,
         directory: effectiveDirectory,
-        max_backups: nextMaxBackups,
+        max_backups: nextManualBackups + nextScheduledBackups,
+        max_manual_backups: nextManualBackups,
+        max_scheduled_backups: nextScheduledBackups,
         scheduled_for: getNextBackupScheduledFor(nextEnabled, nextCron),
       });
 
