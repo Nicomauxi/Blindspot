@@ -1,11 +1,24 @@
 import type { FastifyInstance } from "fastify";
 import { getDb } from "../db/client.js";
+import { buildBackupOverview, getDefaultBackupSchedulerSnapshot } from "../modules/backups/service.js";
+import { getBackupScheduler } from "../modules/backups/runtime.js";
+
+async function safeBackupOverview() {
+  try {
+    return await buildBackupOverview(getBackupScheduler().getSnapshot());
+  } catch {
+    try {
+      return await buildBackupOverview(getDefaultBackupSchedulerSnapshot());
+    } catch {
+      return null;
+    }
+  }
+}
 
 export async function healthRoutes(app: FastifyInstance): Promise<void> {
   app.get("/health", async (_request, reply) => {
     const db = getDb();
 
-    // DB connectivity check
     const { error: dbError } = await db
       .from("pipeline_config")
       .select("id")
@@ -21,7 +34,6 @@ export async function healthRoutes(app: FastifyInstance): Promise<void> {
 
     const leadDashboardSchemaCurrent = !leadDashboardSchemaError;
 
-    // Pipeline status
     const { data: lastRun } = await db
       .from("pipeline_runs")
       .select("id, status, completed_at, dashboard_stale")
@@ -41,7 +53,12 @@ export async function healthRoutes(app: FastifyInstance): Promise<void> {
       new Date(config.scheduled_for).getTime() < Date.now() - 15 * 60 * 1000 &&
       (!config.last_completed_at || new Date(config.last_completed_at) < new Date(config.scheduled_for));
 
-    const healthy = dbOk && leadDashboardSchemaCurrent;
+    const backupOverview = await safeBackupOverview();
+    const backupCritical = backupOverview?.alerts.some((alert) =>
+      ["backup_recent_failure", "backup_scheduler_stale", "backup_directory_invalid", "backup_restore_in_progress", "backup_restore_failed"].includes(alert)
+    ) ?? false;
+
+    const healthy = dbOk && leadDashboardSchemaCurrent && !backupCritical;
 
     return reply.status(healthy ? 200 : 503).send({
       status: healthy ? "ok" : "degraded",
@@ -60,6 +77,21 @@ export async function healthRoutes(app: FastifyInstance): Promise<void> {
         last_completed_at: config?.last_completed_at ?? null,
         missed: cronMissed ?? false,
       },
+      backups: backupOverview
+        ? {
+            last_backup: backupOverview.summary.last_backup,
+            next_backup_at: backupOverview.summary.next_backup_at,
+            scheduler: backupOverview.scheduler,
+            directory: backupOverview.config.effective_directory,
+            directory_valid: backupOverview.config.directory_valid,
+            count: backupOverview.summary.backup_count,
+            max_backups: backupOverview.summary.max_backups,
+            alerts: backupOverview.alerts,
+            maintenance_mode: backupOverview.config.maintenance_mode,
+            last_restore: backupOverview.summary.last_restore,
+            restore: backupOverview.restore,
+          }
+        : null,
       invariants: {
         scoring_v1_columns_present: true,
         lead_dashboard_schema_current: leadDashboardSchemaCurrent,

@@ -2,12 +2,46 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const LEAD_ID = "00000000-0000-0000-0000-000000000001";
 
+let _orderCalls: Array<{ column: string; ascending?: boolean }> = [];
+
 let _mockUser: Record<string, unknown> = {
   id: "admin-user-id",
   email: "admin@blindspot.local",
   role: "admin",
   lead_filter: null,
   active: true,
+};
+let _lastLlmUsageInsert: Record<string, unknown> | null = null;
+let _mockLeadBriefError: Error | null = null;
+let _mockTemplateLeadBriefError: Error | null = null;
+
+const mockLeadBrief = {
+  summary: "Resumen comercial",
+  why_it_matters: "Importa porque hay intencion de compra.",
+  next_step: "Escribir por WhatsApp.",
+  recommended_channel: "whatsapp",
+  personalized_pitch: "Entrar por POS sin contrato.",
+  first_message: "Hola, vi una mejora concreta para tu operacion.",
+  likely_objections: ["Ahora no"],
+  objection_handling: ["Proponer prueba corta"],
+  source_llm: "gemini",
+  generated_at: "2026-01-01T00:00:00Z",
+  provider: "gemini",
+  model: "gemini-2.5-flash",
+  tokens_in: 12,
+  tokens_out: 34,
+  cost_usd_estimated: 0.002,
+};
+
+const mockTemplateLeadBrief = {
+  ...mockLeadBrief,
+  summary: "Resumen fallback",
+  source_llm: "template",
+  provider: "template",
+  model: "template-v1",
+  tokens_in: 0,
+  tokens_out: 0,
+  cost_usd_estimated: 0,
 };
 
 const mockLeadViewRow = {
@@ -88,11 +122,35 @@ function makeLeadQueryChain() {
   chain["gte"] = leaf;
   chain["textSearch"] = leaf;
   chain["lt"] = leaf;
-  chain["order"] = leaf;
+  chain["order"] = (column: string, opts?: { ascending?: boolean }) => {
+    _orderCalls.push({ column, ascending: opts?.ascending });
+    return chain;
+  };
   chain["limit"] = terminal;
   chain["single"] = async () => ({ data: null, error: { code: "PGRST116" } });
   return chain;
 }
+
+
+vi.mock("../../api/src/llm/factory.js", () => ({
+  createLLMProvider: () => ({
+    name: "gemini",
+    model: "gemini-2.5-flash",
+    generateLeadBrief: async () => {
+      if (_mockLeadBriefError) throw _mockLeadBriefError;
+      return mockLeadBrief;
+    },
+  }),
+}));
+
+vi.mock("../../api/src/llm/template.js", () => ({
+  TemplateProvider: class {
+    async generateLeadBrief() {
+      if (_mockTemplateLeadBriefError) throw _mockTemplateLeadBriefError;
+      return mockTemplateLeadBrief;
+    }
+  },
+}));
 
 vi.mock("../../api/src/db/client.js", () => ({
   getDb: () => ({
@@ -153,6 +211,14 @@ vi.mock("../../api/src/db/client.js", () => ({
           }),
         };
       }
+      if (table === "llm_usage_log") {
+        return {
+          insert: (payload: unknown) => {
+            _lastLlmUsageInsert = payload as Record<string, unknown>;
+            return Promise.resolve({ error: null });
+          },
+        };
+      }
       return {};
     },
   }),
@@ -161,6 +227,10 @@ vi.mock("../../api/src/db/client.js", () => ({
 describe("GET /api/v1/leads", () => {
   beforeEach(() => {
     process.env["API_JWT_SECRET"] = "test-secret-at-least-32-chars-long-1234";
+    _orderCalls = [];
+    _lastLlmUsageInsert = null;
+    _mockLeadBriefError = null;
+    _mockTemplateLeadBriefError = null;
     _mockUser = {
       id: "admin-user-id",
       email: "admin@blindspot.local",
@@ -237,6 +307,25 @@ describe("GET /api/v1/leads", () => {
 
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ data: [], next_cursor: null, total: 0 });
+    await app.close();
+  });
+
+  it("respects sort_direction=asc for created_at ordering", async () => {
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/leads?sort_by=created_at&sort_direction=asc",
+      headers: { authorization: `Bearer ${token}` },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(_orderCalls.slice(-2)).toEqual([
+      { column: "created_at", ascending: true },
+      { column: "id", ascending: true },
+    ]);
     await app.close();
   });
 
@@ -408,6 +497,75 @@ describe("GET /api/v1/leads/:id", () => {
       headers: { authorization: `Bearer ${token}` },
     });
     expect(res.statusCode).toBe(200);
+    await app.close();
+  });
+});
+
+
+describe("POST /api/v1/leads/:id/assistant-brief", () => {
+  beforeEach(() => {
+    process.env["API_JWT_SECRET"] = "test-secret-at-least-32-chars-long-1234";
+    _lastLlmUsageInsert = null;
+    _mockLeadBriefError = null;
+    _mockTemplateLeadBriefError = null;
+    _mockUser = {
+      id: "admin-user-id",
+      email: "admin@blindspot.local",
+      role: "admin",
+      lead_filter: null,
+      active: true,
+    };
+  });
+
+  it("returns a fallback brief and logs degraded success when provider fails", async () => {
+    _mockLeadBriefError = new Error("Gemini API error: 429");
+
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/v1/leads/${LEAD_ID}/assistant-brief`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().data).toMatchObject({
+      summary: mockTemplateLeadBrief.summary,
+      source_llm: "template",
+    });
+    expect(_lastLlmUsageInsert).toMatchObject({
+      operation: "lead_brief",
+      success: true,
+      error: "fallback:Gemini API error: 429",
+    });
+
+    await app.close();
+  });
+
+  it("returns assistant_unavailable when provider and template both fail", async () => {
+    _mockLeadBriefError = new Error("Gemini API error: 500");
+    _mockTemplateLeadBriefError = new Error("Template render failed");
+
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/v1/leads/${LEAD_ID}/assistant-brief`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toMatchObject({ error_code: "assistant_unavailable" });
+    expect(_lastLlmUsageInsert).toMatchObject({
+      operation: "lead_brief",
+      success: false,
+      error: "primary:Gemini API error: 500; fallback:Template render failed",
+    });
+
     await app.close();
   });
 });

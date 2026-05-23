@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { getDb } from "../db/client.js";
-import { requireAuth, getAuthUser } from "../auth/middleware.js";
+import { requireAuth, getAuthUser, type AuthUser } from "../auth/middleware.js";
 import { createLLMProvider } from "../llm/factory.js";
 import type { LlmUsageLog } from "../llm/types.js";
 
@@ -181,6 +181,32 @@ async function getAdminServicePrice(
     : null;
 }
 
+async function loadAuthorizedCampaign(
+  db: ReturnType<typeof getDb>,
+  campaignId: string,
+  authUser: AuthUser
+): Promise<{ ok: true; campaign: Record<string, unknown> } | { ok: false; status: number; error: string; error_code: string }> {
+  const { data, error } = await db
+    .from("outreach_campaigns")
+    .select("id, user_id, status, closed_at")
+    .eq("id", campaignId)
+    .single();
+
+  if (error || !data) {
+    return { ok: false, status: 404, error: "Campaign not found", error_code: "campaign_not_found" };
+  }
+
+  if (authUser.role !== "admin" && (data as { user_id?: string }).user_id !== authUser.id) {
+    return { ok: false, status: 404, error: "Campaign not found", error_code: "campaign_not_found" };
+  }
+
+  if ((data as { status?: string }).status !== "active") {
+    return { ok: false, status: 409, error: "Campaign is not active", error_code: "campaign_inactive" };
+  }
+
+  return { ok: true, campaign: data as Record<string, unknown> };
+}
+
 export async function outreachRoutes(app: FastifyInstance): Promise<void> {
   // GET /api/v1/outreach — list outreach records
   app.get("/outreach", { preHandler: requireAuth }, async (request, reply) => {
@@ -289,6 +315,18 @@ export async function outreachRoutes(app: FastifyInstance): Promise<void> {
       }
     }
 
+    if (body.campaign_id) {
+      const campaignCheck = await loadAuthorizedCampaign(db, body.campaign_id, authUser);
+      if (!campaignCheck.ok) {
+        return reply.status(campaignCheck.status).send({
+          error: campaignCheck.error,
+          error_code: campaignCheck.error_code,
+        });
+      }
+    }
+
+    const contactedAt = body.contacted_at ?? new Date().toISOString();
+
     const { data: row, error: insertError } = await db
       .from("lead_outreach")
       .insert({
@@ -305,7 +343,7 @@ export async function outreachRoutes(app: FastifyInstance): Promise<void> {
         service_sold: body.service_sold ?? null,
         price_sold: body.price_sold ?? null,
         notes: body.notes ?? null,
-        contacted_at: body.contacted_at ?? new Date().toISOString(),
+        contacted_at: contactedAt,
         responded_at: body.responded_at ?? null,
         closed_at: body.closed_at ?? null,
         lead_quality_signal: body.lead_quality_signal,
@@ -318,10 +356,10 @@ export async function outreachRoutes(app: FastifyInstance): Promise<void> {
       return reply.status(500).send({ error: "Database error", error_code: "db_error" });
     }
 
-    // Update leads.contacted_by if this is the first outreach for this lead
+    // Keep lead-level first-contact markers consistent without overwriting later history.
     await db
       .from("leads")
-      .update({ contacted_by: authUser.id })
+      .update({ contacted_by: authUser.id, contacted_at: contactedAt, state: "contacted" })
       .eq("id", body.lead_id)
       .is("contacted_by", null);
 
@@ -371,6 +409,15 @@ export async function outreachRoutes(app: FastifyInstance): Promise<void> {
       }
 
       const patch = parseResult.data;
+      if (patch.campaign_id) {
+        const campaignCheck = await loadAuthorizedCampaign(db, patch.campaign_id, authUser);
+        if (!campaignCheck.ok) {
+          return reply.status(campaignCheck.status).send({
+            error: campaignCheck.error,
+            error_code: campaignCheck.error_code,
+          });
+        }
+      }
       const mergedStatus = patch.status ?? (existing as { status: string }).status;
       const mergedOutcome =
         "outcome" in patch
@@ -479,12 +526,12 @@ export async function outreachRoutes(app: FastifyInstance): Promise<void> {
         });
       } catch (err) {
         request.log.error({ err }, "LLM generate-offer error");
-        const templateProvider = (await import("../llm/template.js")).then(
-          (m) => new m.TemplateProvider()
-        );
-        usageSuccess = false;
-        usageError = err instanceof Error ? err.message : String(err);
-        result = await (await templateProvider).generateOffer({
+        const templateModule = await import("../llm/template.js");
+        const templateProvider = new templateModule.TemplateProvider();
+        const fallbackReason = err instanceof Error ? err.message : String(err);
+        usageSuccess = true;
+        usageError = `fallback:${fallbackReason}`;
+        result = await templateProvider.generateOffer({
           lead_id: body.lead_id,
           lead_name: (lead as Record<string, string | null>)["name"] ?? "",
           niche: (lead as Record<string, string | null>)["niche"] ?? null,
@@ -505,6 +552,7 @@ export async function outreachRoutes(app: FastifyInstance): Promise<void> {
         user_id: authUser.id,
         prompt_tokens: result.tokens_in ?? 0,
         completion_tokens: result.tokens_out ?? 0,
+        total_tokens: (result.tokens_in ?? 0) + (result.tokens_out ?? 0),
         cost_usd: result.cost_usd_estimated ?? 0,
         duration_ms: Date.now() - startMs,
         success: usageSuccess,

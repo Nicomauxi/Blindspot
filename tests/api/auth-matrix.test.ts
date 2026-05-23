@@ -91,21 +91,22 @@ vi.mock("../../api/src/db/client.js", () => ({
 function makeLiveDashboardChain() {
   const chain: Record<string, unknown> = {};
 
-  const applyFiltersAndReturn = () => ({
-    order: (_col: string, _opts: unknown) => ({
-      limit: (_n: number) => {
-        const filter = _db.user["lead_filter"] as Record<string, unknown> | null;
-        let rows = _db.leads;
-        if (filter) {
-          const tiers = filter["contact_tier"] as string[] | undefined;
-          if (Array.isArray(tiers) && tiers.length > 0) {
-            rows = rows.filter((l) => tiers.includes(l["contact_tier"] as string));
-          }
+  const applyFiltersAndReturn = () => {
+    const ordered: Record<string, unknown> = {};
+    ordered["order"] = () => ordered;
+    ordered["limit"] = (_n: number) => {
+      const filter = _db.user["lead_filter"] as Record<string, unknown> | null;
+      let rows = _db.leads;
+      if (filter) {
+        const tiers = filter["contact_tier"] as string[] | undefined;
+        if (Array.isArray(tiers) && tiers.length > 0) {
+          rows = rows.filter((l) => tiers.includes(l["contact_tier"] as string));
         }
-        return Promise.resolve({ data: rows.slice(0, _n - 1), error: null, count: rows.length });
-      },
-    }),
-  });
+      }
+      return Promise.resolve({ data: rows.slice(0, _n - 1), error: null, count: rows.length });
+    };
+    return ordered;
+  };
 
   chain["in"] = (_col: string, _vals: string[]) => applyFiltersAndReturn();
   chain["eq"] = (_col: string, val: string) => ({

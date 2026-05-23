@@ -64,6 +64,9 @@ describe("normalizeNiche", () => {
     expect(normalizeNiche("gimnasio funcional")).toBe("gym");
     expect(normalizeNiche("clínica médica")).toBe("healthcare");
     expect(normalizeNiche("dentista")).toBe("dentist");
+    expect(normalizeNiche("farmacia de barrio")).toBe("pharmacy");
+    expect(normalizeNiche("mercado vecinal")).toBe("grocery");
+    expect(normalizeNiche("hotel boutique")).toBe("accommodation");
   });
 
   it("falls back to other for unknown niches", () => {

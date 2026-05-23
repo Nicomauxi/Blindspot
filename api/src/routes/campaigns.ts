@@ -50,7 +50,7 @@ export async function campaignsRoutes(app: FastifyInstance): Promise<void> {
     const { data, error } = await query;
     if (error) {
       request.log.error({ error }, "campaigns list failed");
-      return reply.status(500).send({ error: "Database error" });
+      return reply.status(500).send({ error: "Database error", error_code: "db_error" });
     }
 
     return reply.status(200).send({ data: data ?? [] });
@@ -61,7 +61,7 @@ export async function campaignsRoutes(app: FastifyInstance): Promise<void> {
     const authUser = getAuthUser(request);
     const parsed = createSchema.safeParse(request.body);
     if (!parsed.success) {
-      return reply.status(400).send({ error: "Validation error", details: parsed.error.issues });
+      return reply.status(400).send({ error: "Validation error", error_code: "validation_error", details: parsed.error.issues });
     }
 
     const db = getDb();
@@ -79,7 +79,7 @@ export async function campaignsRoutes(app: FastifyInstance): Promise<void> {
 
     if (error) {
       request.log.error({ error }, "campaign create failed");
-      return reply.status(500).send({ error: "Database error" });
+      return reply.status(500).send({ error: "Database error", error_code: "db_error" });
     }
 
     return reply.status(201).send({ data });
@@ -90,7 +90,7 @@ export async function campaignsRoutes(app: FastifyInstance): Promise<void> {
     const authUser = getAuthUser(request);
     const { id } = request.params as { id: string };
     if (!uuidSchema.safeParse(id).success) {
-      return reply.status(400).send({ error: "Invalid campaign id" });
+      return reply.status(400).send({ error: "Invalid campaign id", error_code: "invalid_campaign_id" });
     }
 
     const db = getDb();
@@ -101,11 +101,11 @@ export async function campaignsRoutes(app: FastifyInstance): Promise<void> {
       .single();
 
     if (error || !campaign) {
-      return reply.status(404).send({ error: "Campaign not found" });
+      return reply.status(404).send({ error: "Campaign not found", error_code: "campaign_not_found" });
     }
 
     if (authUser.role !== "admin" && (campaign as Record<string, unknown>)["user_id"] !== authUser.id) {
-      return reply.status(403).send({ error: "Forbidden" });
+      return reply.status(403).send({ error: "Forbidden", error_code: "forbidden" });
     }
 
     // Compute stats from lead_outreach
@@ -167,12 +167,12 @@ export async function campaignsRoutes(app: FastifyInstance): Promise<void> {
     const authUser = getAuthUser(request);
     const { id } = request.params as { id: string };
     if (!uuidSchema.safeParse(id).success) {
-      return reply.status(400).send({ error: "Invalid campaign id" });
+      return reply.status(400).send({ error: "Invalid campaign id", error_code: "invalid_campaign_id" });
     }
 
     const parsed = patchSchema.safeParse(request.body);
     if (!parsed.success) {
-      return reply.status(400).send({ error: "Validation error", details: parsed.error.issues });
+      return reply.status(400).send({ error: "Validation error", error_code: "validation_error", details: parsed.error.issues });
     }
 
     const db = getDb();
@@ -183,11 +183,11 @@ export async function campaignsRoutes(app: FastifyInstance): Promise<void> {
       .single();
 
     if (fetchErr || !existing) {
-      return reply.status(404).send({ error: "Campaign not found" });
+      return reply.status(404).send({ error: "Campaign not found", error_code: "campaign_not_found" });
     }
 
     if (authUser.role !== "admin" && (existing as Record<string, unknown>)["user_id"] !== authUser.id) {
-      return reply.status(403).send({ error: "Forbidden" });
+      return reply.status(403).send({ error: "Forbidden", error_code: "forbidden" });
     }
 
     const patch: Record<string, unknown> = {};
@@ -208,7 +208,7 @@ export async function campaignsRoutes(app: FastifyInstance): Promise<void> {
 
     if (error) {
       request.log.error({ error }, "campaign update failed");
-      return reply.status(500).send({ error: "Database error" });
+      return reply.status(500).send({ error: "Database error", error_code: "db_error" });
     }
 
     return reply.status(200).send({ data });
@@ -219,7 +219,7 @@ export async function campaignsRoutes(app: FastifyInstance): Promise<void> {
     const authUser = getAuthUser(request);
     const { id } = request.params as { id: string };
     if (!uuidSchema.safeParse(id).success) {
-      return reply.status(400).send({ error: "Invalid campaign id" });
+      return reply.status(400).send({ error: "Invalid campaign id", error_code: "invalid_campaign_id" });
     }
 
     const db = getDb();
@@ -230,11 +230,11 @@ export async function campaignsRoutes(app: FastifyInstance): Promise<void> {
       .single();
 
     if (fetchErr || !existing) {
-      return reply.status(404).send({ error: "Campaign not found" });
+      return reply.status(404).send({ error: "Campaign not found", error_code: "campaign_not_found" });
     }
 
     if (authUser.role !== "admin" && (existing as Record<string, unknown>)["user_id"] !== authUser.id) {
-      return reply.status(403).send({ error: "Forbidden" });
+      return reply.status(403).send({ error: "Forbidden", error_code: "forbidden" });
     }
 
     const { error } = await db
@@ -244,7 +244,7 @@ export async function campaignsRoutes(app: FastifyInstance): Promise<void> {
 
     if (error) {
       request.log.error({ error }, "campaign delete/close failed");
-      return reply.status(500).send({ error: "Database error" });
+      return reply.status(500).send({ error: "Database error", error_code: "db_error" });
     }
 
     return reply.status(204).send();

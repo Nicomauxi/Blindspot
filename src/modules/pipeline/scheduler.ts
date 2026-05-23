@@ -67,6 +67,11 @@ export class PipelineScheduler {
     if (!config) return;
 
     this.lastConfigUpdatedAt = config.updated_at ?? null;
+    if (await this.isRestoreMaintenanceMode()) {
+      logger.info("Backup restore maintenance mode active — pipeline cron start deferred");
+      return;
+    }
+
     if (config.enabled && config.cron_expression) {
       this.scheduleCron(config.cron_expression);
     }
@@ -81,6 +86,11 @@ export class PipelineScheduler {
     }
 
     this.cronTask = cron.schedule(expression, async () => {
+      if (await this.isRestoreMaintenanceMode()) {
+        logger.info("Backup restore maintenance mode active — cron tick skipped");
+        return;
+      }
+
       logger.info("Cron tick: queuing scheduled run");
       try {
         const runId = await transitionToPending("cron");
@@ -113,6 +123,11 @@ export class PipelineScheduler {
   }
 
   private async pollPendingRuns(specificRunId?: string): Promise<void> {
+    if (await this.isRestoreMaintenanceMode()) {
+      logger.info("Backup restore maintenance mode active — pending run poll skipped");
+      return;
+    }
+
     if (this.activeRunId) {
       logger.debug({ activeRunId: this.activeRunId }, "Run already active — skipping poll");
       return;
@@ -176,6 +191,11 @@ export class PipelineScheduler {
   }
 
   private async pollDiscoveryJobs(): Promise<void> {
+    if (await this.isRestoreMaintenanceMode()) {
+      logger.info("Backup restore maintenance mode active — discovery poll skipped");
+      return;
+    }
+
     try {
       const result = await processQueuedDiscoveryJobs(1);
       if (result.jobs_processed > 0) {
@@ -200,6 +220,28 @@ export class PipelineScheduler {
     }
 
     return data as PipelineConfig & { updated_at?: string };
+  }
+
+
+  private async isRestoreMaintenanceMode(): Promise<boolean> {
+    try {
+      const supabase = getSupabase();
+      const { data, error } = await supabase
+        .from("backup_config")
+        .select("maintenance_mode")
+        .eq("id", "singleton")
+        .maybeSingle();
+
+      if (error) {
+        logger.warn({ error }, "Failed to fetch backup maintenance mode");
+        return false;
+      }
+
+      return Boolean((data as { maintenance_mode?: boolean } | null)?.maintenance_mode);
+    } catch (error) {
+      logger.debug({ error }, "Restore maintenance mode unavailable; continuing without backup maintenance lock");
+      return false;
+    }
   }
 
   private async updateScheduledFor(expression: string): Promise<void> {

@@ -47,7 +47,9 @@ function asNumber(value: unknown): number {
 
 function parseMonthRange(rawMonth: string | undefined, now = new Date()) {
   if (rawMonth && MONTH_RE.test(rawMonth)) {
-    const [year, month] = rawMonth.split("-").map(Number);
+    const parts = rawMonth.split("-");
+    const year = Number(parts[0] ?? 0);
+    const month = Number(parts[1] ?? 1);
     const start = new Date(Date.UTC(year, month - 1, 1));
     const end = new Date(Date.UTC(year, month, 1));
     return { month: rawMonth, start, end };

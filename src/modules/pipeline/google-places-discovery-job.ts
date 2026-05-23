@@ -1,0 +1,178 @@
+import pLimit from "p-limit";
+import { fetchPlaceCandidates, fetchPlaceDetails } from "../discovery/places.js";
+import { enrichWithDetails } from "../discovery/google-data-enricher.js";
+import { applyProfileFilter, normalizeNiche, tagCandidate } from "../discovery/filters.js";
+import { getDiscoveryConfig, getProfileConfig } from "../discovery/config.js";
+import { createRun, completeRun, failRun } from "../../storage/runs.js";
+import { incrementGooglePlacesBudgetSpent, getGooglePlacesBudgetStatus } from "../../storage/pipeline-config.js";
+import { upsertLeads, loadAllLeads } from "../../storage/leads.js";
+import { rebuildVocabularyForNiche } from "../../storage/vocabulary.js";
+import { loadAllRuntime } from "../../storage/system-lists.js";
+import { computeNicheStopWords } from "../enrichment/vocabulary.js";
+import type { PlaceCandidate } from "../../shared/types.js";
+
+const TEXT_SEARCH_COST_PER_REQUEST = 0.035;
+const DETAILS_COST_PER_REQUEST = 0.025;
+
+function estimateActualCostUsd(textSearchRequestCount: number, detailsRequestCount: number): number {
+  return textSearchRequestCount * TEXT_SEARCH_COST_PER_REQUEST + detailsRequestCount * DETAILS_COST_PER_REQUEST;
+}
+
+export function estimateGooglePlacesCostUsd(maxResults: number): number {
+  const safeMaxResults = Math.max(1, Math.min(1000, maxResults));
+  return Math.ceil(safeMaxResults / 20) * TEXT_SEARCH_COST_PER_REQUEST + safeMaxResults * DETAILS_COST_PER_REQUEST;
+}
+
+function resolveCandidateNiche(
+  normalizedRequestedNiche: string,
+  candidate: PlaceCandidate,
+  aliases?: readonly { niche: string; term: string; matchType: string }[]
+): string {
+  if (normalizedRequestedNiche !== "other") return normalizedRequestedNiche;
+
+  const rawPrimaryType =
+    typeof candidate.raw["primary_type"] === "string"
+      ? candidate.raw["primary_type"]
+      : typeof candidate.raw["primaryType"] === "string"
+        ? candidate.raw["primaryType"]
+        : null;
+  const primaryType = candidate.primaryType ?? rawPrimaryType;
+  if (!primaryType) return normalizedRequestedNiche;
+
+  const normalizedPrimaryType = normalizeNiche(primaryType.replace(/_/g, " "), aliases);
+  return normalizedPrimaryType === "other" ? normalizedRequestedNiche : normalizedPrimaryType;
+}
+
+export interface GooglePlacesDiscoveryJobResult {
+  runId: string;
+  fetched: number;
+  passed: number;
+  inserted: number;
+  updated: number;
+  rejected: number;
+  estimatedCostUsd: number;
+  actualCostUsd: number;
+}
+
+export async function executeGooglePlacesDiscoveryJob(opts: {
+  location: string;
+  niche?: string | null;
+  profile?: string | null;
+  maxResults?: number | null;
+  concurrency?: number | null;
+  costCapUsd: number;
+}): Promise<GooglePlacesDiscoveryJobResult> {
+  const requestedNiche = (opts.niche ?? "").trim() || "negocios";
+  const maxResults = Math.max(1, Math.min(opts.maxResults ?? 50, 200));
+  const profileKey = (opts.profile ?? "B").toLowerCase() as "a" | "b" | "c" | "d";
+  const concurrency = Math.max(1, Math.min(opts.concurrency ?? 5, 10));
+  const conservativeEstimate = estimateGooglePlacesCostUsd(maxResults);
+  const budget = await getGooglePlacesBudgetStatus();
+  const runtimeCap = Math.min(opts.costCapUsd, budget?.budget_remaining ?? opts.costCapUsd);
+
+  if (!(runtimeCap > 0)) {
+    throw new Error("Google Places budget exhausted for current month");
+  }
+
+  if (conservativeEstimate > runtimeCap) {
+    throw new Error(`Google Places estimated cost USD ${conservativeEstimate.toFixed(2)} exceeds allowed cap USD ${runtimeCap.toFixed(2)}`);
+  }
+
+  const runtime = await loadAllRuntime();
+  const normalizedNiche = normalizeNiche(requestedNiche, runtime.mappings.nicheAliases);
+  const discoveryConfig = getDiscoveryConfig();
+  const profileConfig = getProfileConfig(profileKey, {});
+  const startedAt = Date.now();
+
+  const run = await createRun({
+    niche: requestedNiche,
+    location: opts.location,
+    profile: profileKey,
+    maxResults,
+    config: {
+      command: "discovery_job_google_places",
+      max_results: maxResults,
+      profile_thresholds: profileConfig,
+      concurrency,
+      cost_cap_usd: opts.costCapUsd,
+      budget_remaining_usd: budget?.budget_remaining ?? null,
+    },
+  });
+
+  try {
+    const { candidates, textSearchRequestCount } = await fetchPlaceCandidates(requestedNiche, opts.location, maxResults);
+    const { passed, rejected } = applyProfileFilter(candidates, profileConfig, discoveryConfig.social_domains);
+
+    const limit = pLimit(concurrency);
+    let detailsRequestCount = 0;
+    const enrichedPassed: PlaceCandidate[] = await Promise.all(
+      passed.map((candidate) =>
+        limit(async () => {
+          const details = await fetchPlaceDetails(candidate.placeId);
+          detailsRequestCount += 1;
+          if (details === null) return candidate;
+          return { ...candidate, raw: enrichWithDetails(candidate.raw, details) };
+        })
+      )
+    );
+
+    const passedItems = enrichedPassed.map((candidate) => ({
+      candidate,
+      passed: true,
+      rejection_reasons: [] as string[],
+      niche: resolveCandidateNiche(normalizedNiche, candidate, runtime.mappings.nicheAliases),
+    }));
+    const rejectedItems = rejected.map(({ candidate, reasons }) => ({
+      candidate,
+      passed: false,
+      rejection_reasons: reasons as string[],
+      niche: resolveCandidateNiche(normalizedNiche, candidate, runtime.mappings.nicheAliases),
+    }));
+
+    const items = discoveryConfig.persist_rejected ? [...passedItems, ...rejectedItems] : passedItems;
+    const { inserted, updated } = await upsertLeads(
+      items,
+      run.id,
+      profileKey,
+      (candidate) => tagCandidate(candidate, profileKey, discoveryConfig.social_domains)
+    );
+
+    const actualCostUsd = estimateActualCostUsd(textSearchRequestCount, detailsRequestCount);
+    await completeRun(run.id, {
+      places_requests: textSearchRequestCount + detailsRequestCount,
+      estimated_cost_usd: actualCostUsd,
+      leads_discovered: passed.length,
+      leads_new: inserted.filter((lead) => lead.passed_filter).length,
+      leads_updated: updated.filter((lead) => lead.passed_filter).length,
+      leads_rejected: rejected.length,
+      duration_ms: Date.now() - startedAt,
+    });
+    await incrementGooglePlacesBudgetSpent(actualCostUsd).catch(() => undefined);
+
+    if (normalizedNiche && normalizedNiche !== "all") {
+      try {
+        const allLeads = await loadAllLeads();
+        const nicheLeads = allLeads.filter((lead) => lead.niche === normalizedNiche);
+        const wordCounts = computeNicheStopWords(nicheLeads, 3, 0.05);
+        await rebuildVocabularyForNiche(normalizedNiche, wordCounts);
+      } catch {
+        // best effort only
+      }
+    }
+
+    return {
+      runId: run.id,
+      fetched: candidates.length,
+      passed: passed.length,
+      inserted: inserted.filter((lead) => lead.passed_filter).length,
+      updated: updated.filter((lead) => lead.passed_filter).length,
+      rejected: rejected.length,
+      estimatedCostUsd: conservativeEstimate,
+      actualCostUsd,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await failRun(run.id, message, Date.now() - startedAt);
+    throw error;
+  }
+}

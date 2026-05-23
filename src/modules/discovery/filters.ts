@@ -70,6 +70,31 @@ export function normalizeNiche(raw: string, aliases?: readonly NicheAlias[]): st
   }
 
   if (
+    normalized.includes("farmacia") ||
+    normalized.includes("pharmacy")
+  ) {
+    return "pharmacy";
+  }
+
+  if (
+    normalized.includes("mercado") ||
+    normalized.includes("supermercado") ||
+    normalized.includes("grocery")
+  ) {
+    return "grocery";
+  }
+
+  if (
+    normalized.includes("hotel") ||
+    normalized.includes("hostel") ||
+    normalized.includes("alojamiento") ||
+    normalized.includes("hospedaje") ||
+    normalized.includes("accommodation")
+  ) {
+    return "accommodation";
+  }
+
+  if (
     normalized.includes("dentista") ||
     normalized.includes("odontolog") ||
     normalized.includes("dentist")

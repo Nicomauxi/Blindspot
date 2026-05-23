@@ -26,7 +26,15 @@ cleanup_partial_backup() {
 
 trap cleanup_partial_backup EXIT
 
-mkdir -p "$BACKUP_DIR"
+if [ ! -d "$BACKUP_DIR" ]; then
+  echo "ERROR: backup dir no existe: $BACKUP_DIR" >&2
+  exit 1
+fi
+
+if [ ! -w "$BACKUP_DIR" ]; then
+  echo "ERROR: backup dir sin permisos de escritura: $BACKUP_DIR" >&2
+  exit 1
+fi
 
 docker exec "$CONTAINER" pg_dump -U postgres -d postgres | gzip > "$BACKUP_PATH"
 
@@ -43,7 +51,6 @@ if [ "$SIZE" -lt 10240 ]; then
   exit 1
 fi
 
-find "$BACKUP_DIR" -type f -name "blindspot_*.sql.gz" -mtime +7 -delete
 
 trap - EXIT
 echo "Backup OK: $BACKUP_PATH ($SIZE bytes)"

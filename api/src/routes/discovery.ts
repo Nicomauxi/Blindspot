@@ -2,6 +2,12 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { getDb } from "../db/client.js";
 import { requireAuth, requireAdmin, getAuthUser } from "../auth/middleware.js";
+import {
+  buildDiscoveryRecommendations,
+  buildLeadDensityRows,
+  estimateGooglePlacesBatchCost,
+  supportedDiscoverySources,
+} from "./discovery-insights.js";
 
 const permissiveUuid = z
   .string()
@@ -10,15 +16,62 @@ const permissiveUuid = z
     "Invalid UUID"
   );
 
-const createJobSchema = z.object({
-  source: z.string().min(1),
-  location: z.string().min(1),
-  niche: z.string().optional(),
-  profile: z.enum(["A", "B", "C", "D"]).optional(),
-  max_results: z.number().int().min(1).max(1000).default(200),
-  concurrency: z.number().int().min(1).max(10).optional(),
-  cpu_budget: z.enum(["conservative", "balanced", "aggressive"]).default("balanced"),
-});
+const cpuBudgetSchema = z.enum(["conservative", "balanced", "aggressive"]);
+const profileSchema = z.enum(["A", "B", "C", "D"]);
+const sourceSchema = z.enum(["mintur", "osm", "yelu", "pedidosya", "google_places"]);
+
+const createJobSchema = z
+  .object({
+    source: sourceSchema,
+    location: z.string().min(1),
+    niche: z.string().optional(),
+    profile: profileSchema.optional(),
+    max_results: z.number().int().min(1).max(1000).default(200),
+    concurrency: z.number().int().min(1).max(10).optional(),
+    cpu_budget: cpuBudgetSchema.default("balanced"),
+    cost_cap_usd: z.number().positive().max(500).optional(),
+  })
+  .superRefine((value, ctx) => {
+    if (value.source === "google_places" && value.cost_cap_usd == null) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["cost_cap_usd"],
+        message: "Google Places legacy jobs require cost_cap_usd",
+      });
+    }
+  });
+
+const createBatchSchema = z
+  .object({
+    sources: z.array(sourceSchema).min(1),
+    location: z.string().min(1),
+    niche: z.string().optional(),
+    max_results: z.number().int().min(1).max(1000).default(200),
+    cpu_budget: cpuBudgetSchema.default("balanced"),
+    google_places: z
+      .object({
+        profile: profileSchema.optional(),
+        concurrency: z.number().int().min(1).max(10).optional(),
+        cost_cap_usd: z.number().positive().max(500),
+      })
+      .optional(),
+    recommendation_origin: z
+      .object({
+        type: z.enum(["coverage_gap", "location_density", "top_niche", "manual"]),
+        key: z.string().optional(),
+      })
+      .optional(),
+  })
+  .superRefine((value, ctx) => {
+    const includesGoogle = value.sources.includes("google_places");
+    if (includesGoogle && !value.google_places?.cost_cap_usd) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["google_places", "cost_cap_usd"],
+        message: "Google Places batches require cost_cap_usd",
+      });
+    }
+  });
 
 const patchJobSchema = z.object({
   action: z.enum(["pause", "resume", "cancel"]),
@@ -34,14 +87,124 @@ const listJobsQuerySchema = z.object({
     .pipe(z.number().int().min(1).max(200)),
 });
 
+const listBatchesQuerySchema = listJobsQuerySchema.extend({
+  include_jobs: z
+    .string()
+    .optional()
+    .transform((value) => value === "true"),
+});
+
+const recommendationsQuerySchema = z.object({
+  sources: z.union([z.string(), z.array(z.string())]).optional(),
+  location: z.string().optional(),
+  niche: z.string().optional(),
+  limit: z
+    .string()
+    .optional()
+    .transform((v) => Math.min(Number(v ?? "20"), 100))
+    .pipe(z.number().int().min(1).max(100)),
+});
+
+const batchActionSchema = z.object({
+  action: z.enum(["pause", "resume", "cancel"]),
+});
+
 const JOB_STATUS_TRANSITIONS: Record<string, string> = {
   pause: "paused",
   resume: "queued",
   cancel: "cancelled",
 };
 
+function buildLocationKey(input: string): string {
+  return input
+    .normalize("NFD")
+    .replace(/\p{Diacritic}+/gu, "")
+    .toLowerCase()
+    .replace(/\b(uruguay|uy|departamento|depto|ciudad)\b/g, " ")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+function asNumber(value: unknown): number {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim() !== "") {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+  return 0;
+}
+function isDiscoveryBatchSchemaMissing(error: { code?: string; message?: string; details?: string; hint?: string } | null | undefined): boolean {
+  if (!error) return false;
+  const combined = [error.code, error.message, error.details, error.hint].filter(Boolean).join(" ").toLowerCase();
+  return ["42p01", "42703", "pgrst204"].some((code) => combined.includes(code))
+    || (combined.includes("discovery_job_batches") && (combined.includes("does not exist") || combined.includes("could not find") || combined.includes("schema cache")))
+    || (combined.includes("batch_id") && (combined.includes("does not exist") || combined.includes("could not find") || combined.includes("schema cache")));
+}
+
+
+async function recomputeBatchAggregate(db: ReturnType<typeof getDb>, batchId: string): Promise<void> {
+  const { data, error } = await db
+    .from("discovery_jobs")
+    .select("status, started_at, completed_at, estimated_cost_usd, actual_cost_usd")
+    .eq("batch_id", batchId);
+
+  if (error) {
+    throw new Error(`Failed to recompute batch ${batchId}: ${error.message}`);
+  }
+
+  const rows = (data ?? []) as Array<Record<string, unknown>>;
+  const statuses = rows.map((row) => String(row["status"] ?? "queued"));
+  const estimatedCostUsd = rows.reduce((sum, row) => sum + asNumber(row["estimated_cost_usd"]), 0);
+  const actualCostUsd = rows.reduce((sum, row) => sum + asNumber(row["actual_cost_usd"]), 0);
+  const startedAts = rows
+    .map((row) => row["started_at"])
+    .filter((value): value is string => typeof value === "string")
+    .sort();
+  const completedAts = rows
+    .map((row) => row["completed_at"])
+    .filter((value): value is string => typeof value === "string")
+    .sort();
+
+  let status = "queued";
+  if (statuses.length === 0) {
+    status = "queued";
+  } else if (statuses.every((entry) => entry === "cancelled")) {
+    status = "cancelled";
+  } else if (statuses.every((entry) => entry === "completed")) {
+    status = "completed";
+  } else if (statuses.every((entry) => entry === "failed")) {
+    status = "failed";
+  } else if (statuses.some((entry) => entry === "running")) {
+    status = "running";
+  } else if (statuses.some((entry) => entry === "failed" || entry === "cancelled" || entry === "completed")) {
+    status = "partial";
+  }
+
+  const isTerminal = statuses.length > 0 && statuses.every((entry) => ["completed", "failed", "cancelled"].includes(entry));
+  const { error: updateError } = await db
+    .from("discovery_job_batches")
+    .update({
+      status,
+      started_at: startedAts[0] ?? null,
+      completed_at: isTerminal ? completedAts[completedAts.length - 1] ?? new Date().toISOString() : null,
+      estimated_cost_usd: Number(estimatedCostUsd.toFixed(2)),
+      actual_cost_usd: Number(actualCostUsd.toFixed(2)),
+    })
+    .eq("id", batchId);
+
+  if (updateError) {
+    throw new Error(`Failed to update batch ${batchId}: ${updateError.message}`);
+  }
+}
+
+function parseSources(raw: string | string[] | undefined): string[] | undefined {
+  if (!raw) return undefined;
+  const parts = Array.isArray(raw) ? raw : raw.split(",");
+  const values = parts.map((part) => part.trim()).filter(Boolean);
+  return values.length > 0 ? values : undefined;
+}
+
 export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
-  // GET /discovery/jobs — admin or CM
   app.get("/discovery/jobs", { preHandler: requireAuth }, async (request, reply) => {
     const authUser = getAuthUser(request);
     const parseResult = listJobsQuerySchema.safeParse(request.query);
@@ -62,14 +225,12 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
       .order("created_at", { ascending: false })
       .limit(limit + 1);
 
-    // CM sees only their own jobs
     if (authUser.role === "cm") {
       query = query.eq("user_id", authUser.id);
     }
 
     if (status) {
-      const statuses = status.split(",").map((s) => s.trim());
-      query = query.in("status", statuses);
+      query = query.in("status", status.split(",").map((entry) => entry.trim()));
     }
 
     if (cursor) {
@@ -92,14 +253,11 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
     const rows = data ?? [];
     const hasMore = rows.length > limit;
     const page = hasMore ? rows.slice(0, limit) : rows;
-    const nextCursor = hasMore
-      ? (page[page.length - 1] as { id: string } | undefined)?.id ?? null
-      : null;
+    const nextCursor = hasMore ? (page[page.length - 1] as { id: string } | undefined)?.id ?? null : null;
 
     return reply.status(200).send({ data: page, next_cursor: nextCursor, total: count ?? 0 });
   });
 
-  // POST /discovery/jobs — admin only
   app.post("/discovery/jobs", { preHandler: requireAdmin }, async (request, reply) => {
     const parseResult = createJobSchema.safeParse(request.body);
     if (!parseResult.success) {
@@ -113,6 +271,7 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
     const authUser = getAuthUser(request);
     const body = parseResult.data;
     const db = getDb();
+    const estimatedCostUsd = body.source === "google_places" ? estimateGooglePlacesBatchCost(body.max_results) : 0;
 
     const { data: job, error } = await db
       .from("discovery_jobs")
@@ -127,6 +286,16 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
         status: "queued",
         triggered_by: "manual",
         user_id: authUser.id,
+        estimated_cost_usd: body.source === "google_places" ? estimatedCostUsd : null,
+        cost_cap_usd: body.source === "google_places" ? body.cost_cap_usd ?? null : null,
+        source_params:
+          body.source === "google_places"
+            ? {
+                profile: body.profile ?? "B",
+                concurrency: body.concurrency ?? 5,
+                cost_cap_usd: body.cost_cap_usd ?? null,
+              }
+            : null,
       })
       .select()
       .single();
@@ -139,65 +308,375 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
     return reply.status(201).send({ data: job });
   });
 
-  // PATCH /discovery/jobs/:id — admin only (pause/resume/cancel)
-  app.patch(
-    "/discovery/jobs/:id",
-    { preHandler: requireAdmin },
-    async (request, reply) => {
-      const { id } = request.params as { id: string };
-      const parseResult = patchJobSchema.safeParse(request.body);
-      if (!parseResult.success) {
-        return reply.status(400).send({
-          error: "Validation error",
-          error_code: "validation_error",
-          details: parseResult.error.flatten().fieldErrors,
-        });
-      }
+  app.patch("/discovery/jobs/:id", { preHandler: requireAdmin }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const parseResult = patchJobSchema.safeParse(request.body);
+    if (!parseResult.success) {
+      return reply.status(400).send({
+        error: "Validation error",
+        error_code: "validation_error",
+        details: parseResult.error.flatten().fieldErrors,
+      });
+    }
 
-      const db = getDb();
-      const { data: job, error: fetchError } = await db
-        .from("discovery_jobs")
-        .select("id, status")
-        .eq("id", id)
+    const db = getDb();
+    const { data: job, error: fetchError } = await db
+      .from("discovery_jobs")
+      .select("id, status, batch_id")
+      .eq("id", id)
+      .single();
+
+    if (fetchError || !job) {
+      return reply.status(404).send({ error: "Job not found", error_code: "not_found" });
+    }
+
+    const { action } = parseResult.data;
+    const newStatus = JOB_STATUS_TRANSITIONS[action];
+    const { data: updated, error: updateError } = await db
+      .from("discovery_jobs")
+      .update({ status: newStatus })
+      .eq("id", id)
+      .select()
+      .single();
+
+    if (updateError) {
+      return reply.status(500).send({ error: "Database error", error_code: "db_error" });
+    }
+
+    if ((updated as { batch_id?: string | null }).batch_id) {
+      await recomputeBatchAggregate(db, (updated as { batch_id: string }).batch_id);
+    }
+
+    return reply.status(200).send({ data: updated });
+  });
+
+  app.post("/discovery/job-batches", { preHandler: requireAdmin }, async (request, reply) => {
+    const parseResult = createBatchSchema.safeParse(request.body);
+    if (!parseResult.success) {
+      return reply.status(400).send({
+        error: "Validation error",
+        error_code: "validation_error",
+        details: parseResult.error.flatten().fieldErrors,
+      });
+    }
+
+    const authUser = getAuthUser(request);
+    const body = parseResult.data;
+    const db = getDb();
+    const uniqueSources = [...new Set(body.sources)];
+    const estimatedCostUsd = uniqueSources.reduce((sum, source) => {
+      if (source !== "google_places") return sum;
+      return sum + estimateGooglePlacesBatchCost(body.max_results);
+    }, 0);
+    const costCapUsd = body.google_places?.cost_cap_usd ?? null;
+
+    const { data: batch, error: batchError } = await db
+      .from("discovery_job_batches")
+      .insert({
+        user_id: authUser.id,
+        location: body.location,
+        location_key: buildLocationKey(body.location),
+        niche: body.niche ?? null,
+        sources: uniqueSources,
+        max_results: body.max_results,
+        cpu_budget: body.cpu_budget,
+        google_places: body.google_places ?? null,
+        recommendation_origin: body.recommendation_origin ?? { type: "manual" },
+        estimated_cost_usd: Number(estimatedCostUsd.toFixed(2)),
+        actual_cost_usd: 0,
+        cost_cap_usd: costCapUsd,
+        status: "queued",
+      })
+      .select()
+      .single();
+
+    if (batchError || !batch) {
+      request.log.error({ error: batchError }, "discovery batch create error");
+      return reply.status(500).send({ error: "Database error", error_code: "db_error" });
+    }
+
+    const jobsPayload = uniqueSources.map((source) => ({
+      batch_id: (batch as { id: string }).id,
+      source,
+      location: body.location,
+      niche: body.niche ?? null,
+      profile: source === "google_places" ? body.google_places?.profile ?? "B" : null,
+      concurrency: source === "google_places" ? body.google_places?.concurrency ?? 5 : null,
+      max_results: body.max_results,
+      cpu_budget: body.cpu_budget,
+      status: "queued",
+      triggered_by: body.recommendation_origin?.type === "manual" || !body.recommendation_origin ? "manual" : "gap_analysis",
+      user_id: authUser.id,
+      estimated_cost_usd: source === "google_places" ? Number(estimateGooglePlacesBatchCost(body.max_results).toFixed(2)) : 0,
+      actual_cost_usd: 0,
+      cost_cap_usd: source === "google_places" ? body.google_places?.cost_cap_usd ?? null : null,
+      source_params:
+        source === "google_places"
+          ? {
+              profile: body.google_places?.profile ?? "B",
+              concurrency: body.google_places?.concurrency ?? 5,
+              cost_cap_usd: body.google_places?.cost_cap_usd ?? null,
+            }
+          : null,
+    }));
+
+    const { data: jobs, error: jobsError } = await db.from("discovery_jobs").insert(jobsPayload).select();
+    if (jobsError) {
+      request.log.error({ error: jobsError, batchId: (batch as { id: string }).id }, "discovery batch jobs create error");
+      return reply.status(500).send({ error: "Database error", error_code: "db_error" });
+    }
+
+    return reply.status(201).send({ data: { ...batch, jobs: jobs ?? [] } });
+  });
+
+  app.get("/discovery/job-batches", { preHandler: requireAdmin }, async (request, reply) => {
+    const parseResult = listBatchesQuerySchema.safeParse(request.query);
+    if (!parseResult.success) {
+      return reply.status(400).send({
+        error: "Invalid query",
+        error_code: "invalid_query",
+        details: parseResult.error.flatten().fieldErrors,
+      });
+    }
+
+    const { status, cursor, limit, include_jobs } = parseResult.data;
+    const db = getDb();
+    let query = db
+      .from("discovery_job_batches")
+      .select("*", { count: "exact" })
+      .order("created_at", { ascending: false })
+      .limit(limit + 1);
+
+    if (status) {
+      query = query.in("status", status.split(",").map((entry) => entry.trim()));
+    }
+
+    if (cursor) {
+      const { data: cursorRow, error: cursorError } = await db
+        .from("discovery_job_batches")
+        .select("created_at")
+        .eq("id", cursor)
         .single();
-
-      if (fetchError || !job) {
-        return reply.status(404).send({ error: "Job not found", error_code: "not_found" });
-      }
-
-      const { action } = parseResult.data;
-      const newStatus = JOB_STATUS_TRANSITIONS[action];
-
-      const { data: updated, error: updateError } = await db
-        .from("discovery_jobs")
-        .update({ status: newStatus })
-        .eq("id", id)
-        .select()
-        .single();
-
-      if (updateError) {
+      if (cursorError && !isDiscoveryBatchSchemaMissing(cursorError)) {
+        request.log.error({ error: cursorError }, "discovery batches cursor lookup error");
         return reply.status(500).send({ error: "Database error", error_code: "db_error" });
       }
-
-      return reply.status(200).send({ data: updated });
+      if (cursorRow) {
+        query = query.lt("created_at", (cursorRow as { created_at: string }).created_at);
+      }
     }
-  );
 
-  // GET /discovery/suggestions — intentionally unavailable until gap analysis exists
-  app.get("/discovery/suggestions", { preHandler: requireAdmin }, async (_request, reply) => {
-    return reply.status(501).send({
-      error: "Discovery suggestions are not available in the current jobs-only control center",
-      error_code: "feature_not_available",
-      capability: "jobs_only",
+    const { data, error, count } = await query;
+    if (error) {
+      if (isDiscoveryBatchSchemaMissing(error)) {
+        request.log.warn({ error }, "discovery batches schema missing; returning empty workspace list");
+        return reply.status(200).send({ data: [], next_cursor: null, total: 0 });
+      }
+      request.log.error({ error }, "discovery batches list error");
+      return reply.status(500).send({ error: "Database error", error_code: "db_error" });
+    }
+
+    const rows = data ?? [];
+    const hasMore = rows.length > limit;
+    const page = hasMore ? rows.slice(0, limit) : rows;
+    const nextCursor = hasMore ? (page[page.length - 1] as { id: string } | undefined)?.id ?? null : null;
+
+    if (!include_jobs || page.length === 0) {
+      return reply.status(200).send({ data: page, next_cursor: nextCursor, total: count ?? 0 });
+    }
+
+    const batchIds = page.map((row) => (row as { id: string }).id);
+    const { data: jobs, error: jobsError } = await db
+      .from("discovery_jobs")
+      .select("*")
+      .in("batch_id", batchIds)
+      .order("created_at", { ascending: true });
+
+    if (jobsError) {
+      if (isDiscoveryBatchSchemaMissing(jobsError)) {
+        request.log.warn({ error: jobsError }, "discovery batch children schema missing; returning batches without jobs");
+        return reply.status(200).send({
+          data: page.map((row) => ({ ...row, jobs: [] })),
+          next_cursor: nextCursor,
+          total: count ?? 0,
+        });
+      }
+      request.log.error({ error: jobsError }, "discovery batch children list error");
+      return reply.status(500).send({ error: "Database error", error_code: "db_error" });
+    }
+
+    const jobsByBatch = new Map<string, unknown[]>();
+    for (const job of jobs ?? []) {
+      const batchId = (job as { batch_id?: string | null }).batch_id;
+      if (!batchId) continue;
+      const current = jobsByBatch.get(batchId) ?? [];
+      current.push(job);
+      jobsByBatch.set(batchId, current);
+    }
+
+    return reply.status(200).send({
+      data: page.map((row) => ({ ...row, jobs: jobsByBatch.get((row as { id: string }).id) ?? [] })),
+      next_cursor: nextCursor,
+      total: count ?? 0,
     });
   });
 
-  // GET /discovery/coverage — intentionally unavailable until there is a real coverage model
-  app.get("/discovery/coverage", { preHandler: requireAdmin }, async (_request, reply) => {
-    return reply.status(501).send({
-      error: "Discovery coverage is not available in the current jobs-only control center",
-      error_code: "feature_not_available",
-      capability: "jobs_only",
+  app.patch("/discovery/job-batches/:id", { preHandler: requireAdmin }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const parseResult = batchActionSchema.safeParse(request.body);
+    if (!parseResult.success) {
+      return reply.status(400).send({
+        error: "Validation error",
+        error_code: "validation_error",
+        details: parseResult.error.flatten().fieldErrors,
+      });
+    }
+
+    const db = getDb();
+    const { data: batch, error: batchError } = await db
+      .from("discovery_job_batches")
+      .select("id")
+      .eq("id", id)
+      .single();
+
+    if (batchError || !batch) {
+      return reply.status(404).send({ error: "Batch not found", error_code: "not_found" });
+    }
+
+    const { action } = parseResult.data;
+    const nextStatus = JOB_STATUS_TRANSITIONS[action];
+    const statusFilter = action === "resume" ? ["paused"] : ["queued", "running", "paused"];
+    const { error: updateError } = await db
+      .from("discovery_jobs")
+      .update({ status: nextStatus })
+      .eq("batch_id", id)
+      .in("status", statusFilter);
+
+    if (updateError) {
+      return reply.status(500).send({ error: "Database error", error_code: "db_error" });
+    }
+
+    await recomputeBatchAggregate(db, id);
+
+    const { data: updated } = await db
+      .from("discovery_job_batches")
+      .select("*")
+      .eq("id", id)
+      .single();
+
+    return reply.status(200).send({ data: updated });
+  });
+
+  app.get("/discovery/recommendations", { preHandler: requireAdmin }, async (request, reply) => {
+    const parsedQuery = recommendationsQuerySchema.safeParse(request.query);
+    if (!parsedQuery.success) {
+      return reply.status(400).send({
+        error: "Invalid query",
+        error_code: "invalid_query",
+        details: parsedQuery.error.flatten().fieldErrors,
+      });
+    }
+
+    const db = getDb();
+    const sources = parseSources(parsedQuery.data.sources);
+    const [leadsRes, jobsRes, configRes, runsRes] = await Promise.all([
+      db
+        .from("leads")
+        .select("id, source, niche, address, prospect_score, gps, corroborating_sources")
+        .order("created_at", { ascending: false })
+        .limit(5000),
+      db
+        .from("discovery_jobs")
+        .select("source, niche, location, created_at")
+        .order("created_at", { ascending: false })
+        .limit(500),
+      db
+        .from("pipeline_config")
+        .select("google_places_budget_total, google_places_budget_spent, google_places_alert_threshold")
+        .limit(1)
+        .single(),
+      db
+        .from("runs")
+        .select("finished_at, stats")
+        .eq("status", "completed")
+        .order("finished_at", { ascending: false })
+        .limit(500),
+    ]);
+
+    if (leadsRes.error || jobsRes.error || runsRes.error) {
+      request.log.error({ leads: leadsRes.error, jobs: jobsRes.error, runs: runsRes.error }, "discovery recommendations load error");
+      return reply.status(500).send({ error: "Database error", error_code: "db_error" });
+    }
+
+    const data = buildDiscoveryRecommendations({
+      leads: (leadsRes.data ?? []) as never,
+      discoveryJobs: (jobsRes.data ?? []) as never,
+      budget: (configRes.data as never) ?? null,
+      completedRuns: (runsRes.data ?? []) as never,
+      ...(sources ? { selectedSources: sources } : {}),
+      ...(parsedQuery.data.location ? { location: parsedQuery.data.location } : {}),
+      ...(parsedQuery.data.niche ? { niche: parsedQuery.data.niche } : {}),
+      limit: parsedQuery.data.limit,
+    });
+
+    return reply.status(200).send({ data });
+  });
+
+  app.get("/admin/geo/lead-density", { preHandler: requireAdmin }, async (request, reply) => {
+    const parsedQuery = recommendationsQuerySchema.safeParse(request.query);
+    if (!parsedQuery.success) {
+      return reply.status(400).send({
+        error: "Invalid query",
+        error_code: "invalid_query",
+        details: parsedQuery.error.flatten().fieldErrors,
+      });
+    }
+
+    const db = getDb();
+    const leadsRes = await db
+      .from("leads")
+      .select("id, source, niche, address, prospect_score, gps, corroborating_sources")
+      .order("created_at", { ascending: false })
+      .limit(5000);
+
+    if (leadsRes.error) {
+      request.log.error({ error: leadsRes.error }, "lead density load error");
+      return reply.status(500).send({ error: "Database error", error_code: "db_error" });
+    }
+
+    const density = buildLeadDensityRows((leadsRes.data ?? []) as never, parsedQuery.data.location ?? null);
+    return reply.status(200).send({ data: { locations: density, exact_points: density.flatMap((row) => row.gps_points) } });
+  });
+
+  app.get("/discovery/suggestions", { preHandler: requireAdmin }, async (request, reply) => {
+    const query = new URLSearchParams(request.query as Record<string, string>).toString();
+    const recommendations = await app.inject({
+      method: "GET",
+      url: `/api/v1/discovery/recommendations${query ? `?${query}` : ""}`,
+      headers: request.headers,
+    });
+    return reply.status(recommendations.statusCode).send(recommendations.json());
+  });
+
+  app.get("/discovery/coverage", { preHandler: requireAdmin }, async (request, reply) => {
+    const query = new URLSearchParams(request.query as Record<string, string>).toString();
+    const recommendations = await app.inject({
+      method: "GET",
+      url: `/api/v1/discovery/recommendations${query ? `?${query}` : ""}`,
+      headers: request.headers,
+    });
+
+    if (recommendations.statusCode !== 200) {
+      return reply.status(recommendations.statusCode).send(recommendations.json());
+    }
+
+    const body = recommendations.json() as { data: ReturnType<typeof buildDiscoveryRecommendations> };
+    return reply.status(200).send({
+      data: {
+        coverage_gaps_global: body.data.coverage_gaps_global,
+        coverage_gaps_by_location: body.data.coverage_gaps_by_location,
+        supported_sources: supportedDiscoverySources(),
+      },
     });
   });
 }

@@ -157,6 +157,7 @@ describe("POST /api/v1/campaigns", () => {
       body: JSON.stringify({ segment_filter: {} }),
     });
     expect(res.statusCode).toBe(400);
+    expect(JSON.parse(res.body).error_code).toBe("validation_error");
     await app.close();
   });
 });
