@@ -1,9 +1,19 @@
-import type { LLMProvider, LLMRequest, OfferPackage } from "./types.js";
+import type {
+  LeadAssistantBrief,
+  LeadAssistantRequest,
+  LLMProvider,
+  LLMRequest,
+  OfferPackage,
+} from "./types.js";
+import {
+  buildCommercialAssistantMessages,
+  parseCommercialAssistant,
+} from "./lead-assistant.js";
 
 const DEFAULT_COST_PER_1K_IN = 0.0005;
 const DEFAULT_COST_PER_1K_OUT = 0.0015;
 
-function buildMessages(req: LLMRequest): Array<{ role: string; content: string }> {
+function buildOfferMessages(req: LLMRequest): Array<{ role: string; content: string }> {
   const system =
     "Eres un asistente de ventas para Blindspot, empresa uruguaya de marketing digital. " +
     "Genera mensajes cortos, directos y personalizados para prospectar negocios locales.";
@@ -34,7 +44,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
     this.model = model;
   }
 
-  async generateOffer(req: LLMRequest): Promise<OfferPackage> {
+  private async generateCompletion(messages: Array<{ role: string; content: string }>, maxTokens: number) {
     const response = await fetch(`${this.baseUrl}/chat/completions`, {
       method: "POST",
       headers: {
@@ -43,8 +53,8 @@ export class OpenAICompatibleProvider implements LLMProvider {
       },
       body: JSON.stringify({
         model: this.model,
-        messages: buildMessages(req),
-        max_tokens: 200,
+        messages,
+        max_tokens: maxTokens,
         temperature: 0.7,
       }),
     });
@@ -61,19 +71,34 @@ export class OpenAICompatibleProvider implements LLMProvider {
     const text = (data.choices?.[0]?.message?.content ?? "").trim();
     const tokensIn = data.usage?.prompt_tokens ?? 0;
     const tokensOut = data.usage?.completion_tokens ?? 0;
-    const cost =
-      (tokensIn / 1000) * DEFAULT_COST_PER_1K_IN +
-      (tokensOut / 1000) * DEFAULT_COST_PER_1K_OUT;
+    const cost = (tokensIn / 1000) * DEFAULT_COST_PER_1K_IN + (tokensOut / 1000) * DEFAULT_COST_PER_1K_OUT;
+
+    return { text, tokensIn, tokensOut, cost };
+  }
+
+  async generateOffer(req: LLMRequest): Promise<OfferPackage> {
+    const result = await this.generateCompletion(buildOfferMessages(req), 200);
 
     return {
-      text,
+      text: result.text,
       source_llm: this.name,
       generated_at: new Date().toISOString(),
       provider: this.name,
       model: this.model,
-      tokens_in: tokensIn,
-      tokens_out: tokensOut,
-      cost_usd_estimated: cost,
+      tokens_in: result.tokensIn,
+      tokens_out: result.tokensOut,
+      cost_usd_estimated: result.cost,
+    };
+  }
+
+  async generateLeadBrief(req: LeadAssistantRequest): Promise<LeadAssistantBrief> {
+    const result = await this.generateCompletion(buildCommercialAssistantMessages(req), 420);
+    return {
+      ...parseCommercialAssistant(result.text, this.name),
+      model: this.model,
+      tokens_in: result.tokensIn,
+      tokens_out: result.tokensOut,
+      cost_usd_estimated: result.cost,
     };
   }
 }

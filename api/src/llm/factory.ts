@@ -6,12 +6,16 @@ import type { LLMProvider } from "./types.js";
 
 export function createLLMProvider(): LLMProvider {
   const providerName = process.env["LLM_PROVIDER"];
+  const geminiApiKey =
+    process.env["GEMINI_API_KEY"] ??
+    process.env["GOOGLE_GEMINI_API_KEY"] ??
+    process.env["VITE_GOOGLE_GEMINI_API_KEY"] ??
+    "";
 
-  if (providerName === "gemini") {
-    const apiKey = process.env["GEMINI_API_KEY"] ?? "";
+  if (providerName === "gemini" || (!providerName && geminiApiKey)) {
     const model = process.env["LLM_MODEL"] ?? "gemini-2.0-flash";
-    if (!apiKey) return new TemplateProvider();
-    return new GeminiProvider(apiKey, model);
+    if (!geminiApiKey) return new TemplateProvider();
+    return new GeminiProvider(geminiApiKey, model);
   }
 
   if (providerName === "ollama") {

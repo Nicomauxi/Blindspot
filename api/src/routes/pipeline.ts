@@ -24,6 +24,8 @@ const runBodySchema = z.object({
   dry_run: z.boolean().optional(),
 });
 
+const ACTIVE_RUN_STATUSES = ["pending", "running"] as const;
+
 const runsQuerySchema = z.object({
   status: z.string().optional(),
   cursor: permissiveUuid.optional(),
@@ -173,7 +175,7 @@ export async function pipelineRoutes(app: FastifyInstance): Promise<void> {
     const { data: activeRun } = await db
       .from("pipeline_runs")
       .select("id, status")
-      .eq("status", "running")
+      .in("status", [...ACTIVE_RUN_STATUSES])
       .limit(1)
       .maybeSingle();
 
@@ -261,7 +263,7 @@ export async function pipelineRoutes(app: FastifyInstance): Promise<void> {
     const { data: activeRun } = await db
       .from("pipeline_runs")
       .select("id")
-      .eq("status", "running")
+      .in("status", [...ACTIVE_RUN_STATUSES])
       .limit(1)
       .maybeSingle();
 

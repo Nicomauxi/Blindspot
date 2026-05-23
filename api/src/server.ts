@@ -17,17 +17,54 @@ import { systemRoutes } from "./routes/admin/system.js";
 import { costsRoutes } from "./routes/admin/costs.js";
 import { performanceRoutes } from "./routes/admin/performance.js";
 import { servicePricingRoutes } from "./routes/service-pricing.js";
+import { backupsRoutes } from "./routes/admin/backups.js";
+import { getBackupScheduler } from "./modules/backups/runtime.js";
 
 const PORT = Number(process.env["PORT"] ?? 3001);
 const CORS_ORIGIN = process.env["CORS_ORIGIN"] ?? "http://localhost:3000";
+
+function normalizeOrigins(value: string): string[] {
+  return value
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+}
+
+function isAllowedDevelopmentOrigin(origin: string): boolean {
+  try {
+    const url = new URL(origin);
+    const host = url.hostname.toLowerCase();
+    if (host === "localhost" || host === "127.0.0.1") return true;
+    return /^192\.168\.\d{1,3}\.\d{1,3}$/.test(host) || /^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host);
+  } catch {
+    return false;
+  }
+}
 
 export async function buildServer() {
   const jwtSecret = process.env["API_JWT_SECRET"];
   if (!jwtSecret) throw new Error("API_JWT_SECRET is required");
 
   const app = Fastify({ logger: true });
+  const explicitOrigins = normalizeOrigins(CORS_ORIGIN);
 
-  await app.register(cors, { origin: CORS_ORIGIN, credentials: true });
+  await app.register(cors, {
+    origin(origin, callback) {
+      if (!origin) {
+        callback(null, true);
+        return;
+      }
+
+      const allowed =
+        explicitOrigins.includes(origin) ||
+        (process.env["NODE_ENV"] !== "production" && isAllowedDevelopmentOrigin(origin));
+
+      callback(null, allowed);
+    },
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Authorization", "Content-Type"],
+  });
   await app.register(helmet);
   await app.register(rateLimit, { max: 100, timeWindow: "1 minute" });
   await app.register(jwt, { secret: jwtSecret });
@@ -43,6 +80,7 @@ export async function buildServer() {
   await app.register(statsRoutes, { prefix: "/api/v1" });
   await app.register(auditLogRoutes, { prefix: "/api/v1" });
   await app.register(systemRoutes, { prefix: "/api/v1" });
+  await app.register(backupsRoutes, { prefix: "/api/v1" });
   await app.register(costsRoutes, { prefix: "/api/v1" });
   await app.register(performanceRoutes, { prefix: "/api/v1" });
   await app.register(servicePricingRoutes, { prefix: "/api/v1" });
@@ -51,10 +89,21 @@ export async function buildServer() {
 }
 
 if (process.argv[1] && process.argv[1].endsWith("server.ts")) {
+  const backupScheduler = getBackupScheduler();
+  await backupScheduler.start();
+
   const app = await buildServer();
+  const shutdown = () => {
+    backupScheduler.stop();
+  };
+
+  process.on("SIGTERM", shutdown);
+  process.on("SIGINT", shutdown);
+
   try {
     await app.listen({ port: PORT, host: "0.0.0.0" });
   } catch (err) {
+    shutdown();
     process.stderr.write(`Fatal: ${err}\n`);
     process.exit(1);
   }

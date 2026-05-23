@@ -1,5 +1,6 @@
 -- Migration 011: add PostGIS geography column and backfill reliable coordinates.
--- Extension enablement is env-specific and documented in 011_postgis.md.
+
+CREATE EXTENSION IF NOT EXISTS postgis;
 
 ALTER TABLE leads
   ADD COLUMN IF NOT EXISTS gps geography(Point, 4326);

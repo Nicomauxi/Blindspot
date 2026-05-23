@@ -17,9 +17,13 @@ async function request<T>(
   token?: string
 ): Promise<T> {
   const headers: Record<string, string> = {
-    "Content-Type": "application/json",
     ...(options.headers as Record<string, string>),
   };
+
+  if (options.body != null && !headers["Content-Type"]) {
+    headers["Content-Type"] = "application/json";
+  }
+
   if (token) headers["Authorization"] = `Bearer ${token}`;
 
   const res = await fetch(`${BASE}${path}`, { ...options, headers });
@@ -45,7 +49,7 @@ export type SingleResponse<T> = { data: T };
 
 // Auth
 export async function login(email: string, password: string) {
-  return request<{ token: string }>("/auth/login", {
+  return request<{ token: string; role: "admin" | "cm" }>("/auth/login", {
     method: "POST",
     body: JSON.stringify({ email, password }),
   });
@@ -127,6 +131,19 @@ export type HealthStatus = {
     last_completed_at: string | null;
     missed: boolean;
   };
+  backups: {
+    last_backup: BackupRun | null;
+    next_backup_at: string | null;
+    scheduler: BackupSchedulerState;
+    directory: string;
+    directory_valid: boolean;
+    count: number;
+    max_backups: number;
+    alerts: string[];
+    maintenance_mode: boolean;
+    last_restore: BackupRestoreRun | null;
+    restore: BackupOverview["restore"];
+  } | null;
   ts: string;
 };
 
@@ -146,10 +163,14 @@ export type AdminSystemStatus = {
   };
   pipeline: {
     cron_enabled: boolean;
+    cron_expression: string | null;
     next_run_at: string | null;
     last_run_at: string | null;
     last_status: string | null;
     missed: boolean;
+    active_run: PipelineRun | null;
+    runs_recent: Record<string, { total: number; last_status: string | null; last_run_at: string | null }>;
+    recent: PipelineRun[];
   };
   processes: {
     core: {
@@ -159,6 +180,12 @@ export type AdminSystemStatus = {
       status: string;
     };
     api: {
+      running: boolean;
+      pid: number | null;
+      uptime_seconds: number | null;
+      status: string;
+    };
+    db: {
       running: boolean;
       pid: number | null;
       uptime_seconds: number | null;
@@ -177,6 +204,39 @@ export type AdminSystemStatus = {
     last_completed_at: string | null;
     missed: boolean;
   };
+  discovery: {
+    summary: Record<string, number>;
+    backlog: number;
+    recent_manual: DiscoveryJob[];
+    recent_failed: DiscoveryJob[];
+    recent: DiscoveryJob[];
+  };
+  integrations: {
+    ai: {
+      provider_active: string;
+      model: string | null;
+      key_configured: boolean;
+    };
+    webhook: {
+      configured: boolean;
+      events: string[];
+      url: string | null;
+    };
+  };
+  backups: {
+    scheduler: BackupSchedulerState;
+    config: {
+      enabled: boolean;
+      cron_expression: string;
+      next_backup_at: string | null;
+      directory: string;
+      directory_valid: boolean;
+      max_backups: number;
+    };
+    summary: BackupOverview["summary"];
+    recent: BackupRun[];
+  } | null;
+  alerts: string[];
   ts: string;
 };
 
@@ -201,6 +261,135 @@ export async function getSystemStatus(token: string) {
 
 export async function restartSystemProcess(token: string, target: "core" | "api") {
   return request<RestartResponse>(`/api/v1/admin/system/restart-${target}`, { method: "POST" }, token);
+}
+
+export type BackupRun = {
+  id: string;
+  trigger: "manual" | "scheduled";
+  purpose: "standard" | "restore_checkpoint";
+  status: "running" | "completed" | "failed";
+  path: string | null;
+  filename: string | null;
+  created_at: string;
+  completed_at: string | null;
+  size_bytes: number | null;
+  error_message: string | null;
+  cleanup_deleted_count: number;
+  cleanup_error_message: string | null;
+  deleted_at: string | null;
+};
+
+export type BackupSchedulerState = {
+  started: boolean;
+  cron_active: boolean;
+  status: "stopped" | "idle" | "scheduled" | "invalid_cron" | "running" | "error" | "maintenance";
+  last_reload_at: string | null;
+  last_tick_at: string | null;
+  last_error_at: string | null;
+  last_error_message: string | null;
+};
+
+export type BackupRestoreRun = {
+  id: string;
+  backup_run_id: string | null;
+  checkpoint_backup_run_id: string | null;
+  status: "running" | "completed" | "failed";
+  backup_path: string | null;
+  backup_filename: string | null;
+  checkpoint_path: string | null;
+  checkpoint_filename: string | null;
+  started_at: string;
+  completed_at: string | null;
+  error_message: string | null;
+  triggered_by_user_id: string | null;
+  maintenance_started_at: string | null;
+  maintenance_finished_at: string | null;
+};
+
+export type BackupOverview = {
+  config: {
+    id: "singleton";
+    updated_at: string;
+    enabled: boolean;
+    cron_expression: string;
+    scheduled_for: string | null;
+    directory: string | null;
+    effective_directory: string;
+    directory_valid: boolean;
+    directory_error: string | null;
+    max_backups: number;
+    last_started_at: string | null;
+    last_completed_at: string | null;
+    last_successful_at: string | null;
+    last_error_at: string | null;
+    last_error_message: string | null;
+    scheduler_heartbeat_at: string | null;
+    maintenance_mode: boolean;
+    maintenance_started_at: string | null;
+    restore_started_at: string | null;
+    restore_completed_at: string | null;
+    restore_error_at: string | null;
+    restore_error_message: string | null;
+  };
+  scheduler: BackupSchedulerState;
+  summary: {
+    last_backup: BackupRun | null;
+    next_backup_at: string | null;
+    backup_count: number;
+    max_backups: number;
+    last_restore: BackupRestoreRun | null;
+  };
+  restore: {
+    active: {
+      status: "running" | "completed" | "failed";
+      backup_run_id: string;
+      backup_filename: string | null;
+      checkpoint_backup_run_id: string | null;
+      checkpoint_filename: string | null;
+      started_at: string;
+      maintenance_started_at: string;
+      completed_at: string | null;
+      error_message: string | null;
+      triggered_by_user_id: string | null;
+    } | null;
+    last_restore: BackupRestoreRun | null;
+  };
+  alerts: string[];
+  recent: BackupRun[];
+};
+
+export async function getBackupsOverview(token: string) {
+  return request<{ data: BackupOverview }>("/api/v1/admin/backups", {}, token);
+}
+
+export async function patchBackupConfig(
+  token: string,
+  data: Partial<{
+    enabled: boolean;
+    cron_expression: string;
+    directory: string | null;
+    max_backups: number;
+  }>
+) {
+  return request<{ data: { config: BackupOverview["config"]; overview: BackupOverview } }>("/api/v1/admin/backups/config", {
+    method: "PATCH",
+    body: JSON.stringify(data),
+  }, token);
+}
+
+export async function runBackupNow(token: string) {
+  return request<{ data: BackupRun }>("/api/v1/admin/backups/run", { method: "POST" }, token);
+}
+
+export async function restoreBackupById(token: string, id: string) {
+  return request<{ data: BackupRestoreRun }>(`/api/v1/admin/backups/${id}/restore`, {
+    method: "POST",
+    body: JSON.stringify({ confirmation: "RESTORE" }),
+  }, token);
+}
+
+export async function deleteBackupById(token: string, id: string) {
+  return request<{ data: { id: string; deleted_at: string } }>(`/api/v1/admin/backups/${id}`, { method: "DELETE" }, token);
 }
 
 // Audit log
@@ -266,6 +455,14 @@ export type PipelineRun = {
   phase_results: Record<string, unknown> | null;
 };
 
+export type PipelineLogLine = {
+  ts?: string;
+  level?: string;
+  msg?: string;
+  phase?: string;
+  [key: string]: unknown;
+};
+
 export async function triggerPipelineRun(token: string, dryRun = false) {
   return request<SingleResponse<{ run_id: string; dry_run: boolean }>>(
     "/api/v1/pipeline/run",
@@ -278,7 +475,7 @@ export async function triggerPipelineRun(token: string, dryRun = false) {
 }
 
 export async function abortPipelineRun(token: string) {
-  return request<{ aborted: boolean }>("/api/v1/pipeline/abort", { method: "POST" }, token);
+  return request<{ data: { run_id: string; abort_requested: boolean } }>("/api/v1/pipeline/abort", { method: "POST" }, token);
 }
 
 export async function listPipelineRuns(token: string, params: { status?: string; cursor?: string; limit?: number } = {}) {
@@ -287,6 +484,17 @@ export async function listPipelineRuns(token: string, params: { status?: string;
   if (params.cursor) qp.set("cursor", params.cursor);
   if (params.limit) qp.set("limit", String(params.limit));
   return request<PaginatedResponse<PipelineRun>>(`/api/v1/pipeline/runs?${qp}`, {}, token);
+}
+
+export async function getPipelineRun(token: string, runId: string) {
+  return request<SingleResponse<PipelineRun>>(`/api/v1/pipeline/runs/${runId}`, {}, token);
+}
+
+export async function getPipelineRunLog(token: string, runId: string, since?: string) {
+  const qp = new URLSearchParams();
+  if (since) qp.set("since", since);
+  const suffix = qp.toString() ? `?${qp.toString()}` : "";
+  return request<{ data: PipelineLogLine[] }>(`/api/v1/pipeline/runs/${runId}/log${suffix}`, {}, token);
 }
 
 export async function testWebhook(token: string) {
@@ -298,6 +506,35 @@ export async function testWebhook(token: string) {
 }
 
 // Leads
+export type LeadFieldEvidence = {
+  source: string;
+  label: string;
+  external_id: string | null;
+  confidence: number | null;
+  role: "primary" | "confirming" | "derived";
+  note: string | null;
+};
+
+export type LeadFieldSource = {
+  label: string;
+  value: string | number | boolean | null;
+  source: string | null;
+  confidence: number | null;
+  confirmations: number;
+  evidence: LeadFieldEvidence[];
+};
+
+export type CommercialEvidenceNode = {
+  id: string;
+  title: string;
+  summary: string;
+  strength: "high" | "medium" | "low";
+  source: string | null;
+  confirmations: number;
+  evidence: string[];
+  children?: CommercialEvidenceNode[];
+};
+
 export type LeadDashboard = {
   id: string;
   name: string;
@@ -307,6 +544,7 @@ export type LeadDashboard = {
   address: string | null;
   phone: string | null;
   whatsapp: string | null;
+  email: string | null;
   website: string | null;
   rating: number | null;
   review_count: number | null;
@@ -327,12 +565,17 @@ export type LeadDashboard = {
   data_confidence_score: number | null;
   contact_reliability_score: number | null;
   contact_ready: boolean | null;
+  sources_count?: number | null;
 };
 
 export type LeadDetail = LeadDashboard & {
   digital_footprint: Record<string, unknown> | null;
   inferred_state: Record<string, unknown> | null;
   score_breakdown: Record<string, unknown> | null;
+  lead_company_data: Record<string, unknown> | null;
+  canonical_fields: Record<string, unknown> | null;
+  field_sources: Record<string, LeadFieldSource> | null;
+  commercial_evidence_tree: CommercialEvidenceNode[] | null;
   notes: string | null;
   business_status: string | null;
 };
@@ -344,7 +587,10 @@ export async function listLeads(
     prospect_score_gte?: number;
     niche?: string;
     source?: string;
+    primary_offer?: string;
     q?: string;
+    sort_by?: "created_at" | "prospect_score";
+    sort_direction?: "asc" | "desc";
     cursor?: string;
     limit?: number;
   } = {}
@@ -354,7 +600,10 @@ export async function listLeads(
   if (params.prospect_score_gte != null) qp.set("prospect_score_gte", String(params.prospect_score_gte));
   if (params.niche) qp.set("niche", params.niche);
   if (params.source) qp.set("source", params.source);
+  if (params.primary_offer) qp.set("primary_offer", params.primary_offer);
   if (params.q) qp.set("q", params.q);
+  if (params.sort_by) qp.set("sort_by", params.sort_by);
+  if (params.sort_direction) qp.set("sort_direction", params.sort_direction);
   if (params.cursor) qp.set("cursor", params.cursor);
   if (params.limit) qp.set("limit", String(params.limit));
   return request<PaginatedResponse<LeadDashboard>>(`/api/v1/leads?${qp}`, {}, token);
@@ -430,7 +679,7 @@ export async function listCampaigns(token: string) {
 
 export async function createCampaign(
   token: string,
-  data: { name: string; segment_filter?: Record<string, unknown>; notes?: string }
+  data: { name: string; segment_filter?: Record<string, unknown>; notes?: string; status?: "active" | "paused" | "closed" }
 ) {
   return request<SingleResponse<Campaign>>("/api/v1/campaigns", {
     method: "POST",
@@ -463,6 +712,7 @@ export async function createOutreach(
   token: string,
   data: {
     lead_id: string;
+    campaign_id?: string | null;
     channel: string;
     offer_type?: string;
     status?: string;
@@ -501,11 +751,14 @@ export async function patchOutreach(
 // Discovery
 export type DiscoveryJob = {
   id: string;
+  batch_id: string | null;
+  batch_status?: string | null;
   source: string;
   location: string;
   niche: string | null;
   profile: string | null;
   max_results: number;
+  concurrency: number | null;
   cpu_budget: string;
   status: "queued" | "running" | "completed" | "failed" | "paused" | "cancelled";
   triggered_by: string;
@@ -514,7 +767,92 @@ export type DiscoveryJob = {
   started_at: string | null;
   completed_at: string | null;
   error_message: string | null;
+  estimated_cost_usd?: number | null;
+  actual_cost_usd?: number | null;
+  cost_cap_usd?: number | null;
+  linked_run_id?: string | null;
+  source_params?: Record<string, unknown> | null;
   created_at: string;
+};
+
+export type DiscoveryJobBatch = {
+  id: string;
+  location: string;
+  location_key: string;
+  niche: string | null;
+  sources: string[];
+  max_results: number;
+  cpu_budget: string;
+  google_places: {
+    profile?: "A" | "B" | "C" | "D";
+    concurrency?: number;
+    cost_cap_usd: number;
+  } | null;
+  recommendation_origin: {
+    type: "coverage_gap" | "location_density" | "top_niche" | "manual";
+    key?: string;
+  } | null;
+  estimated_cost_usd: number | null;
+  actual_cost_usd: number | null;
+  cost_cap_usd: number | null;
+  status: "queued" | "running" | "partial" | "completed" | "failed" | "cancelled";
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+  jobs?: DiscoveryJob[];
+};
+
+export type DiscoveryCoverageGap = {
+  key: string;
+  location_key: string;
+  location_label: string;
+  niche: string;
+  present_sources: string[];
+  missing_sources: string[];
+  commercial_density_score: number;
+  lead_count: number;
+  hot_leads_count: number;
+  avg_prospect_score: number;
+};
+
+export type DiscoveryLocationDensity = {
+  location_key: string;
+  location_label: string;
+  lead_count: number;
+  hot_leads_count: number;
+  avg_prospect_score: number;
+  commercial_density_score: number;
+  gps_points: Array<{ lat: number; lng: number }>;
+};
+
+export type DiscoveryRecommendationData = {
+  coverage_gaps_global: DiscoveryCoverageGap[];
+  coverage_gaps_by_location: Array<{
+    location_key: string;
+    location_label: string;
+    commercial_density_score: number;
+    gaps: DiscoveryCoverageGap[];
+  }>;
+  niche_suggestions: Array<{
+    key: string;
+    niche: string;
+    origin: "recent_discovery" | "existing_leads" | "top_by_source";
+    source?: string;
+    count?: number;
+  }>;
+  top_niches_by_source: Array<{
+    source: string;
+    niches: Array<{ niche: string; count: number }>;
+  }>;
+  google_places_budget: {
+    budget_total: number;
+    budget_spent: number;
+    budget_remaining: number;
+    alert_threshold: number;
+    over_alert: boolean;
+  } | null;
+  monthly_cost: number;
+  location_density: DiscoveryLocationDensity[];
 };
 
 export async function listDiscoveryJobs(
@@ -530,7 +868,16 @@ export async function listDiscoveryJobs(
 
 export async function createDiscoveryJob(
   token: string,
-  data: { source: string; location: string; niche?: string; max_results?: number; cpu_budget?: string }
+  data: {
+    source: string;
+    location: string;
+    niche?: string;
+    profile?: "A" | "B" | "C" | "D";
+    max_results?: number;
+    concurrency?: number;
+    cpu_budget?: string;
+    cost_cap_usd?: number;
+  }
 ) {
   return request<SingleResponse<DiscoveryJob>>("/api/v1/discovery/jobs", {
     method: "POST",
@@ -547,6 +894,69 @@ export async function patchDiscoveryJob(
     method: "PATCH",
     body: JSON.stringify({ action }),
   }, token);
+}
+
+export async function listDiscoveryJobBatches(
+  token: string,
+  params: { status?: string; cursor?: string; limit?: number; include_jobs?: boolean } = {}
+) {
+  const qp = new URLSearchParams();
+  if (params.status) qp.set("status", params.status);
+  if (params.cursor) qp.set("cursor", params.cursor);
+  if (params.limit) qp.set("limit", String(params.limit));
+  if (params.include_jobs) qp.set("include_jobs", "true");
+  return request<PaginatedResponse<DiscoveryJobBatch>>(`/api/v1/discovery/job-batches?${qp}`, {}, token);
+}
+
+export async function createDiscoveryJobBatch(
+  token: string,
+  data: {
+    sources: string[];
+    location: string;
+    niche?: string;
+    max_results?: number;
+    cpu_budget?: "conservative" | "balanced" | "aggressive";
+    google_places?: { profile?: "A" | "B" | "C" | "D"; concurrency?: number; cost_cap_usd: number };
+    recommendation_origin?: { type: "coverage_gap" | "location_density" | "top_niche" | "manual"; key?: string };
+  }
+) {
+  return request<SingleResponse<DiscoveryJobBatch>>("/api/v1/discovery/job-batches", {
+    method: "POST",
+    body: JSON.stringify(data),
+  }, token);
+}
+
+export async function patchDiscoveryJobBatch(
+  token: string,
+  id: string,
+  action: "pause" | "resume" | "cancel"
+) {
+  return request<SingleResponse<DiscoveryJobBatch>>(`/api/v1/discovery/job-batches/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ action }),
+  }, token);
+}
+
+export async function getDiscoveryRecommendations(
+  token: string,
+  params: { sources?: string[]; location?: string; niche?: string; limit?: number } = {}
+) {
+  const qp = new URLSearchParams();
+  if (params.sources && params.sources.length > 0) qp.set("sources", params.sources.join(","));
+  if (params.location) qp.set("location", params.location);
+  if (params.niche) qp.set("niche", params.niche);
+  if (params.limit) qp.set("limit", String(params.limit));
+  return request<{ data: DiscoveryRecommendationData }>(`/api/v1/discovery/recommendations?${qp}`, {}, token);
+}
+
+export async function getLeadDensity(
+  token: string,
+  params: { location?: string; limit?: number } = {}
+) {
+  const qp = new URLSearchParams();
+  if (params.location) qp.set("location", params.location);
+  if (params.limit) qp.set("limit", String(params.limit));
+  return request<{ data: { locations: DiscoveryLocationDensity[]; exact_points: Array<{ lat: number; lng: number }> } }>(`/api/v1/admin/geo/lead-density?${qp}`, {}, token);
 }
 
 // Costs
@@ -743,12 +1153,30 @@ export async function getPerformanceQuality(token: string, params: { run_id?: st
 }
 
 // Stats / Segments
+export type StatsOverview = {
+  total_leads: number;
+  total_outreach: number;
+  ts: string;
+};
+
+export type StatsOutreachRow = {
+  status: string;
+};
+
 export type SegmentEntry = { value: string; count: number; avg_score: number | null };
 export type SegmentsData = {
   by_niche: SegmentEntry[];
   by_tier: SegmentEntry[];
   by_source: SegmentEntry[];
 };
+
+export async function getStatsOverview(token: string) {
+  return request<{ data: StatsOverview }>("/api/v1/stats/overview", {}, token);
+}
+
+export async function getOutreachStats(token: string) {
+  return request<{ data: StatsOutreachRow[] }>("/api/v1/stats/outreach", {}, token);
+}
 
 export async function getSegments(token: string) {
   return request<{ data: SegmentsData }>("/api/v1/stats/segments", {}, token);
@@ -787,6 +1215,21 @@ export type OfferPackage = {
   model?: string;
 };
 
+export type LeadAssistantBrief = {
+  summary: string;
+  why_it_matters: string;
+  next_step: string;
+  recommended_channel: string;
+  personalized_pitch: string;
+  first_message: string;
+  likely_objections: string[];
+  objection_handling: string[];
+  source_llm: string;
+  generated_at: string;
+  provider?: string;
+  model?: string;
+};
+
 export function generateOffer(
   token: string,
   params: { lead_id: string; offer_type?: string; channel?: string }
@@ -794,6 +1237,14 @@ export function generateOffer(
   return request<SingleResponse<OfferPackage>>(
     "/api/v1/outreach/generate-offer",
     { method: "POST", body: JSON.stringify(params) },
+    token
+  );
+}
+
+export function generateLeadBrief(token: string, leadId: string) {
+  return request<SingleResponse<LeadAssistantBrief>>(
+    "/api/v1/leads/" + leadId + "/assistant-brief",
+    { method: "POST" },
     token
   );
 }

@@ -9,6 +9,8 @@ let _mockUser: Record<string, unknown> = {
 };
 
 let _lastLlmUsageInsert: Record<string, unknown> | null = null;
+let _lastLeadUpdate: Record<string, unknown> | null = null;
+let _mockCampaign: Record<string, unknown> | null = null;
 
 const mockLead = {
   id: "00000000-0000-0000-0000-000000000001",
@@ -75,11 +77,26 @@ vi.mock("../../api/src/db/client.js", () => ({
           }),
         };
       }
+      if (table === "outreach_campaigns") {
+        return {
+          select: () => ({
+            eq: (_col: string, val: string) => ({
+              single: async () => {
+                if (_mockCampaign && val === _mockCampaign["id"]) return { data: _mockCampaign, error: null };
+                return { data: null, error: { code: "PGRST116" } };
+              },
+            }),
+          }),
+        };
+      }
       if (table === "leads") {
         return {
-          update: () => ({
+          update: (payload: unknown) => ({
             eq: () => ({
-              is: () => Promise.resolve({ error: null }),
+              is: async () => {
+                _lastLeadUpdate = payload as Record<string, unknown>;
+                return { error: null };
+              },
             }),
           }),
         };
@@ -158,6 +175,8 @@ describe("GET /api/v1/outreach", () => {
   beforeEach(() => {
     process.env["API_JWT_SECRET"] = "test-secret-at-least-32-chars-long-1234";
     _lastLlmUsageInsert = null;
+    _lastLeadUpdate = null;
+    _mockCampaign = null;
     _mockUser = {
       id: "admin-user-id",
       email: "admin@blindspot.local",
@@ -165,6 +184,8 @@ describe("GET /api/v1/outreach", () => {
       lead_filter: null,
       active: true,
     };
+    _lastLeadUpdate = null;
+    _mockCampaign = null;
   });
 
   it("returns 401 without auth", async () => {
@@ -230,6 +251,57 @@ describe("POST /api/v1/outreach", () => {
     expect(res.statusCode).toBe(201);
     const body = res.json();
     expect(body.data).toHaveProperty("id");
+    await app.close();
+  });
+
+  it("updates lead first-contact markers when creating outreach", async () => {
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
+    const contactedAt = "2026-01-15T10:00:00.000Z";
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/outreach",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        lead_id: "00000000-0000-0000-0000-000000000001",
+        channel: "whatsapp",
+        status: "contacted",
+        contacted_at: contactedAt,
+      }),
+    });
+    expect(res.statusCode).toBe(201);
+    expect(_lastLeadUpdate).toEqual({
+      contacted_by: "admin-user-id",
+      contacted_at: contactedAt,
+      state: "contacted",
+    });
+    await app.close();
+  });
+
+  it("rejects outreach creation when campaign is not active", async () => {
+    _mockCampaign = {
+      id: "bbbbbbbb-0000-0000-0000-000000000001",
+      user_id: "admin-user-id",
+      status: "closed",
+      closed_at: "2026-01-01T00:00:00Z",
+    };
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/outreach",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        lead_id: "00000000-0000-0000-0000-000000000001",
+        campaign_id: "bbbbbbbb-0000-0000-0000-000000000001",
+        channel: "whatsapp",
+        status: "contacted",
+      }),
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error_code).toBe("campaign_inactive");
     await app.close();
   });
 
@@ -447,7 +519,7 @@ describe("POST /api/v1/outreach/generate-offer", () => {
         completion_tokens: 0,
         cost_usd: 0,
         success: true,
-        error: null,
+        error: expect.stringContaining("fallback:Gemini API error: 429"),
       })
     );
     await app.close();

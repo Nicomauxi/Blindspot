@@ -67,9 +67,25 @@ vi.mock("../../api/src/db/client.js", () => ({
         return {
           select: () => ({
             order: () => ({
-              limit: () => ({
-                maybeSingle: async () => ({ data: state.lastRun, error: null }),
+              limit: async () => ({ data: state.lastRun ? [state.lastRun] : [], error: null }),
+              maybeSingle: async () => ({ data: state.lastRun, error: null }),
+            }),
+            in: () => ({
+              order: () => ({
+                limit: () => ({
+                  maybeSingle: async () => ({ data: null, error: null }),
+                }),
               }),
+            }),
+          }),
+        };
+      }
+
+      if (table === "discovery_jobs") {
+        return {
+          select: () => ({
+            order: () => ({
+              limit: async () => ({ data: [], error: null }),
             }),
           }),
         };

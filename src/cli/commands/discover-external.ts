@@ -5,6 +5,7 @@ import { YeluProvider } from "../../modules/discovery/providers/yelu.js";
 import { PedidosYaProvider } from "../../modules/discovery/providers/pedidosya.js";
 import { getDedupGeoRadiusMeters, getOnlineDedupThreshold } from "../../modules/discovery/config.js";
 import { findCrossSourceMatch, isFranchise } from "../../modules/discovery/deduplication.js";
+import { normalizeNiche } from "../../modules/discovery/filters.js";
 import { loadAllLeads } from "../../storage/leads.js";
 import { addCorroboratingSource, insertExternalLead } from "../../storage/external-leads.js";
 import { loadRuntimeLists } from "../../storage/system-lists.js";
@@ -60,8 +61,9 @@ async function runSingleLocation(opts: {
   geoRadiusMeters: number;
 }): Promise<{ fetched: number; inserted: number; corroborated: number }> {
   const provider = buildProvider(opts.source);
+  const normalizedNiche = normalizeNiche(opts.niche);
 
-  let candidates = await provider.discover({ niche: opts.niche, location: opts.location });
+  let candidates = await provider.discover({ niche: normalizedNiche, location: opts.location });
   if (opts.limit !== undefined) {
     candidates = candidates.slice(0, opts.limit);
   }

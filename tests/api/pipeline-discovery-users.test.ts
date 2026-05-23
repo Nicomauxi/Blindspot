@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
+let _activePipelineRun: Record<string, unknown> | null = null;
+
 let _mockUser: Record<string, unknown> = {
   id: "admin-user-id",
   email: "admin@blindspot.local",
@@ -49,6 +51,24 @@ vi.mock("../../api/src/db/client.js", () => ({
                   cron_expression: "0 2 * * 0",
                   scheduled_for: null,
                   last_completed_at: null,
+                  google_places_budget_total: 200,
+                  google_places_budget_spent: 40,
+                  google_places_alert_threshold: 10,
+                },
+                error: null,
+              }),
+            }),
+            limit: () => ({
+              single: async () => ({
+                data: {
+                  id: "singleton",
+                  enabled: false,
+                  cron_expression: "0 2 * * 0",
+                  scheduled_for: null,
+                  last_completed_at: null,
+                  google_places_budget_total: 200,
+                  google_places_budget_spent: 40,
+                  google_places_alert_threshold: 10,
                 },
                 error: null,
               }),
@@ -80,7 +100,12 @@ vi.mock("../../api/src/db/client.js", () => ({
                 maybeSingle: async () => ({ data: null }),
               }),
             }),
-            in: () => ({
+            in: (_c: string, values: unknown[]) => ({
+              limit: (_n: number) => ({
+                maybeSingle: async () => ({
+                  data: _activePipelineRun && values.includes(_activePipelineRun["status"]) ? _activePipelineRun : null,
+                }),
+              }),
               order: () => ({
                 limit: (_n: number) =>
                   Promise.resolve({ data: [], error: null, count: 0 }),
@@ -95,32 +120,148 @@ vi.mock("../../api/src/db/client.js", () => ({
               }),
             }),
           }),
+          update: () => ({
+            eq: async () => ({ error: null }),
+          }),
         };
       }
       if (table === "discovery_jobs") {
         return {
           select: (_cols: string, _opts?: unknown) => ({
             order: () => ({
-              limit: (_n: number) =>
-                Promise.resolve({ data: [], error: null, count: 0 }),
+              limit: (_n: number) => Promise.resolve({
+                data: [
+                  {
+                    id: "legacy-job-id",
+                    batch_id: null,
+                    source: "yelu",
+                    location: "Montevideo",
+                    niche: "restaurant",
+                    status: "queued",
+                    created_at: "2026-05-20T10:00:00Z",
+                  },
+                ],
+                error: null,
+                count: 1,
+              }),
             }),
             eq: () => ({
-              single: async () => ({ data: { id: "job-id", status: "queued" }, error: null }),
+              single: async () => ({ data: { id: "job-id", status: "queued", batch_id: null }, error: null }),
+              in: async () => ({ error: null }),
+            }),
+            in: () => ({
+              order: () => Promise.resolve({
+                data: [
+                  {
+                    id: "child-job-id",
+                    batch_id: "batch-1",
+                    source: "yelu",
+                    location: "Montevideo",
+                    niche: "restaurant",
+                    status: "queued",
+                    created_at: "2026-05-20T10:00:00Z",
+                  },
+                ],
+                error: null,
+              }),
+            }),
+            limit: (_n: number) => Promise.resolve({
+              data: [
+                { source: "yelu", niche: "restaurant", location: "Montevideo", created_at: "2026-05-20T10:00:00Z" },
+              ],
+              error: null,
             }),
           }),
           insert: () => ({
             select: () => ({
               single: async () => ({
-                data: { id: "new-job-id", status: "queued" },
+                data: { id: "new-job-id", status: "queued", batch_id: null },
                 error: null,
               }),
             }),
+            then: (cb: (value: unknown) => void) => cb({ data: [], error: null }),
           }),
           update: () => ({
             eq: () => ({
               select: () => ({
                 single: async () => ({
-                  data: { id: "job-id", status: "paused" },
+                  data: { id: "job-id", status: "paused", batch_id: null },
+                  error: null,
+                }),
+              }),
+              in: async () => ({ error: null }),
+            }),
+          }),
+        };
+      }
+      if (table === "discovery_job_batches") {
+        return {
+          select: (_cols: string, _opts?: unknown) => ({
+            order: () => ({
+              limit: (_n: number) => Promise.resolve({
+                data: [
+                  {
+                    id: "batch-1",
+                    location: "Montevideo",
+                    location_key: "montevideo",
+                    niche: "restaurant",
+                    sources: ["yelu", "osm"],
+                    estimated_cost_usd: 0,
+                    actual_cost_usd: 0,
+                    status: "queued",
+                    created_at: "2026-05-20T10:00:00Z",
+                  },
+                ],
+                error: null,
+                count: 1,
+              }),
+            }),
+            eq: () => ({
+              single: async () => ({ data: { id: "batch-1" }, error: null }),
+            }),
+          }),
+          insert: () => ({
+            select: () => ({
+              single: async () => ({
+                data: { id: "batch-1", location: "Montevideo", location_key: "montevideo", niche: "restaurant", sources: ["yelu", "osm"], status: "queued", created_at: "2026-05-20T10:00:00Z" },
+                error: null,
+              }),
+            }),
+          }),
+          update: () => ({
+            eq: async () => ({ error: null }),
+          }),
+        };
+      }
+      if (table === "leads") {
+        return {
+          select: () => ({
+            order: () => ({
+              limit: (_n: number) => Promise.resolve({
+                data: [
+                  {
+                    id: "lead-1",
+                    source: "yelu",
+                    niche: "restaurant",
+                    address: "Montevideo, Uruguay",
+                    prospect_score: 70,
+                    gps: { lat: -34.9, lng: -56.2 },
+                    corroborating_sources: [{ source: "osm" }],
+                  },
+                ],
+                error: null,
+              }),
+            }),
+          }),
+        };
+      }
+      if (table === "runs") {
+        return {
+          select: () => ({
+            eq: () => ({
+              order: () => ({
+                limit: (_n: number) => Promise.resolve({
+                  data: [{ finished_at: "2026-05-20T10:00:00Z", stats: { estimated_cost_usd: 2.5 } }],
                   error: null,
                 }),
               }),
@@ -173,6 +314,7 @@ vi.mock("../../api/src/db/client.js", () => ({
 describe("Pipeline routes — admin only", () => {
   beforeEach(() => {
     process.env["API_JWT_SECRET"] = "test-secret-at-least-32-chars-long-1234";
+    _activePipelineRun = null;
     _mockUser = {
       id: "admin-user-id",
       email: "admin@blindspot.local",
@@ -222,6 +364,37 @@ describe("Pipeline routes — admin only", () => {
     expect(res.statusCode).toBe(202);
     const body = res.json();
     expect(body.data).toHaveProperty("run_id");
+    await app.close();
+  });
+
+  it("POST /pipeline/run blocks when a pending run already exists", async () => {
+    _activePipelineRun = { id: "pending-run-id", status: "pending" };
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/pipeline/run",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error_code).toBe("run_already_active");
+    await app.close();
+  });
+
+  it("POST /pipeline/abort aborts a pending run too", async () => {
+    _activePipelineRun = { id: "pending-run-id", status: "pending" };
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/pipeline/abort",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().data).toEqual({ run_id: "pending-run-id", abort_requested: true });
     await app.close();
   });
 
@@ -277,7 +450,7 @@ describe("Discovery routes", () => {
       method: "POST",
       url: "/api/v1/discovery/jobs",
       headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-      body: JSON.stringify({ source: "google", location: "Montevideo" }),
+      body: JSON.stringify({ source: "yelu", location: "Montevideo" }),
     });
     expect(res.statusCode).toBe(403);
     await app.close();
@@ -291,13 +464,13 @@ describe("Discovery routes", () => {
       method: "POST",
       url: "/api/v1/discovery/jobs",
       headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-      body: JSON.stringify({ source: "google", location: "Montevideo", niche: "restaurant" }),
+      body: JSON.stringify({ source: "yelu", location: "Montevideo", niche: "restaurant" }),
     });
     expect(res.statusCode).toBe(201);
     await app.close();
   });
 
-  it("GET /discovery/suggestions returns 501 when capability is unavailable", async () => {
+  it("GET /discovery/suggestions returns real recommendation payload", async () => {
     const { buildServer } = await import("../../api/src/server.js");
     const app = await buildServer();
     const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
@@ -306,14 +479,14 @@ describe("Discovery routes", () => {
       url: "/api/v1/discovery/suggestions",
       headers: { authorization: `Bearer ${token}` },
     });
-    expect(res.statusCode).toBe(501);
+    expect(res.statusCode).toBe(200);
     const body = res.json();
-    expect(body.error_code).toBe("feature_not_available");
-    expect(body.capability).toBe("jobs_only");
+    expect(Array.isArray(body.data.coverage_gaps_global)).toBe(true);
+    expect(Array.isArray(body.data.location_density)).toBe(true);
     await app.close();
   });
 
-  it("GET /discovery/coverage returns 501 when capability is unavailable", async () => {
+  it("GET /discovery/coverage returns grouped coverage data", async () => {
     const { buildServer } = await import("../../api/src/server.js");
     const app = await buildServer();
     const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
@@ -322,10 +495,10 @@ describe("Discovery routes", () => {
       url: "/api/v1/discovery/coverage",
       headers: { authorization: `Bearer ${token}` },
     });
-    expect(res.statusCode).toBe(501);
+    expect(res.statusCode).toBe(200);
     const body = res.json();
-    expect(body.error_code).toBe("feature_not_available");
-    expect(body.capability).toBe("jobs_only");
+    expect(Array.isArray(body.data.coverage_gaps_global)).toBe(true);
+    expect(Array.isArray(body.data.supported_sources)).toBe(true);
     await app.close();
   });
 });

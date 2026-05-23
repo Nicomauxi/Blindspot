@@ -187,6 +187,14 @@ pnpm test
 pnpm typecheck
 ```
 
+Smoke API contra DB local limpia:
+
+```bash
+pnpm smoke:api
+```
+
+Runbook operativo: [docs/remediation-runbook.md](/home/nicolasfalcioni/Documentos/blindspot/docs/remediation-runbook.md)
+
 Frontend:
 
 ```bash
@@ -202,22 +210,122 @@ curl http://127.0.0.1:3001/api/v1/health
 
 El `health` valida también que `lead_dashboard` tenga el schema esperado. Si `invariants.lead_dashboard_schema_current=false`, hay drift de migraciones entre código y base.
 
+## Levantar el entorno local
+
+Procesos que viven por separado:
+
+1. Supabase local
+2. API HTTP (`api/`)
+3. UI Next (`ui/`)
+4. Core pipeline persistente (`src/start.ts`): scheduler, polling y `pg_notify`
+
+Secuencia recomendada desde la raíz del repo:
+
+1. Instalar dependencias:
+
+```bash
+pnpm install
+```
+
+2. Levantar Supabase:
+
+```bash
+pnpm supabase start
+```
+
+3. Resetear baseline local cuando necesites base limpia:
+
+```bash
+supabase db reset
+```
+
+4. Levantar la API HTTP:
+
+```bash
+pnpm --dir api start
+```
+
+5. Levantar la UI:
+
+```bash
+pnpm --dir ui dev
+```
+
+6. Levantar el core pipeline persistente:
+
+```bash
+node --env-file=.env --import tsx/esm src/start.ts
+```
+
+URLs útiles:
+
+- UI: `http://127.0.0.1:3000`
+- API: `http://127.0.0.1:3001`
+- Health: `http://127.0.0.1:3001/api/v1/health`
+- Supabase Studio: `http://127.0.0.1:54403`
+
+Credenciales seed locales:
+
+- Admin: `admin@blindspot.local` / `admin_local_2026`
+- CM: `cm@blindspot.local` / `cm_local_2026`
+
+## Backups y restore
+
+Backups desde el panel:
+
+- `Admin > Backups > Ejecutar backup ahora` dispara un backup manual aunque haya cron activo.
+- La configuración permite definir `enabled`, `cron_expression`, `directory` y `max_backups`.
+- El directorio efectivo es `backup_config.directory ?? BLINDSPOT_BACKUP_DIR ?? $HOME/blindspot-backups`.
+- La retención elimina determinísticamente los excedentes y conserva los `N` backups más recientes.
+
+Restore desde el panel:
+
+- En `Admin > Backups`, cada backup `completed` expone la acción `Restaurar`.
+- El restore reemplaza la DB local activa y por eso exige confirmación explícita.
+- Antes de restaurar, el sistema crea un checkpoint automático `restore_checkpoint`.
+- Durante el restore, el sistema entra en mantenimiento y pausa backup scheduler y pipeline polling.
+- Si necesitás deshacer el restore, podés restaurar el checkpoint recién creado desde la misma pantalla.
+
+Comandos shell equivalentes:
+
+```bash
+BACKUP_TAG=manual BLINDSPOT_BACKUP_DIR="$HOME/blindspot-backups" bash scripts/backup.sh
+BLINDSPOT_RESTORE_FILE="$HOME/blindspot-backups/<backup>.sql.gz" bash scripts/restore.sh
+```
+
+### Pipeline manual puntual
+
+Si querés disparar un run completo una sola vez, además del proceso persistente podés ejecutar:
+
+```bash
+pnpm dev pipeline --run-all
+```
+
+Opciones útiles:
+
+```bash
+pnpm dev pipeline --run-all --dry-run
+pnpm dev pipeline --run-all --cpu-budget conservative
+pnpm dev pipeline --run-all --phases refresh,discovery,enrich,score
+```
+
 ## Smoke test E2E recomendado
 
 Secuencia mínima validada en local:
 
-1. `supabase start`
+1. `pnpm supabase start`
 2. `supabase db reset`
 3. `pnpm install`
-4. Levantar API con `API_JWT_SECRET=... pnpm --dir api start`
-5. Levantar UI con `NEXT_PUBLIC_API_URL=http://127.0.0.1:3001 pnpm --dir ui dev`
-6. Correr discovery real pequeño con Google Places
-7. Correr `enrich --run <run_id> --with-heuristic`
-8. Correr `social-enrich --all --limit 1 --force`
-9. Correr `infer-state --all --force`
-10. Correr `score --run <run_id> --buyer-types`
-11. Correr `report --run <run_id> --format all`
-12. Verificar `/api/v1/health`, login en `/login` y lectura de un lead por API
+4. Levantar API con `pnpm --dir api start`
+5. Levantar UI con `pnpm --dir ui dev`
+6. Levantar core pipeline con `node --env-file=.env --import tsx/esm src/start.ts`
+7. Correr discovery real pequeño con Google Places
+8. Correr `enrich --run <run_id> --with-heuristic`
+9. Correr `social-enrich --all --limit 1 --force`
+10. Correr `infer-state --all --force`
+11. Correr `score --run <run_id> --buyer-types`
+12. Correr `report --run <run_id> --format all`
+13. Verificar `/api/v1/health`, login en `/login` y lectura de un lead por API
 
 ## Costos
 
