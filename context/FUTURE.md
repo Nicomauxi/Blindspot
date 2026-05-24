@@ -65,7 +65,7 @@
 - `UI-6` — pending (depends on MAP-4)
 - `UI-7` — done
 - `ALERT-1` — done
-- `ALERT-2` — pending
+- `ALERT-2` — done
 - `CRM-6` — pending
 - `CRM-7` — pending
 - `CRM-8` — pending
@@ -1766,7 +1766,7 @@
 
 ## ALERT-2 — Campanita en UI con counter de alertas no leídas
 
-**Status:** `pending`
+**Status:** `done`
 
 **Resultado esperado**
 - En el header del AdminPageLayout aparece un icono campanita (top-right, esquina superior derecha de la página, no del sidebar).

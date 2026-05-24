@@ -65,10 +65,11 @@ export async function createAlert(input: CreateAlertInput): Promise<SystemAlert 
 
 export async function listAlerts(
   userId: string,
-  params: { status?: AlertStatus; limit?: number } = {}
+  params: { status?: AlertStatus; limit?: number; offset?: number } = {}
 ): Promise<SystemAlert[]> {
   const db = getSupabase();
   const limit = params.limit ?? 20;
+  const offset = params.offset ?? 0;
 
   const archiveCutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
 
@@ -106,7 +107,7 @@ export async function listAlerts(
   ];
 
   combined.sort((a, b) => b.created_at.localeCompare(a.created_at));
-  return combined.slice(0, limit);
+  return combined.slice(offset, offset + limit);
 }
 
 export async function getUnreadCount(userId: string): Promise<number> {

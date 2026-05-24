@@ -12,13 +12,14 @@ export async function alertsRoutes(app: FastifyInstance): Promise<void> {
   // GET /alerts — list for current user (broadcast + targeted), optionally filtered by status
   app.get("/alerts", { preHandler: requireAuth }, async (request, reply) => {
     const authUser = getAuthUser(request);
-    const query = request.query as { status?: string; limit?: string };
+    const query = request.query as { status?: string; limit?: string; offset?: string };
     const limit = Math.min(parseInt(query.limit ?? "20", 10) || 20, 100);
+    const offset = Math.max(0, parseInt(query.offset ?? "0", 10) || 0);
     const status = ["pending", "read", "archived"].includes(query.status ?? "")
       ? (query.status as "pending" | "read" | "archived")
       : undefined;
 
-    const alerts = await listAlerts(authUser.id, { status, limit });
+    const alerts = await listAlerts(authUser.id, { status, limit, offset });
     return reply.status(200).send({ data: alerts });
   });
 
