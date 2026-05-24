@@ -1,10 +1,29 @@
 import type { FastifyInstance } from "fastify";
+import { z } from "zod";
 import { getDb } from "../../db/client.js";
 import { requireAdmin } from "../../auth/middleware.js";
 
-type OverviewQuery = { days?: string };
-type ErrorsQuery = { days?: string; phase?: string; source?: string; error_type?: string; recovered?: string; limit?: string };
-type QualityQuery = { run_id?: string; days?: string };
+const overviewQuerySchema = z.object({
+  days: z.string().optional(),
+});
+
+const errorsQuerySchema = z.object({
+  days: z.string().optional(),
+  phase: z.string().trim().min(1).max(50).optional(),
+  source: z.string().trim().min(1).max(80).optional(),
+  error_type: z.string().trim().min(1).max(80).optional(),
+  recovered: z.enum(["true", "false"]).optional(),
+  limit: z.string().optional(),
+});
+
+const qualityQuerySchema = z.object({
+  run_id: z.string().trim().min(1).max(64).optional(),
+  days: z.string().optional(),
+});
+
+type OverviewQuery = z.infer<typeof overviewQuerySchema>;
+type ErrorsQuery = z.infer<typeof errorsQuerySchema>;
+type QualityQuery = z.infer<typeof qualityQuerySchema>;
 
 type PhaseStatus = "ok" | "skipped" | "failed";
 type PipelineRunRow = {
@@ -190,7 +209,11 @@ function selectRunWindow(runs: PipelineRunRow[], requestedRunId: string | undefi
 export async function performanceRoutes(app: FastifyInstance): Promise<void> {
   app.get("/admin/performance/overview", { preHandler: requireAdmin }, async (request, reply) => {
     const db = getDb();
-    const days = parseDays((request.query as OverviewQuery | undefined)?.days, DEFAULT_DAYS);
+    const queryParse = overviewQuerySchema.safeParse(request.query ?? {});
+    if (!queryParse.success) {
+      return reply.code(400).send({ error: "Invalid query", issues: queryParse.error.flatten() });
+    }
+    const days = parseDays(queryParse.data.days, DEFAULT_DAYS);
     const { start, end } = buildWindow(days);
 
     const [runsRes, errorsRes, leadsRes] = await Promise.all([
@@ -309,7 +332,11 @@ export async function performanceRoutes(app: FastifyInstance): Promise<void> {
 
   app.get("/admin/performance/errors", { preHandler: requireAdmin }, async (request, reply) => {
     const db = getDb();
-    const query = (request.query as ErrorsQuery | undefined) ?? {};
+    const queryParse = errorsQuerySchema.safeParse(request.query ?? {});
+    if (!queryParse.success) {
+      return reply.code(400).send({ error: "Invalid query", issues: queryParse.error.flatten() });
+    }
+    const query: ErrorsQuery = queryParse.data;
     const days = parseDays(query.days, DEFAULT_ERROR_DAYS);
     const limit = Math.min(Math.max(Number(query.limit ?? "50"), 1), 200);
     const recoveredFilter = query.recovered === undefined
@@ -357,7 +384,11 @@ export async function performanceRoutes(app: FastifyInstance): Promise<void> {
 
   app.get("/admin/performance/quality", { preHandler: requireAdmin }, async (request, reply) => {
     const db = getDb();
-    const query = (request.query as QualityQuery | undefined) ?? {};
+    const queryParse = qualityQuerySchema.safeParse(request.query ?? {});
+    if (!queryParse.success) {
+      return reply.code(400).send({ error: "Invalid query", issues: queryParse.error.flatten() });
+    }
+    const query: QualityQuery = queryParse.data;
     const days = parseDays(query.days, DEFAULT_DAYS);
 
     const [runsRes, leadsRes] = await Promise.all([

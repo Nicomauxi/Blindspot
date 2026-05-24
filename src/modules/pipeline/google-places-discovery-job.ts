@@ -1,15 +1,18 @@
 import pLimit from "p-limit";
+import { getLogger } from "../../shared/logger.js";
 import { fetchPlaceCandidates, fetchPlaceDetails } from "../discovery/places.js";
 import { enrichWithDetails } from "../discovery/google-data-enricher.js";
 import { applyProfileFilter, normalizeNiche, tagCandidate } from "../discovery/filters.js";
 import { getDiscoveryConfig, getProfileConfig } from "../discovery/config.js";
 import { createRun, completeRun, failRun } from "../../storage/runs.js";
 import { incrementGooglePlacesBudgetSpent, getGooglePlacesBudgetStatus } from "../../storage/pipeline-config.js";
-import { upsertLeads, loadAllLeads } from "../../storage/leads.js";
+import { upsertLeads, loadLeadsByNiche } from "../../storage/leads.js";
 import { rebuildVocabularyForNiche } from "../../storage/vocabulary.js";
 import { loadAllRuntime } from "../../storage/system-lists.js";
 import { computeNicheStopWords } from "../enrichment/vocabulary.js";
 import type { PlaceCandidate } from "../../shared/types.js";
+
+const logger = getLogger();
 
 const TEXT_SEARCH_COST_PER_REQUEST = 0.035;
 const DETAILS_COST_PER_REQUEST = 0.025;
@@ -52,6 +55,7 @@ export interface GooglePlacesDiscoveryJobResult {
   rejected: number;
   estimatedCostUsd: number;
   actualCostUsd: number;
+  budgetAborted: boolean;
 }
 
 export async function executeGooglePlacesDiscoveryJob(opts: {
@@ -105,11 +109,30 @@ export async function executeGooglePlacesDiscoveryJob(opts: {
 
     const limit = pLimit(concurrency);
     let detailsRequestCount = 0;
+    let budgetAborted = false;
+    const textSearchCostSoFar = textSearchRequestCount * TEXT_SEARCH_COST_PER_REQUEST;
+
     const enrichedPassed: PlaceCandidate[] = await Promise.all(
       passed.map((candidate) =>
         limit(async () => {
-          const details = await fetchPlaceDetails(candidate.placeId);
+          // Early exit: another concurrent task already tripped the budget cap.
+          if (budgetAborted) return candidate;
+
+          // Reserve the request slot BEFORE awaiting fetchPlaceDetails so the
+          // cost accounting reflects the request we are about to make. V8 is
+          // single-threaded so this increment is atomic relative to the cap
+          // check below — the previous order let multiple callbacks all see
+          // the pre-increment count and over-spend.
           detailsRequestCount += 1;
+          const runningCost = textSearchCostSoFar + detailsRequestCount * DETAILS_COST_PER_REQUEST;
+          if (runningCost >= runtimeCap) {
+            if (!budgetAborted) {
+              budgetAborted = true;
+              logger.warn({ runningCost, runtimeCap }, "Google Places budget cap reached mid-execution — halting remaining detail requests");
+            }
+          }
+
+          const details = await fetchPlaceDetails(candidate.placeId);
           if (details === null) return candidate;
           return { ...candidate, raw: enrichWithDetails(candidate.raw, details) };
         })
@@ -146,17 +169,24 @@ export async function executeGooglePlacesDiscoveryJob(opts: {
       leads_updated: updated.filter((lead) => lead.passed_filter).length,
       leads_rejected: rejected.length,
       duration_ms: Date.now() - startedAt,
+      ...(budgetAborted ? { budget_aborted: true } : {}),
     });
-    await incrementGooglePlacesBudgetSpent(actualCostUsd).catch(() => undefined);
+    try {
+      const budgetResult = await incrementGooglePlacesBudgetSpent(actualCostUsd);
+      if (budgetResult?.over_budget) {
+        logger.warn({ budget_spent: budgetResult.budget_spent, budget_total: budgetResult.budget_total }, "GP budget exceeded after job completion");
+      }
+    } catch (err) {
+      logger.error({ err }, "Failed to increment GP budget spent");
+    }
 
     if (normalizedNiche && normalizedNiche !== "all") {
       try {
-        const allLeads = await loadAllLeads();
-        const nicheLeads = allLeads.filter((lead) => lead.niche === normalizedNiche);
+        const nicheLeads = await loadLeadsByNiche(normalizedNiche);
         const wordCounts = computeNicheStopWords(nicheLeads, 3, 0.05);
         await rebuildVocabularyForNiche(normalizedNiche, wordCounts);
-      } catch {
-        // best effort only
+      } catch (err) {
+        logger.warn({ err }, "Vocabulary rebuild failed (best-effort)");
       }
     }
 
@@ -169,6 +199,7 @@ export async function executeGooglePlacesDiscoveryJob(opts: {
       rejected: rejected.length,
       estimatedCostUsd: conservativeEstimate,
       actualCostUsd,
+      budgetAborted,
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

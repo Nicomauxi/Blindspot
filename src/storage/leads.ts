@@ -205,19 +205,32 @@ export async function tagDuplicates(leads: Lead[]): Promise<void> {
   if (groups.size === 0) return;
 
   const db = getSupabase();
+
+  // Build update plans first, then execute concurrently.
+  // tagDuplicates' inputs typically have unique tag sets per lead, so we cannot
+  // batch with `.in(...).update(...)`. Concurrent updates avoid the N+1 latency.
+  const updates: Array<{ id: string; tags: string[] }> = [];
   for (const group of groups.values()) {
     for (let i = 0; i < group.length; i++) {
       const lead = group[i]!;
       const tagSet = new Set(lead.tags);
       tagSet.add(DUPLICATE_TAG);
       if (i > 0) tagSet.add(DUPLICATE_SECONDARY_TAG);
-      const tags = Array.from(tagSet);
-      const { error } = await db
-        .from("leads")
-        .update({ tags })
-        .eq("id", lead.id);
-      if (error) throw new Error(`Failed to tag duplicate lead ${lead.id}: ${error.message}`);
+      updates.push({ id: lead.id, tags: Array.from(tagSet) });
     }
+  }
+
+  const results = await Promise.all(
+    updates.map(async ({ id, tags }) => {
+      const { error } = await db.from("leads").update({ tags }).eq("id", id);
+      return { id, error };
+    })
+  );
+
+  const failed = results.filter((r) => r.error);
+  if (failed.length > 0) {
+    const summary = failed.map((f) => `${f.id}: ${f.error?.message}`).join("; ");
+    throw new Error(`tagDuplicates failed for ${failed.length} lead(s): ${summary}`);
   }
 }
 
@@ -236,6 +249,7 @@ export async function tagFranchises(
   }
 
   const db = getSupabase();
+  const failures: Array<{ leadId: string; message: string }> = [];
 
   for (const lead of leads) {
     if (lead.tags.includes(FRANCHISE_TAG)) continue;
@@ -253,8 +267,13 @@ export async function tagFranchises(
       .eq("id", lead.id);
 
     if (error) {
-      getLogger().warn({ leadId: lead.id, err: error.message }, "tagFranchises — update failed");
+      failures.push({ leadId: lead.id, message: error.message });
     }
+  }
+
+  if (failures.length > 0) {
+    const summary = failures.map((f) => `${f.leadId}: ${f.message}`).join("; ");
+    throw new Error(`tagFranchises failed for ${failures.length} lead(s): ${summary}`);
   }
 }
 
@@ -439,20 +458,27 @@ export async function upsertLeads(
     (existing ?? []).map((r) => [r.place_id as string, r])
   );
 
-  const inserted: Lead[] = [];
-  const updated: Lead[] = [];
+  // Partition items into pure inserts (no existing row) and updates (need
+  // flip-logic merge). Inserts go through ONE batched `.insert().select()` so
+  // we avoid an N+1 round-trip. Updates stay sequential because each one
+  // carries lead-specific tag-merge logic that cannot be expressed as a
+  // batched upsert without overwriting fields the caller never read.
+  const toInsertRows: Array<Record<string, unknown>> = [];
+  const insertPlaceIds: string[] = [];
+  const toUpdate: LeadUpsert[] = [];
 
   for (const item of items) {
-    const { candidate, passed, rejection_reasons } = item;
-    const alreadyExists = existingMap.get(candidate.placeId);
-
-    if (alreadyExists) {
-      const existingTags: string[] = Array.isArray(alreadyExists.tags)
-        ? (alreadyExists.tags as string[])
-        : [];
-      const existingPassed = alreadyExists.passed_filter as boolean;
-
-      const baseUpdate = {
+    if (existingMap.has(item.candidate.placeId)) {
+      toUpdate.push(item);
+    } else {
+      const { candidate, passed, rejection_reasons } = item;
+      const tags = dedupeTags(
+        passed
+          ? tagsFn(candidate)
+          : rejection_reasons.map((r) => `rejected:${r}`)
+      );
+      toInsertRows.push({
+        place_id: candidate.placeId,
         name: candidate.name,
         address: candidate.formattedAddress,
         rating: candidate.rating,
@@ -460,80 +486,97 @@ export async function upsertLeads(
         website: candidate.websiteUri,
         phone: candidate.phone,
         business_status: candidate.businessStatus,
-        google_data: candidate.raw,
+        niche: item.niche ?? null,
+        state: "discovered",
+        tags,
+        passed_filter: passed,
+        rejection_reasons,
+        first_seen_run_id: runId,
         last_seen_run_id: runId,
-        ...(item.niche !== undefined ? { niche: item.niche } : {}),
-      };
-
-      let tagUpdate: { tags?: string[]; passed_filter?: boolean; rejection_reasons?: string[] } = {};
-
-      if (passed && !existingPassed) {
-        // rejected → passed: clean rejected tags, add normal tags
-        const cleanedTags = existingTags.filter((t) => !isRejectedTag(t));
-        tagUpdate = {
-          tags: dedupeTags([...cleanedTags, ...tagsFn(candidate)]),
-          passed_filter: true,
-          rejection_reasons: [],
-        };
-      } else if (!passed && existingPassed) {
-        // passed → rejected: keep normal tags, add rejected tags
-        const cleanedTags = existingTags.filter((t) => !isRejectedTag(t));
-        const newRejectedTags = rejection_reasons.map((r) => `rejected:${r}`);
-        tagUpdate = {
-          tags: dedupeTags([...cleanedTags, ...newRejectedTags]),
-          passed_filter: false,
-          rejection_reasons,
-        };
-      }
-
-      const { data, error } = await db
-        .from("leads")
-        .update({ ...baseUpdate, ...tagUpdate })
-        .eq("place_id", candidate.placeId)
-        .select()
-        .single();
-
-      if (error) throw new Error(`upsert failed: ${error.message}`);
-      if (!data) {
-        throw new Error(`Supabase returned no row for placeId=${candidate.placeId}`);
-      }
-      updated.push(data as Lead);
-    } else {
-      const tags = dedupeTags(
-        passed
-          ? tagsFn(candidate)
-          : rejection_reasons.map((r) => `rejected:${r}`)
-      );
-
-      const { data, error } = await db
-        .from("leads")
-        .insert({
-          place_id: candidate.placeId,
-          name: candidate.name,
-          address: candidate.formattedAddress,
-          rating: candidate.rating,
-          review_count: candidate.userRatingCount,
-          website: candidate.websiteUri,
-          phone: candidate.phone,
-          business_status: candidate.businessStatus,
-          niche: item.niche ?? null,
-          state: "discovered",
-          tags,
-          passed_filter: passed,
-          rejection_reasons,
-          first_seen_run_id: runId,
-          last_seen_run_id: runId,
-          google_data: candidate.raw,
-        })
-        .select()
-        .single();
-
-      if (error) throw new Error(`upsert failed: ${error.message}`);
-      if (!data) {
-        throw new Error(`Supabase returned no row for placeId=${candidate.placeId}`);
-      }
-      inserted.push(data as Lead);
+        google_data: candidate.raw,
+        gps:
+          candidate.lat != null && candidate.lng != null
+            ? `SRID=4326;POINT(${candidate.lng} ${candidate.lat})`
+            : null,
+      });
+      insertPlaceIds.push(candidate.placeId);
     }
+  }
+
+  const inserted: Lead[] = [];
+  if (toInsertRows.length > 0) {
+    const { data: insertData, error: insertError } = await db
+      .from("leads")
+      .insert(toInsertRows)
+      .select();
+    if (insertError) throw new Error(`upsert failed: ${insertError.message}`);
+    const rows = (insertData ?? []) as Lead[];
+    if (rows.length !== toInsertRows.length) {
+      throw new Error(
+        `Supabase returned no row for placeId=${insertPlaceIds[0] ?? "unknown"}`
+      );
+    }
+    inserted.push(...rows);
+  }
+
+  const updated: Lead[] = [];
+  for (const item of toUpdate) {
+    const { candidate, passed, rejection_reasons } = item;
+    const alreadyExists = existingMap.get(candidate.placeId)!;
+    const existingTags: string[] = Array.isArray(alreadyExists.tags)
+      ? (alreadyExists.tags as string[])
+      : [];
+    const existingPassed = alreadyExists.passed_filter as boolean;
+
+    const baseUpdate = {
+      name: candidate.name,
+      address: candidate.formattedAddress,
+      rating: candidate.rating,
+      review_count: candidate.userRatingCount,
+      website: candidate.websiteUri,
+      phone: candidate.phone,
+      business_status: candidate.businessStatus,
+      google_data: candidate.raw,
+      last_seen_run_id: runId,
+      ...(item.niche !== undefined ? { niche: item.niche } : {}),
+      ...(candidate.lat != null && candidate.lng != null
+        ? { gps: `SRID=4326;POINT(${candidate.lng} ${candidate.lat})` }
+        : {}),
+    };
+
+    let tagUpdate: { tags?: string[]; passed_filter?: boolean; rejection_reasons?: string[] } = {};
+
+    if (passed && !existingPassed) {
+      // rejected → passed: clean rejected tags, add normal tags
+      const cleanedTags = existingTags.filter((t) => !isRejectedTag(t));
+      tagUpdate = {
+        tags: dedupeTags([...cleanedTags, ...tagsFn(candidate)]),
+        passed_filter: true,
+        rejection_reasons: [],
+      };
+    } else if (!passed && existingPassed) {
+      // passed → rejected: keep normal tags, add rejected tags
+      const cleanedTags = existingTags.filter((t) => !isRejectedTag(t));
+      const newRejectedTags = rejection_reasons.map((r) => `rejected:${r}`);
+      tagUpdate = {
+        tags: dedupeTags([...cleanedTags, ...newRejectedTags]),
+        passed_filter: false,
+        rejection_reasons,
+      };
+    }
+
+    const { data, error } = await db
+      .from("leads")
+      .update({ ...baseUpdate, ...tagUpdate })
+      .eq("place_id", candidate.placeId)
+      .select()
+      .single();
+
+    if (error) throw new Error(`upsert failed: ${error.message}`);
+    if (!data) {
+      throw new Error(`Supabase returned no row for placeId=${candidate.placeId}`);
+    }
+    updated.push(data as Lead);
   }
 
   return { inserted, updated };
@@ -561,18 +604,22 @@ export async function listLeads(params: {
     query = query.eq("passed_filter", false);
   }
 
-  if (params.limit) {
-    query = query.limit(params.limit);
-  }
-
-  const { data, error } = await query;
+  const limit = params.limit ?? 2000;
+  const { data, error } = await query.limit(limit);
   if (error) throw new Error(`Failed to list leads: ${error.message}`);
-  return (data ?? []) as Lead[];
+  const rows = (data ?? []) as Lead[];
+  if (rows.length === limit) {
+    getLogger().warn(
+      { count: rows.length, limit },
+      "listLeads hit limit — results may be truncated"
+    );
+  }
+  return rows;
 }
 
 export async function loadLeadsByRunId(
   runId: string,
-  opts: { passedOnly?: boolean } = { passedOnly: true }
+  opts: { passedOnly?: boolean; limit?: number } = { passedOnly: true }
 ): Promise<Lead[]> {
   let query = getSupabase()
     .from("leads")
@@ -582,10 +629,18 @@ export async function loadLeadsByRunId(
   if (opts.passedOnly) {
     query = query.eq("passed_filter", true);
   }
-  const { data, error } = await query;
+  const limit = opts.limit ?? 2000;
+  const { data, error } = await query.limit(limit);
 
   if (error) throw new Error(`Failed to load leads for run ${runId}: ${error.message}`);
-  return (data ?? []) as Lead[];
+  const rows = (data ?? []) as Lead[];
+  if (rows.length === limit) {
+    getLogger().warn(
+      { runId, count: rows.length, limit },
+      "loadLeadsByRunId hit limit — results may be truncated"
+    );
+  }
+  return rows;
 }
 
 function isEnriched(fp: DigitalFootprint): fp is DigitalFootprintEnriched {
@@ -642,17 +697,21 @@ export async function updateLeadEnrichment(
   const nextInferredState =
     inferredState ??
     ((footprint as { inferred_state?: Lead["inferred_state"] | null }).inferred_state ?? null);
+  // Load all columns needed for in-memory rescore so we can consolidate writes
+  // into a single UPDATE on `leads` instead of three sequential round-trips.
   const { data: current, error: fetchErr } = await db
     .from("leads")
-    .select("tags, whatsapp, phone, canonical_fields, digital_footprint, score_breakdown, inferred_state")
+    .select("*")
     .eq("id", leadId)
     .single();
   if (fetchErr) throw new Error(`Failed to load lead ${leadId}: ${fetchErr.message}`);
+  if (!current) throw new Error(`Supabase returned no row for leadId=${leadId}`);
 
-  const existingFootprint = (current?.digital_footprint as DigitalFootprint | null) ?? null;
+  const currentLead = current as Lead;
+  const existingFootprint = currentLead.digital_footprint ?? null;
   const mergedFootprint = sanitizeFootprint(mergeFootprint(existingFootprint, footprint));
-  const previousInferredState = (current?.inferred_state as Lead["inferred_state"]) ?? null;
-  const previousContactTier = currentContactTier((current?.score_breakdown as Record<string, unknown> | null) ?? null);
+  const previousInferredState = currentLead.inferred_state ?? null;
+  const previousContactTier = currentContactTier(currentLead.score_breakdown ?? null);
   let changeDiff = createEnrichmentDiff(
     leadId,
     existingFootprint,
@@ -661,9 +720,9 @@ export async function updateLeadEnrichment(
     nextInferredState
   );
 
-  const currentTags: string[] = Array.isArray(current?.tags) ? (current?.tags as string[]) : [];
+  const currentTags: string[] = Array.isArray(currentLead.tags) ? currentLead.tags : [];
   const mergedTags = cleanupMergedTagsForEnrichment([...currentTags, ...newTags], mergedFootprint);
-  const currentWhatsapp = (current?.whatsapp as string | null) ?? null;
+  const currentWhatsapp = currentLead.whatsapp ?? null;
   const mergedWhatsapp = normalizeStoredWhatsapp(currentWhatsapp) ?? normalizeStoredWhatsapp(whatsappFromSite);
 
   if (mergedWhatsapp &&
@@ -671,8 +730,8 @@ export async function updateLeadEnrichment(
       !mergedTags.includes("whatsapp-confirmed")) {
     mergedTags.push("whatsapp-derived");
   }
-  const currentPhone = (current?.phone as string | null) ?? null;
-  const canonicalFields = (current?.canonical_fields as Lead["canonical_fields"]) ?? null;
+  const currentPhone = currentLead.phone ?? null;
+  const canonicalFields = currentLead.canonical_fields ?? null;
   const finalTags = dedupeTags(
     mergeClassificationTags(mergedTags, currentPhone, canonicalFields, mergedFootprint)
   ).filter((tag) => tag !== SIGNIFICANT_CHANGE_TAG);
@@ -686,44 +745,25 @@ export async function updateLeadEnrichment(
     )
   );
 
-  const updateQuery = db
-    .from("leads")
-    .update({
-      digital_footprint: mergedFootprint,
-      inferred_state: nextInferredState,
-      contact_reliability_score,
-      tags: finalTags,
-      whatsapp: mergedWhatsapp,
-    })
-    .eq("id", leadId);
+  // Build a simulated lead reflecting all in-memory mutations. This lets us
+  // run the rescore BEFORE writing, so we can fold last_change_diff (incl. the
+  // contact_tier delta) and the SIGNIFICANT tag into a single UPDATE.
+  const simulatedLead: Lead = {
+    ...currentLead,
+    digital_footprint: mergedFootprint,
+    inferred_state: nextInferredState,
+    contact_reliability_score,
+    tags: finalTags,
+    whatsapp: mergedWhatsapp,
+    phone: currentPhone,
+    canonical_fields: canonicalFields,
+  };
 
-  const updateResult = await (
-    typeof (updateQuery as { select?: unknown }).select === "function"
-      ? (updateQuery as unknown as {
-          select: (columns: string) => {
-            single: () => Promise<{ data: unknown; error: { message: string } | null }>;
-          };
-        }).select("*").single()
-      : updateQuery
-  ) as { data?: unknown; error: { message: string } | null };
+  let rescoreResult: ScoreResult | null = null;
+  let rescoreBuyerScores: BuyerTypeScore[] | null = null;
 
-  const { error } = updateResult;
-  if (error) throw new Error(`Failed to update lead ${leadId}: ${error.message}`);
-  if ("data" in updateResult && updateResult.data === null) {
-    throw new Error(`Supabase returned no row for leadId=${leadId}`);
-  }
-
-  let rescored = false;
-  const updatedLeadBase = ("data" in updateResult ? updateResult.data : null) as Lead | null;
-  const updatedLead = updatedLeadBase
-    ? {
-        ...updatedLeadBase,
-        inferred_state: updatedLeadBase.inferred_state ?? nextInferredState,
-      }
-    : null;
-
-  if (updatedLead && changeDiff && hasCriticalEnrichmentChange(changeDiff)) {
-    const scoreResult = scoreLead(updatedLead);
+  if (changeDiff && hasCriticalEnrichmentChange(changeDiff)) {
+    const scoreResult = scoreLead(simulatedLead);
     const nextContactTier = currentContactTier(
       scoreResult.score_breakdown as unknown as Record<string, unknown>
     );
@@ -736,11 +776,10 @@ export async function updateLeadEnrichment(
       });
     }
 
-    await updateLeadScore(leadId, scoreResult);
     const deliverySystemCostUyu = await getAdminServicePricing("delivery_system");
-    const buyerScores = computeAllBuyerScores(
+    rescoreBuyerScores = computeAllBuyerScores(
       {
-        ...updatedLead,
+        ...simulatedLead,
         business_quality_score: scoreResult.business_quality_score,
         digital_gap_score: scoreResult.digital_gap_score,
         systems_gap_score: scoreResult.systems_gap_score,
@@ -752,8 +791,7 @@ export async function updateLeadEnrichment(
       },
       deliverySystemCostUyu != null ? { deliverySystemCostUyu } : {}
     );
-    await upsertBuyerScores(leadId, buyerScores);
-    rescored = true;
+    rescoreResult = scoreResult;
   }
 
   const criticalChange = hasCriticalEnrichmentChange(changeDiff);
@@ -762,15 +800,29 @@ export async function updateLeadEnrichment(
     criticalChange ? [...finalTags, SIGNIFICANT_CHANGE_TAG] : finalTags
   );
 
-  const { error: diffPersistError } = await db
+  const { error: updateError } = await db
     .from("leads")
     .update({
       digital_footprint: finalDiffFootprint,
+      inferred_state: nextInferredState,
+      contact_reliability_score,
       tags: finalPersistedTags,
+      whatsapp: mergedWhatsapp,
     })
     .eq("id", leadId);
-  if (diffPersistError) {
-    throw new Error(`Failed to persist change diff for lead ${leadId}: ${diffPersistError.message}`);
+  if (updateError) {
+    throw new Error(`Failed to update lead ${leadId}: ${updateError.message}`);
+  }
+
+  // Score persistence and buyer scores live in separate tables/columns; doing
+  // them after the consolidated UPDATE keeps `leads` writes single-shot.
+  // Partial-failure risk between leads-update and lead_scores/buyer_scores
+  // is logged as known debt — it cannot corrupt the leads row itself.
+  let rescored = false;
+  if (rescoreResult && rescoreBuyerScores) {
+    await updateLeadScore(leadId, rescoreResult);
+    await upsertBuyerScores(leadId, rescoreBuyerScores);
+    rescored = true;
   }
 
   return {
@@ -914,6 +966,91 @@ export async function loadAllLeads(): Promise<Lead[]> {
   return leads;
 }
 
+export async function loadLeadsByNiche(niche: string): Promise<Lead[]> {
+  const db = getSupabase();
+  const pageSize = 1000;
+  const leads: Lead[] = [];
+
+  for (let from = 0; ; from += pageSize) {
+    const to = from + pageSize - 1;
+    const { data, error } = await db
+      .from("leads")
+      .select("*")
+      .eq("niche", niche)
+      .order("name")
+      .range(from, to);
+
+    if (error) throw new Error(`Failed to load leads for niche ${niche}: ${error.message}`);
+
+    const batch = (data ?? []) as Lead[];
+    leads.push(...batch);
+
+    if (batch.length < pageSize) break;
+  }
+
+  return leads;
+}
+
+export type EnrichmentLeadFilterSelection = {
+  contact_tier?: string;
+  prospect_score_gte?: number;
+  niche?: string;
+  source?: string;
+  primary_offer?: string;
+  q?: string;
+};
+
+export async function countLeadsByFilterSelection(filters: EnrichmentLeadFilterSelection): Promise<number> {
+  let query = getSupabase().from("lead_dashboard").select("id", { count: "exact", head: true });
+
+  if (filters.contact_tier) query = query.eq("contact_tier", filters.contact_tier);
+  if (filters.prospect_score_gte != null) query = query.gte("prospect_score", filters.prospect_score_gte);
+  if (filters.niche) query = query.eq("niche", filters.niche);
+  if (filters.source) query = query.eq("source", filters.source);
+  if (filters.primary_offer) query = query.eq("primary_offer", filters.primary_offer);
+  if (filters.q) query = query.textSearch("search_vector", filters.q, { type: "plain", config: "spanish" });
+
+  const { count, error } = await query;
+  if (error) throw new Error(`Failed to count leads for filters: ${error.message}`);
+  return count ?? 0;
+}
+
+export async function loadLeadsByFilterSelection(
+  filters: EnrichmentLeadFilterSelection,
+  opts: { passedOnly?: boolean; limit?: number } = { passedOnly: true, limit: 250 }
+): Promise<Lead[]> {
+  let dashboardQuery = getSupabase().from("lead_dashboard").select("id").order("created_at", { ascending: false });
+
+  if (filters.contact_tier) dashboardQuery = dashboardQuery.eq("contact_tier", filters.contact_tier);
+  if (filters.prospect_score_gte != null) dashboardQuery = dashboardQuery.gte("prospect_score", filters.prospect_score_gte);
+  if (filters.niche) dashboardQuery = dashboardQuery.eq("niche", filters.niche);
+  if (filters.source) dashboardQuery = dashboardQuery.eq("source", filters.source);
+  if (filters.primary_offer) dashboardQuery = dashboardQuery.eq("primary_offer", filters.primary_offer);
+  if (filters.q) dashboardQuery = dashboardQuery.textSearch("search_vector", filters.q, { type: "plain", config: "spanish" });
+  if (opts.limit) dashboardQuery = dashboardQuery.limit(opts.limit);
+
+  const { data: dashboardRows, error: dashboardError } = await dashboardQuery;
+  if (dashboardError) throw new Error(`Failed to load lead ids for filters: ${dashboardError.message}`);
+
+  const ids = (dashboardRows ?? [])
+    .map((row) => (row as { id?: string }).id)
+    .filter((value): value is string => typeof value === "string" && value.length > 0);
+
+  if (ids.length === 0) return [];
+
+  let query = getSupabase()
+    .from("leads")
+    .select("*")
+    .in("id", ids)
+    .order("name")
+    .limit(ids.length);
+  if (opts.passedOnly) query = query.eq("passed_filter", true);
+
+  const { data, error } = await query;
+  if (error) throw new Error(`Failed to load leads for filters: ${error.message}`);
+  return (data ?? []) as Lead[];
+}
+
 export async function loadLeadsBySource(
   source: string,
   opts: { passedOnly?: boolean } = { passedOnly: true }
@@ -988,15 +1125,11 @@ export async function updateLeadCompanyData(
   patch: Record<string, unknown>
 ): Promise<void> {
   const db = getSupabase();
-  const { data: current, error: fetchErr } = await db
-    .from("leads")
-    .select("lead_company_data")
-    .eq("id", leadId)
-    .single();
-  if (fetchErr) throw new Error(`Failed to load lead_company_data for ${leadId}: ${fetchErr.message}`);
-  const merged = { ...(current?.lead_company_data as Record<string, unknown> | null ?? {}), ...patch };
-  const { error } = await db.from("leads").update({ lead_company_data: merged }).eq("id", leadId);
-  if (error) throw new Error(`Failed to update lead_company_data for ${leadId}: ${error.message}`);
+  const { error } = await db.rpc("merge_lead_company_data", {
+    p_lead_id: leadId,
+    p_patch: patch,
+  });
+  if (error) throw new Error(`merge_lead_company_data failed for ${leadId}: ${error.message}`);
 }
 
 export async function upsertBuyerScores(

@@ -86,8 +86,13 @@ Shell admin implementado hoy:
 - listado de backups existentes en UI
 - health/admin exponen estado de backups
 
+Estado actual (`BKP-1` cerrado):
+- `backup_config` persiste `max_manual_backups` y `max_scheduled_backups`
+- la poda automática se aplica por trigger (`manual` y `scheduled`)
+- backups, health y monitoreo exponen conteos por tipo, tamaño estimado de DB y huella agregada de backups retenidos
+
 **Gap conocido:**
-- la retención máxima todavía usa un único límite operativo; el programa actual busca separarla en manual vs scheduled.
+- el gate destructivo `supabase db reset` sigue postergado mientras el restore local permanezca degradado por el error preexistente de `_realtime`.
 
 ## Discovery implementado hoy
 
@@ -97,10 +102,10 @@ Shell admin implementado hoy:
 - el pipeline puede correr discovery y enriquecer/scorar por CLI/core
 
 **Gaps conocidos:**
-- el composer hoy no encadena formalmente enrichment por defecto
-- el workspace tiene deuda de UX
-- `jobs legacy` sigue apareciendo en la experiencia
-- la lógica de nichos MINTUR todavía deja demasiado `other`
+- `jobs legacy` ya no forman parte de la experiencia principal y quedan solo como compatibilidad colapsable
+- el provider MINTUR ya usa `TipoOperador`/`Operador` para reducir `other`
+- discovery admin ya renderiza densidad comercial sobre mapa real Leaflet/OSM con `gps_points` agregados por ubicación
+- el composer ya encadena enrichment por `run_id` del job hijo, pero la herramienta de enrich por filtros sigue pendiente
 
 ## Monitoreo implementado hoy
 
@@ -122,8 +127,10 @@ La observabilidad existe, pero está repartida:
 ## Modelo comercial implementado hoy
 
 - Leads, Outreach y Campaigns existen
+- existe enrichment operativo sobre colecciones filtradas de leads desde admin, ejecutado por run y limitado por guardrails
+- existe persistencia de feedback humano por lead/campo en `lead_feedback`, con API dedicada y auditoría en `audit_log`
 - todavía no existe un CRM propio de seguimiento por etapas con board tipo Jira
-- tampoco existe un sistema persistido de feedback humano sobre calidad de datos del lead
+- todavía no existe consumo operativo de ese feedback dentro de scoring, enrich o CRM
 
 ## Convenciones operativas importantes
 

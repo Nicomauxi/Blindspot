@@ -9,6 +9,7 @@ interface LoginBody {
 
 export async function authRoutes(app: FastifyInstance): Promise<void> {
   app.post<{ Body: LoginBody }>("/auth/login", {
+    config: { rateLimit: { max: 10, timeWindow: "1 minute" } },
     schema: {
       body: {
         type: "object",
@@ -52,7 +53,9 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     return reply.send({ token, role: user.role });
   });
 
-  app.post("/auth/refresh", async (request, reply) => {
+  app.post("/auth/refresh", {
+    config: { rateLimit: { max: 10, timeWindow: "1 minute" } },
+  }, async (request, reply) => {
     try {
       await request.jwtVerify();
     } catch {

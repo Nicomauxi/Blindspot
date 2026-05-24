@@ -326,28 +326,44 @@ describe("updateLeadEnrichment", () => {
       .rejects.toThrow("Failed to load lead lead-1: select failed");
   });
 
-  it("throws when update returns null data", async () => {
-    const single = vi.fn(async () => ({
-      data: { tags: [], whatsapp: null, digital_footprint: null },
-      error: null,
-    }));
+  it("throws when select returns no data (lead not found)", async () => {
+    // After consolidating 3 UPDATEs into 1 (B5 fix), the post-UPDATE `data: null`
+    // path no longer exists — the only "row missing" branch is on the initial
+    // SELECT. The test now asserts that branch.
+    const single = vi.fn(async () => ({ data: null, error: null }));
     const select = vi.fn(() => ({ eq: vi.fn(() => ({ single })) }));
-    const updateSingle = vi.fn(async () => ({ data: null, error: null }));
-    const update = vi.fn(() => ({
-      eq: vi.fn(() => ({ select: vi.fn(() => ({ single: updateSingle })) })),
-    }));
     supabaseRef.current = {
-      from: vi.fn((table: string) => {
-        if (table === "leads") return { select, update };
-        if (table === "lead_buyer_scores") {
-          return { upsert: vi.fn(async () => ({ error: null })) };
-        }
-        return { select, update };
-      }),
+      from: vi.fn(() => ({ select })),
     };
 
     await expect(updateLeadEnrichment("lead-2", { fetched_at: "now" }, [], null))
       .rejects.toThrow("Supabase returned no row for leadId=lead-2");
+  });
+
+  it("throws when UPDATE returns an error", async () => {
+    const single = vi.fn(async () => ({
+      data: {
+        id: "lead-2b",
+        name: "Test",
+        tags: [],
+        whatsapp: null,
+        phone: null,
+        canonical_fields: null,
+        digital_footprint: null,
+        score_breakdown: null,
+        inferred_state: null,
+      },
+      error: null,
+    }));
+    const select = vi.fn(() => ({ eq: vi.fn(() => ({ single })) }));
+    const updateEq = vi.fn(async () => ({ error: { message: "update failed" } }));
+    const update = vi.fn(() => ({ eq: updateEq }));
+    supabaseRef.current = {
+      from: vi.fn(() => ({ select, update })),
+    };
+
+    await expect(updateLeadEnrichment("lead-2b", { fetched_at: "now" }, [], null))
+      .rejects.toThrow("Failed to update lead lead-2b: update failed");
   });
 
   it("keeps existing normalized whatsapp before whatsappFromSite", async () => {
@@ -398,19 +414,10 @@ describe("updateLeadEnrichment", () => {
   });
 
   it("persists contact_reliability_score and email-no-mx tags from enrichment data", async () => {
+    // After B5 consolidation, SELECT now reads "*" and the rescore runs in
+    // memory against `simulatedLead` BEFORE the single consolidated UPDATE.
+    // The mock must therefore return all Lead fields scoreLead reads.
     const single = vi.fn(async () => ({
-      data: {
-        tags: [],
-        whatsapp: null,
-        phone: "+59824087679",
-        canonical_fields: null,
-        digital_footprint: null,
-      },
-      error: null,
-    }));
-    const select = vi.fn(() => ({ eq: vi.fn(() => ({ single })) }));
-    let updatePayload: Record<string, unknown> | null = null;
-    const updateSingle = vi.fn(async () => ({
       data: {
         id: "lead-4",
         place_id: "place-4",
@@ -419,9 +426,11 @@ describe("updateLeadEnrichment", () => {
         source_confidence: 0.9,
         source_data: null,
         data_confidence_score: 0.8,
-        contact_reliability_score: 0.23,
+        contact_reliability_score: 0.5,
         canonical_fields: null,
         corroborating_sources: [],
+        canonical_source: null,
+        owner_group_id: null,
         lead_company_data: null,
         niche: "restaurant",
         name: "Negocio",
@@ -432,36 +441,26 @@ describe("updateLeadEnrichment", () => {
         whatsapp: null,
         phone: "+59824087679",
         business_status: null,
-        tags: ["email-found", "email-no-mx", "landline-phone"],
+        tags: [],
         notes: null,
         state: "discovered",
         first_seen_run_id: "run-1",
         last_seen_run_id: "run-1",
         google_data: null,
-        digital_footprint: {
-          fetched_at: "now",
-          contact_emails: ["info@negocio.uy"],
-          email_quality: [{
-            email: "info@negocio.uy",
-            quality: "generic",
-            domain_match: false,
-            mx_valid: false,
-            reliability_multiplier: 0.5,
-          }],
-        },
+        digital_footprint: null,
         inferred_state: null,
         gps: null,
         reviews_sample: null,
-        business_quality_score: 20,
-        digital_gap_score: 20,
-        systems_gap_score: 10,
-        prospect_score: 35,
-        scoring_version: 2,
-        contact_ready: true,
+        business_quality_score: null,
+        digital_gap_score: null,
+        systems_gap_score: null,
+        prospect_score: null,
+        scoring_version: null,
+        contact_ready: null,
         prospect_score_v1: null,
         passed_filter: true,
         rejection_reasons: [],
-        score_breakdown: { contact_tier: "B" },
+        score_breakdown: null,
         score_breakdown_v1: null,
         systems_gap_breakdown: null,
         contacted_at: null,
@@ -470,11 +469,14 @@ describe("updateLeadEnrichment", () => {
       },
       error: null,
     }));
+    const select = vi.fn(() => ({ eq: vi.fn(() => ({ single })) }));
+    let updatePayload: Record<string, unknown> | null = null;
+    const updateEq = vi.fn(async () => ({ error: null }));
     const update = vi.fn((payload: Record<string, unknown>) => {
       if ("contact_reliability_score" in payload) {
         updatePayload = payload;
       }
-      return { eq: vi.fn(() => ({ select: vi.fn(() => ({ single: updateSingle })) })) };
+      return { eq: updateEq };
     });
     supabaseRef.current = {
       from: vi.fn((table: string) => {

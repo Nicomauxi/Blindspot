@@ -1,4 +1,5 @@
 import { getSupabase } from "../shared/supabase.js";
+import { getLogger } from "../shared/logger.js";
 
 export interface DiscoveryJobRow {
   id: string;
@@ -21,6 +22,10 @@ export interface DiscoveryJobRow {
   actual_cost_usd?: number | null;
   cost_cap_usd?: number | null;
   linked_run_id?: string | null;
+  enrich_after_discovery?: boolean;
+  enrich_status?: string;
+  linked_enrich_run_id?: string | null;
+  enrich_error_message?: string | null;
   source_params?: Record<string, unknown> | null;
   created_at: string;
 }
@@ -32,6 +37,8 @@ type DiscoveryJobStatus =
   | "failed"
   | "cancelled"
   | "paused";
+
+export type DiscoveryJobEnrichStatus = "queued" | "running" | "completed" | "failed" | "skipped";
 
 function asNumber(value: unknown): number {
   if (typeof value === "number" && Number.isFinite(value)) return value;
@@ -54,16 +61,28 @@ function aggregateBatchStatus(statuses: DiscoveryJobStatus[]): string {
   return "queued";
 }
 
+const BATCH_REFRESH_ROW_LIMIT = 1000;
+
 async function refreshDiscoveryBatchStatus(batchId: string): Promise<void> {
   const db = getSupabase();
   const { data, error } = await db
     .from("discovery_jobs")
     .select("status, started_at, completed_at, estimated_cost_usd, actual_cost_usd")
-    .eq("batch_id", batchId);
+    .eq("batch_id", batchId)
+    .limit(BATCH_REFRESH_ROW_LIMIT);
 
   if (error) throw new Error(`refreshDiscoveryBatchStatus failed: ${error.message}`);
 
   const rows = (data ?? []) as Array<Record<string, unknown>>;
+  if (rows.length >= BATCH_REFRESH_ROW_LIMIT) {
+    // Safeguard against unbounded SELECT: if we ever hit the limit the batch
+    // aggregate is computed over a truncated set. Pagination is the proper
+    // fix — for now we surface the condition.
+    getLogger().warn(
+      { batchId, limit: BATCH_REFRESH_ROW_LIMIT },
+      "refreshDiscoveryBatchStatus hit row limit — aggregate may be incomplete; consider paginating"
+    );
+  }
   const statuses = rows
     .map((row) => row["status"])
     .filter((value): value is DiscoveryJobStatus => typeof value === "string");
@@ -109,6 +128,14 @@ export async function insertDiscoveryJob(opts: {
   estimated_cost_usd?: number | null;
   cost_cap_usd?: number | null;
   source_params?: Record<string, unknown> | null;
+  enrich_after_discovery?: boolean;
+  enrich_status?: DiscoveryJobEnrichStatus;
+  /**
+   * Skip the batch aggregate refresh after inserting. Use when inserting many
+   * jobs into the same batch in a loop — call refreshDiscoveryBatchStatus once
+   * at the end instead of paying for N round-trips.
+   */
+  skipBatchRefresh?: boolean;
 }): Promise<DiscoveryJobRow> {
   const db = getSupabase();
   const { data, error } = await db
@@ -129,6 +156,8 @@ export async function insertDiscoveryJob(opts: {
       estimated_cost_usd: opts.estimated_cost_usd ?? null,
       cost_cap_usd: opts.cost_cap_usd ?? null,
       source_params: opts.source_params ?? null,
+      enrich_after_discovery: opts.enrich_after_discovery ?? false,
+      enrich_status: opts.enrich_status ?? (opts.enrich_after_discovery ? "queued" : "skipped"),
     })
     .select()
     .single();
@@ -136,10 +165,49 @@ export async function insertDiscoveryJob(opts: {
   if (error) throw new Error(`insertDiscoveryJob failed: ${error.message}`);
 
   const row = data as DiscoveryJobRow;
-  if (row.batch_id) {
+  if (row.batch_id && !opts.skipBatchRefresh) {
     await refreshDiscoveryBatchStatus(row.batch_id);
   }
   return row;
+}
+
+export interface BulkJobDefinition {
+  source: string;
+  location: string;
+  niche: string;
+  max_results?: number;
+  cost_cap_usd?: number | null;
+  estimated_cost_usd?: number | null;
+}
+
+export async function bulkInsertDiscoveryJobs(
+  jobs: BulkJobDefinition[],
+  triggeredBy = "admin_bulk"
+): Promise<DiscoveryJobRow[]> {
+  if (jobs.length === 0) return [];
+  const db = getSupabase();
+  const rows = jobs.map((j) => ({
+    source: j.source,
+    location: j.location,
+    niche: j.niche,
+    max_results: j.max_results ?? 200,
+    cpu_budget: "balanced",
+    status: "queued",
+    triggered_by: triggeredBy,
+    leads_found: 0,
+    leads_new: 0,
+    batch_id: null,
+    cost_cap_usd: j.cost_cap_usd ?? null,
+    estimated_cost_usd: j.estimated_cost_usd ?? null,
+    enrich_after_discovery: false,
+    enrich_status: "skipped",
+  }));
+  const { data, error } = await db
+    .from("discovery_jobs")
+    .insert(rows)
+    .select();
+  if (error) throw new Error(`bulkInsertDiscoveryJobs failed: ${error.message}`);
+  return (data ?? []) as DiscoveryJobRow[];
 }
 
 export async function updateDiscoveryJobStatus(
@@ -187,4 +255,26 @@ export async function updateDiscoveryJobStatus(
   if (batchId) {
     await refreshDiscoveryBatchStatus(batchId);
   }
+}
+
+export async function updateDiscoveryJobEnrichmentStatus(
+  id: string,
+  status: DiscoveryJobEnrichStatus,
+  fields: {
+    linked_enrich_run_id?: string | null;
+    enrich_error_message?: string | null;
+  } = {}
+): Promise<void> {
+  const db = getSupabase();
+  const update: Record<string, unknown> = {
+    enrich_status: status,
+    enrich_error_message: fields.enrich_error_message ?? null,
+  };
+
+  if (fields.linked_enrich_run_id !== undefined) {
+    update["linked_enrich_run_id"] = fields.linked_enrich_run_id;
+  }
+
+  const { error } = await db.from("discovery_jobs").update(update).eq("id", id);
+  if (error) throw new Error(`updateDiscoveryJobEnrichmentStatus failed: ${error.message}`);
 }

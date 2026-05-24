@@ -1,8 +1,11 @@
 import { fetch } from "undici";
 import { z } from "zod";
 import pRetry from "p-retry";
+import pLimit from "p-limit";
 import { getConfig } from "../../shared/config.js";
 import { getLogger } from "../../shared/logger.js";
+import { getSubAreas } from "./location-subdivider.js";
+import { isWithinUruguay, inferDepartamento } from "./geo-validator.js";
 import type { PlaceCandidate } from "../../shared/types.js";
 
 const PLACES_BASE = "https://places.googleapis.com/v1";
@@ -17,6 +20,7 @@ export const TEXT_SEARCH_FIELDS = [
   "places.internationalPhoneNumber",
   "places.businessStatus",
   "places.primaryType",
+  "places.location",
 ].join(",");
 
 export const DETAILS_FIELDS = "photos,regularOpeningHours,reviews";
@@ -26,6 +30,11 @@ export const DETAILS_FIELDS = "photos,regularOpeningHours,reviews";
 const DisplayNameSchema = z.object({
   text: z.string(),
   languageCode: z.string().optional(),
+});
+
+const PlaceLocationSchema = z.object({
+  latitude: z.number().optional(),
+  longitude: z.number().optional(),
 });
 
 const PlaceItemSchema = z.object({
@@ -38,6 +47,7 @@ const PlaceItemSchema = z.object({
   internationalPhoneNumber: z.string().optional(),
   businessStatus: z.string().optional(),
   primaryType: z.string().optional(),
+  location: PlaceLocationSchema.optional(),
 });
 
 const TextSearchResponseSchema = z.object({
@@ -230,23 +240,15 @@ export async function fetchPlaceDetails(
 
 // ---- Public API -------------------------------------------------------
 
-export async function fetchPlaceCandidates(
-  niche: string,
-  location: string,
-  maxResults: number
-): Promise<{ candidates: PlaceCandidate[]; textSearchRequestCount: number; requestLog: TextSearchRequestLog[] }> {
-  const log = getLogger();
-  const query = `${niche} en ${location}`;
-
-  log.info({ query, maxResults }, "Starting Places text search");
-
-  const { places, requestCount, requestLog } = await textSearch(query, maxResults);
-  log.info({ count: places.length, requestCount }, "Text search returned places");
-
-  const candidates = places
+function placesToCandidates(places: PlaceItem[], jobLocation: string): PlaceCandidate[] {
+  return places
     .filter((place) => Boolean(place.id))
     .map((place) => {
       const primaryType = place.primaryType ?? null;
+      const lat = place.location?.latitude ?? null;
+      const lng = place.location?.longitude ?? null;
+      const geo_suspect = lat !== null && lng !== null ? !isWithinUruguay(lat, lng) : false;
+      const departamento = inferDepartamento(lat, lng, jobLocation);
       return {
         placeId: place.id,
         name: place.displayName?.text ?? "",
@@ -261,8 +263,62 @@ export async function fetchPlaceCandidates(
           ...(place as Record<string, unknown>),
           ...(primaryType !== null ? { primary_type: primaryType } : {}),
         },
+        lat,
+        lng,
+        geo_suspect,
+        departamento,
       };
     });
+}
 
-  return { candidates, textSearchRequestCount: requestCount, requestLog };
+export async function fetchPlaceCandidates(
+  niche: string,
+  location: string,
+  maxResults: number
+): Promise<{ candidates: PlaceCandidate[]; textSearchRequestCount: number; requestLog: TextSearchRequestLog[] }> {
+  const log = getLogger();
+  const subAreas = getSubAreas(location);
+
+  if (subAreas.length === 0) {
+    const query = `${niche} en ${location}`;
+    log.info({ query, maxResults }, "Starting Places text search (single area)");
+    const { places, requestCount, requestLog } = await textSearch(query, maxResults);
+    log.info({ count: places.length, requestCount }, "Text search returned places");
+    return { candidates: placesToCandidates(places, location), textSearchRequestCount: requestCount, requestLog };
+  }
+
+  log.info({ location, subAreas: subAreas.length, maxResults }, "Starting Places text search (sub-areas)");
+
+  const limit = pLimit(3);
+  const perSubArea = Math.min(Math.ceil(maxResults / subAreas.length), 20);
+
+  const results = await Promise.all(
+    subAreas.map((subArea) =>
+      limit(() => textSearch(`${niche} en ${subArea}`, perSubArea))
+    )
+  );
+
+  const seenIds = new Set<string>();
+  const allPlaces: PlaceItem[] = [];
+  let totalRequestCount = 0;
+  const allRequestLog: TextSearchRequestLog[] = [];
+
+  for (const result of results) {
+    totalRequestCount += result.requestCount;
+    allRequestLog.push(...result.requestLog);
+    for (const place of result.places) {
+      if (place.id && !seenIds.has(place.id)) {
+        seenIds.add(place.id);
+        allPlaces.push(place);
+      }
+    }
+  }
+
+  log.info({ count: allPlaces.length, requestCount: totalRequestCount, subAreas: subAreas.length }, "Sub-area search complete");
+
+  return {
+    candidates: placesToCandidates(allPlaces.slice(0, maxResults), location),
+    textSearchRequestCount: totalRequestCount,
+    requestLog: allRequestLog,
+  };
 }

@@ -474,19 +474,21 @@ export async function outreachRoutes(app: FastifyInstance): Promise<void> {
     "/outreach/generate-offer",
     { preHandler: requireAuth },
     async (request, reply) => {
-      const body = request.body as {
-        lead_id?: string;
-        offer_type?: string;
-        channel?: string;
-      };
-      const authUser = getAuthUser(request);
-
-      if (!body?.lead_id) {
-        return reply.status(400).send({
-          error: "lead_id is required",
+      const generateOfferSchema = z.object({
+        lead_id: uuidSchema,
+        offer_type: z.string().trim().max(80).optional(),
+        channel: z.enum(["email", "whatsapp", "linkedin"]).optional(),
+      });
+      const parsed = generateOfferSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.code(400).send({
+          error: "Invalid body",
           error_code: "validation_error",
+          issues: parsed.error.flatten(),
         });
       }
+      const body = parsed.data;
+      const authUser = getAuthUser(request);
 
       const db = getDb();
       const { data: lead, error: leadErr } = await db
@@ -558,9 +560,11 @@ export async function outreachRoutes(app: FastifyInstance): Promise<void> {
         success: usageSuccess,
         error: usageError,
       };
-      db.from("llm_usage_log").insert(usageRow).then(({ error: logErr }) => {
-        if (logErr) request.log.warn({ logErr }, "llm_usage_log insert failed");
-      });
+      Promise.resolve(db.from("llm_usage_log").insert(usageRow))
+        .then(({ error: logErr }) => {
+          if (logErr) request.log.warn({ logErr }, "llm_usage_log insert failed");
+        })
+        .catch((err: unknown) => request.log.warn({ err }, "audit log insert threw"));
 
       return reply.status(200).send({ data: result });
     }

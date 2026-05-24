@@ -1,11 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useAuthStore } from "@/lib/auth-store";
 import { cn } from "@/lib/utils";
-import { useTheme } from "@/components/theme-provider";
+
 
 type IconProps = {
   className?: string;
@@ -70,10 +70,10 @@ export const adminNavGroups: NavGroup[] = [
     icon: OutreachIcon,
     items: [
       {
-        href: "/admin/outreach",
-        label: "Outreach",
-        description: "Campañas y seguimiento comercial actual",
-        icon: OutreachIcon,
+        href: "/admin/crm",
+        label: "CRM",
+        description: "Board de seguimiento por etapa",
+        icon: CrmIcon,
       },
       {
         href: "/admin/segments",
@@ -161,9 +161,10 @@ export function AdminSidebar() {
   const router = useRouter();
   const pathname = usePathname();
   const { token, email, role, clearAuth } = useAuthStore();
-  const { theme, toggleTheme, hydrated } = useTheme();
+
   const [query, setQuery] = useState("");
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
+  const isFirstMount = useRef(true);
 
   useEffect(() => {
     const nextState = adminNavGroups.reduce<Record<string, boolean>>((acc, group) => {
@@ -171,14 +172,18 @@ export function AdminSidebar() {
       return acc;
     }, {});
 
-    try {
-      const stored = window.sessionStorage.getItem(SIDEBAR_GROUPS_STORAGE_KEY);
-      const parsed = stored ? (JSON.parse(stored) as Record<string, boolean>) : {};
-      for (const group of adminNavGroups) {
-        nextState[group.id] = parsed[group.id] ?? nextState[group.id];
+    // Restore sessionStorage only on initial mount; subsequent navigations auto-collapse non-active groups.
+    if (isFirstMount.current) {
+      isFirstMount.current = false;
+      try {
+        const stored = window.sessionStorage.getItem(SIDEBAR_GROUPS_STORAGE_KEY);
+        const parsed = stored ? (JSON.parse(stored) as Record<string, boolean>) : {};
+        for (const group of adminNavGroups) {
+          nextState[group.id] = parsed[group.id] ?? nextState[group.id];
+        }
+      } catch {
+        // Ignore invalid persisted state and fall back to route-based defaults.
       }
-    } catch {
-      // Ignore invalid persisted state and fall back to route-based defaults.
     }
 
     setExpandedGroups(nextState);
@@ -319,21 +324,6 @@ export function AdminSidebar() {
 
       <div className="space-y-3 px-5 py-4" style={{ borderTop: "1px solid var(--sidebar-border)" }}>
         <button
-          type="button"
-          onClick={toggleTheme}
-          className="flex w-full items-center justify-between rounded-xl border px-3 py-2 text-sm transition-colors hover:bg-slate-900"
-          style={{ borderColor: "var(--sidebar-border)", color: "var(--sidebar-text)", backgroundColor: "rgba(15, 23, 42, 0.22)" }}
-        >
-          <span className="flex items-center gap-2">
-            {hydrated && theme === "dark" ? <MoonIcon className="size-4" /> : <SunIcon className="size-4" />}
-            <span>{hydrated && theme === "dark" ? "Modo oscuro" : "Modo claro"}</span>
-          </span>
-          <span className="text-xs" style={{ color: "var(--sidebar-muted)" }}>
-            {hydrated ? "Cambiar" : "..."}
-          </span>
-        </button>
-
-        <button
           onClick={() => {
             clearAuth();
             router.replace("/login");
@@ -416,6 +406,19 @@ function SegmentsIcon({ className }: IconProps) {
     <svg {...iconProps(className)}>
       <path d="M4 12a8 8 0 1 0 16 0" />
       <path d="M12 4v8l5 3" />
+    </svg>
+  );
+}
+
+function CrmIcon({ className }: IconProps) {
+  return (
+    <svg {...iconProps(className)}>
+      <rect x="3" y="3" width="5" height="5" rx="1" />
+      <rect x="10" y="3" width="5" height="5" rx="1" />
+      <rect x="17" y="3" width="4" height="5" rx="1" />
+      <path d="M5.5 8v3M12.5 8v3M19 8v3" />
+      <rect x="3" y="13" width="5" height="8" rx="1" />
+      <rect x="10" y="13" width="5" height="5" rx="1" />
     </svg>
   );
 }

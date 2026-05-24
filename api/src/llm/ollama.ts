@@ -1,3 +1,4 @@
+import { z } from "zod";
 import type {
   LeadAssistantBrief,
   LeadAssistantRequest,
@@ -9,6 +10,12 @@ import {
   buildCommercialAssistantPrompt,
   parseCommercialAssistant,
 } from "./lead-assistant.js";
+
+const ollamaResponseSchema = z.object({
+  response: z.string().optional(),
+  prompt_eval_count: z.number().optional(),
+  eval_count: z.number().optional(),
+});
 
 function buildOfferPrompt(req: LLMRequest): string {
   return [
@@ -47,11 +54,12 @@ export class OllamaProvider implements LLMProvider {
       throw new Error(`Ollama API error: ${response.status}`);
     }
 
-    const data = (await response.json()) as {
-      response?: string;
-      prompt_eval_count?: number;
-      eval_count?: number;
-    };
+    const raw = await response.json();
+    const parsed = ollamaResponseSchema.safeParse(raw);
+    if (!parsed.success) {
+      throw new Error(`Ollama API returned unexpected payload: ${parsed.error.message}`);
+    }
+    const data = parsed.data;
 
     return {
       text: (data.response ?? "").trim(),

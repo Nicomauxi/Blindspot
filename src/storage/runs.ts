@@ -80,16 +80,18 @@ export async function getRunById(runId: string): Promise<Run | null> {
 
 const ENRICHMENT_SOURCE_SENTINEL = "__enrichment_source__";
 const ENRICHMENT_ALL_SENTINEL = "__enrichment_all__";
+const ENRICHMENT_FILTER_SENTINEL = "__enrichment_filter__";
 
 export async function createEnrichmentRun(params: {
-  mode: "run" | "source" | "all";
+  mode: "run" | "source" | "all" | "filter";
   sourceRun?: Run;
   source?: string;
+  filters?: Record<string, unknown>;
   forceRefresh: boolean;
   withHeuristic?: boolean;
   concurrency: number;
 }): Promise<Run> {
-  const { mode, sourceRun, source, forceRefresh, withHeuristic, concurrency } = params;
+  const { mode, sourceRun, source, filters, forceRefresh, withHeuristic, concurrency } = params;
 
   let niche: string;
   let location: string;
@@ -121,6 +123,18 @@ export async function createEnrichmentRun(params: {
       with_heuristic: withHeuristic === true,
       concurrency,
     };
+  } else if (mode === "filter") {
+    niche = ENRICHMENT_FILTER_SENTINEL;
+    location = ENRICHMENT_FILTER_SENTINEL;
+    profile = "a";
+    config = {
+      command: "enrich",
+      mode: "filter",
+      filters: filters ?? {},
+      force_refresh: forceRefresh,
+      with_heuristic: withHeuristic === true,
+      concurrency,
+    };
   } else {
     niche = ENRICHMENT_ALL_SENTINEL;
     location = ENRICHMENT_ALL_SENTINEL;
@@ -144,8 +158,6 @@ export async function createEnrichmentRun(params: {
   return data as Run;
 }
 
-// Sentinel values used when scoring scope=all (no single source run).
-// These are not real niche/location values — they mark a scoring-all run.
 const SCORING_ALL_SENTINEL = "__scoring_all__";
 
 export async function createScoringRun(params: {
@@ -180,8 +192,12 @@ export async function createScoringRun(params: {
   return data as Run;
 }
 
-export async function completeScoringRun(runId: string, stats: ScoringRunStats): Promise<void> {
+export async function completeScoringRun(
+  runId: string,
+  stats: ScoringRunStats
+): Promise<void> {
   const log = getLogger();
+
   const { error } = await getSupabase()
     .from("runs")
     .update({
@@ -190,6 +206,7 @@ export async function completeScoringRun(runId: string, stats: ScoringRunStats):
       finished_at: new Date().toISOString(),
     })
     .eq("id", runId);
+
   if (error) {
     log.error({ runId, error }, "Failed to complete scoring run");
     throw new Error(`Failed to complete scoring run: ${error.message}`);

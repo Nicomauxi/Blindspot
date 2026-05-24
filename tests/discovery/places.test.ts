@@ -7,6 +7,11 @@ vi.mock("../../src/shared/config.js", () => ({
   getConfig: () => ({ GOOGLE_PLACES_API_KEY: "test-api-key-for-places-tests" }),
 }));
 
+// Default: no sub-areas so existing single-query tests are unaffected
+vi.mock("../../src/modules/discovery/location-subdivider.js", () => ({
+  getSubAreas: vi.fn(() => []),
+}));
+
 const debugCalls: unknown[][] = [];
 vi.mock("../../src/shared/logger.js", () => ({
   getLogger: () => ({
@@ -156,5 +161,49 @@ describe("fetchPlaceDetails — requests and parsing", () => {
     await fetchPlaceDetails("ChIJplace123");
     const allLogs = JSON.stringify(debugCalls);
     expect(allLogs).not.toContain("test-api-key-for-places-tests");
+  });
+});
+
+import * as subdivider from "../../src/modules/discovery/location-subdivider.js";
+
+describe("fetchPlaceCandidates — sub-area deduplication", () => {
+  const getSubAreasMock = vi.mocked(subdivider.getSubAreas);
+
+  beforeEach(() => {
+    mockFetch.mockClear();
+    getSubAreasMock.mockReturnValue([]);
+  });
+
+  it("fires one query per sub-area and deduplicates by placeId", async () => {
+    getSubAreasMock.mockReturnValue(["Pocitos, Montevideo", "Punta Carretas, Montevideo"]);
+
+    const placeA = { ...SAMPLE_PLACE, id: "place-A" };
+    const placeB = { ...SAMPLE_PLACE, id: "place-B" };
+    const placeADup = { ...SAMPLE_PLACE, id: "place-A" }; // duplicate from second area
+
+    mockFetch
+      .mockResolvedValueOnce(makeOkResponse({ places: [placeA, placeADup] }))
+      .mockResolvedValueOnce(makeOkResponse({ places: [placeADup, placeB] }));
+
+    const result = await fetchPlaceCandidates("restaurante", "Montevideo", 10);
+
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(result.textSearchRequestCount).toBe(2);
+    expect(result.candidates.map((c) => c.placeId)).toEqual(
+      expect.arrayContaining(["place-A", "place-B"])
+    );
+    // place-A deduped — should appear exactly once
+    expect(result.candidates.filter((c) => c.placeId === "place-A")).toHaveLength(1);
+  });
+
+  it("falls back to single query when sub-areas are empty", async () => {
+    getSubAreasMock.mockReturnValue([]);
+    mockFetch.mockResolvedValueOnce(makeOkResponse({ places: [SAMPLE_PLACE] }));
+
+    const result = await fetchPlaceCandidates("restaurante", "Ciudad inexistente", 5);
+
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(result.textSearchRequestCount).toBe(1);
+    expect(result.candidates).toHaveLength(1);
   });
 });

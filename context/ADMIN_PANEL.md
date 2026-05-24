@@ -79,21 +79,23 @@ Estado actual (`MON-2` cerrado): la superficie visual unificada ya existe sobre 
 
 ### Cambios objetivo
 
-- separar retención máxima de manuales y programados
-- seguir mostrando restore, scheduler y listado existente
-- agregar peso actual de DB
-- dejar claro cuántos backups hay por tipo y cuál es su límite
+Estado actual (`BKP-1` cerrado):
+- retención máxima separada entre manuales y programados
+- restore, scheduler y listado existente siguen visibles
+- backups y monitoreo muestran peso actual estimado de DB
+- la UI deja claro cuántos backups hay por tipo, su límite y la huella almacenada
 
 ## Discovery Control Center
 
 ### Mejoras UX objetivo
 
+Estado actual (`DISC-2` cerrado):
 - nichos sugeridos con detalle por fuente en hover
 - composer persistente después de crear batch
-- toggle enrichment default-on
-- `Contexto y mapa` con mapa real, lista lateral acotada, scroll y filtros/orden
-- retirar `jobs legacy`
-- agregar herramienta específica para enrichment de leads por filtros
+- `jobs legacy` fuera de la experiencia principal, visibles solo como compatibilidad
+- `Contexto y mapa` con Leaflet + OSM, viewport real, lista lateral acotada, scroll y filtros/orden
+- composer con toggle persistente `discovery + enrich` y trazabilidad por runs en cada job hijo
+- Lead Explorer puede lanzar enrichment de la colección filtrada actual con guardrails de volumen, concurrencia y trazabilidad por run
 
 ## Leads y feedback
 
@@ -105,6 +107,10 @@ La ficha del lead debe volverse también punto de validación humana.
 - dejar comentario
 - persistir y auditar feedback
 - usarlo luego para mejorar criterios operativos
+
+Estado actual:
+- ya existe feedback persistido por lead/campo en backend con auditoría
+- la siguiente fase activa es `FDBK-2`, para exponerlo en Lead Detail
 
 ## CRM
 

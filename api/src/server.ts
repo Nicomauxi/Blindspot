@@ -19,6 +19,7 @@ import { performanceRoutes } from "./routes/admin/performance.js";
 import { monitoringRoutes } from "./routes/admin/monitoring.js";
 import { servicePricingRoutes } from "./routes/service-pricing.js";
 import { backupsRoutes } from "./routes/admin/backups.js";
+import { trackingRoutes } from "./routes/tracking.js";
 import { getBackupScheduler } from "./modules/backups/runtime.js";
 
 const PORT = Number(process.env["PORT"] ?? 3001);
@@ -86,6 +87,7 @@ export async function buildServer() {
   await app.register(performanceRoutes, { prefix: "/api/v1" });
   await app.register(monitoringRoutes, { prefix: "/api/v1" });
   await app.register(servicePricingRoutes, { prefix: "/api/v1" });
+  await app.register(trackingRoutes, { prefix: "/api/v1" });
 
   return app;
 }

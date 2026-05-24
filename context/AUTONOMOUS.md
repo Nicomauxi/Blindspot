@@ -27,9 +27,21 @@ Si hay contradicción, gana `ROADMAP_CANONICAL.md`.
 
 ## Misión actual
 
-El sistema ya fue remediado y dejado operable. La misión actual es ejecutar el
-programa de mejoras por fases chicas y verificables, con calidad profesional,
-sin reabrir caos arquitectónico ni agrandar diffs innecesariamente.
+El sistema ya fue remediado y dejado operable, y el ciclo 2 cerró el 2026-05-24.
+La misión actual es ejecutar el **ciclo 3** del programa de mejoras (35 fases nuevas
+desde `BUG-1` hasta `UI-RESP-1`), por fases chicas y verificables, con calidad
+profesional, sin reabrir caos arquitectónico ni agrandar diffs innecesariamente.
+
+El ciclo 3 cubre: bugfixes urgentes de budget GP, unificación Pipeline+Monitoreo
+en una pantalla `Operaciones` con secciones de Variables y Procesos en vivo,
+refresh masivo de leads en Discovery (incluyendo re-discovery de Google Places),
+hard cap mensual del budget GP, optimización del costo por lead nuevo, mapa
+heatmap granular con geocoding + filtros + modo individual, limpieza de UI
+deprecated (campañas, asistente comercial, outreach historial), sistema de
+alertas persistido con campanita en UI, mejoras CRM (transiciones bidireccionales,
+historial en popup, filtros) y safeguard RBAC para datos de contacto, rediseño
+completo de la ficha de Lead con **auditoría triple obligatoria** (técnico, UX,
+vendedor), aliasing de nichos en Calidad y responsive global como cierre.
 
 ## Reglas de oro
 
@@ -150,6 +162,30 @@ Cada fase debe dejar:
 
 ## Estado inicial del programa
 
-- `CTX-0` completo
-- próxima fase esperada: `NAV-1`
-- el programa actual termina recién cuando `CRM-4` quede cerrada y documentada
+- Ciclo 1 cerrado: `CTX-0` → `CRM-4` (todos done, 2026-05-22 a 2026-05-24).
+- Ciclo 2 cerrado: `UI-2`, `UI-1`, `NAV-2`, `THEME-2`, `MON-3`, `MON-4`, `OPS-1`, `PIPE-1`, `PIPE-3`, `PIPE-2`, `CRM-5`, `DISC-4`, `DISC-5`, `DISC-6` (todos done, 2026-05-23/24).
+- **Ciclo 3 activo desde 2026-05-24**: 35 fases nuevas (ver `ROADMAP_CANONICAL.md` órdenes 32–66).
+- Próxima fase esperada: `BUG-1` (Budget GP spent muestra 0).
+- Asset auxiliar entregado por el usuario (fuera del flujo): `context/prompts/deepsearch-discovery-places.md`. Su output (un `.xlsx` con catálogo de lugares de Uruguay) se consume en la fase `DISC-10`.
+- El ciclo 3 termina cuando `UI-RESP-1` quede cerrada y documentada.
+
+## Notas específicas del ciclo 3
+
+- **Auditoría triple en `LEAD-5`**: la fase de rediseño global de la ficha de Lead no puede cerrarse sin las tres auditorías documentadas en `context/research/lead-5-audits.md`:
+  - **técnico**: contratos UI/API, regresiones de scoring/enrichment, accesibilidad, performance del render.
+  - **UX**: jerarquía visual, contraste, dark mode, mobile responsive en viewport target.
+  - **comercial (vendedor)**: simular flujo de un vendedor con un lead nuevo — debe entender quién es, qué venderle, cómo contactarlo y cuál es el próximo paso en menos de 30 segundos.
+
+  Si alguna auditoría detecta un issue mayor, abrir sub-fase explícita y registrarla en `PROJECT_MASTER.md`.
+
+- **`UI-RESP-1` al final**: el responsive global es lo último del ciclo. No auditar responsive de pantallas que aún están en rediseño activo.
+
+- **Dependencias nuevas potenciales**:
+  - `OPS-5` puede requerir librería de charts (Recharts, Chart.js). Verificar `package.json` primero; si no hay, detenerse y pedir aprobación.
+  - `DISC-10` requiere `xlsx` parser; verificar deps primero.
+  - `MAP-4` requiere `leaflet.markercluster`; verificar deps.
+  - `MAP-2` con Nominatim queda autónomo bajo rate-limit estricto (1 req/s + cache); si se decide Mapbox/Google Geocoding pagos, detenerse y pedir aprobación.
+
+- **Hard cap GP budget**: `PIPE-4` es prerequisito de `DISC-11` y de cualquier campaña real de discovery. Tras cerrarla, el sistema debe rechazar runs que superarían el cap en UI, API y core.
+
+- **RBAC del ciclo**: `RBAC-1` cambia el shape de la API para usuarios `comercial`. Cualquier fase posterior que toque Lead Detail o pantallas comerciales debe respetar la redacción server-side.

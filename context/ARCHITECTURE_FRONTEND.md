@@ -67,6 +67,8 @@ La ruta principal es `/admin/monitoring` y `/admin/health` quedó como alias por
 
 ## Discovery workspace objetivo
 
+Estado actual (`DISC-1` cerrado): hover con breakdown por fuente, draft persistido en `localStorage` y `jobs legacy` relegados a compatibilidad.
+
 ### Recomendaciones
 
 - hover en contador de nicho con detalle por fuente
@@ -75,18 +77,20 @@ La ruta principal es `/admin/monitoring` y `/admin/health` quedó como alias por
 ### Composer
 
 - conserva el draft al crear un batch
-- toggle de enrichment default-on
+- toggle de enrichment default-on persistido en `localStorage`
 - el usuario entiende si el batch hará discovery solo o discovery + enrich
+- los jobs hijos exponen `linked_run_id`, `linked_enrich_run_id` y `enrich_status` para trazabilidad operativa
 
 ### Contexto y mapa
 
-- mapa real del mundo, no abstracción plana sin geografía
+- `Contexto y mapa` usa Leaflet sobre OpenStreetMap con atribución visible y viewport ajustado a `gps_points` reales
 - panel lateral con altura limitada y scroll
-- filtros y orden útiles, incluyendo métricas agregadas cuando existan
+- filtros y orden útiles, incluyendo métricas agregadas de puntos exactos por ubicación
 
 ### Limpieza UX
 
 - `jobs legacy` fuera de la experiencia principal
+- Lead Explorer full-page puede encolar enrichment sobre la colección filtrada actual con guardrails y feedback inmediato de run
 
 ## Leads y feedback humano
 
@@ -97,6 +101,10 @@ La ficha del lead debe poder mostrar y recibir validación humana sin romper su 
 - marcar datos buenos/malos desde donde se inspecciona el lead
 - ver feedback previo sin ruido excesivo
 - mantener separación clara entre dato original, dato inferido y dato validado por humano
+
+Estado actual:
+- ya existe API persistida de feedback humano por lead/campo
+- la siguiente fase activa es `FDBK-2`, para integrarlo en la ficha del lead
 
 ## CRM objetivo
 

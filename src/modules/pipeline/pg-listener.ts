@@ -9,6 +9,7 @@ export class PgListener {
   private onNotify: (runId?: string) => Promise<void>;
   private stopped = false;
   private connectionString: string;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(connectionString: string, onNotify: (runId?: string) => Promise<void>) {
     this.connectionString = connectionString;
@@ -21,6 +22,10 @@ export class PgListener {
 
   stop(): void {
     this.stopped = true;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
     this.client?.end().catch(() => {});
     this.client = null;
   }
@@ -63,6 +68,9 @@ export class PgListener {
   private scheduleReconnect(): void {
     if (this.stopped) return;
     this.client = null;
-    setTimeout(() => this.connect(), RECONNECT_DELAY_MS);
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      void this.connect();
+    }, RECONNECT_DELAY_MS);
   }
 }

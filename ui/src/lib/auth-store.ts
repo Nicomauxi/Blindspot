@@ -26,8 +26,16 @@ export const useAuthStore = create<AuthState>()(
     }),
     {
       name: "blindspot-auth",
+      // Solo persistir datos de sesión — hasHydrated es estado de runtime, no de sesión
+      partialize: (state) => ({ token: state.token, email: state.email, role: state.role }),
       onRehydrateStorage: () => (state) => {
-        state?.setHydrated(true);
+        if (state) {
+          state.setHydrated(true);
+        } else {
+          // state es undefined cuando la rehydration falla (storage corrupto, error de parsing, etc.)
+          // Forzar hydrated para que la UI no quede bloqueada infinitamente
+          useAuthStore.setState({ hasHydrated: true });
+        }
       },
     }
   )

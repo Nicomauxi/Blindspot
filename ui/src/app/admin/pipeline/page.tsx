@@ -1,33 +1,22 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
-  abortPipelineRun,
+  getGpBudget,
   getPipelineConfig,
-  getPipelineRun,
-  getPipelineRunLog,
-  listPipelineRuns,
   patchPipelineConfig,
+  resetGpBudgetSpent,
   testWebhook,
   triggerPipelineRun,
+  updateGpBudget,
+  updateMaxJobs,
+  type GpBudgetStatus,
   type PipelineConfig,
-  type PipelineLogLine,
-  type PipelineRun,
 } from "@/lib/api";
 import { useAuthStore } from "@/lib/auth-store";
-import { cn, formatDate, formatRelative } from "@/lib/utils";
+import { cn, formatDate } from "@/lib/utils";
 
 type TestResult = { status: string; http_status?: number; url: string; error?: string } | null;
-
-const RUN_STATUS_COLORS: Record<string, string> = {
-  queued: "bg-yellow-50 text-yellow-700",
-  pending: "bg-yellow-50 text-yellow-700",
-  running: "bg-blue-50 text-blue-700 animate-pulse",
-  completed: "bg-green-50 text-green-700",
-  partial: "bg-orange-50 text-orange-700",
-  failed: "bg-red-50 text-red-700",
-  aborted: "bg-gray-50 text-gray-600",
-};
 
 function Section({ title, description, children }: { title: string; description?: string; children: React.ReactNode }) {
   return (
@@ -52,21 +41,9 @@ function isSimpleDailyCron(cron: string | null): boolean {
   return Boolean(cron && /^0\s+\d{1,2}\s+\*\s+\*\s+\*$/.test(cron.trim()));
 }
 
-function normalizeStatus(status: PipelineRun["status"] | "queued") {
-  return status === "pending" ? "queued" : status;
-}
-
-function describeRun(run: PipelineRun | null) {
-  if (!run) return "Sin ejecución activa";
-  return run.overrides?.dry_run ? "Dry-run manual" : run.triggered_by === "manual" ? "Run manual completo" : `Run ${run.triggered_by}`;
-}
-
 export default function PipelineManagerPage() {
   const token = useAuthStore((s) => s.token);
   const [config, setConfig] = useState<PipelineConfig | null>(null);
-  const [runs, setRuns] = useState<PipelineRun[]>([]);
-  const [selectedRun, setSelectedRun] = useState<PipelineRun | null>(null);
-  const [runLogs, setRunLogs] = useState<PipelineLogLine[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [enabled, setEnabled] = useState(false);
@@ -80,11 +57,15 @@ export default function PipelineManagerPage() {
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<TestResult>(null);
   const [triggeringMode, setTriggeringMode] = useState<"full" | "dry" | null>(null);
-  const [aborting, setAborting] = useState(false);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  const activeRun = useMemo(() => runs.find((run) => run.status === "running" || run.status === "pending") ?? null, [runs]);
-  const selectedRunId = selectedRun?.id ?? activeRun?.id ?? null;
+  const [budget, setBudget] = useState<GpBudgetStatus | null>(null);
+  const [budgetTotal, setBudgetTotal] = useState("");
+  const [budgetThreshold, setBudgetThreshold] = useState("");
+  const [savingBudget, setSavingBudget] = useState(false);
+  const [budgetOk, setBudgetOk] = useState(false);
+  const [maxJobs, setMaxJobs] = useState<number | null>(null);
+  const [maxJobsInput, setMaxJobsInput] = useState("");
+  const [savingMaxJobs, setSavingMaxJobs] = useState(false);
+  const [maxJobsOk, setMaxJobsOk] = useState(false);
 
   const loadConfig = useCallback(async () => {
     if (!token) return;
@@ -98,6 +79,9 @@ export default function PipelineManagerPage() {
       setWebhookUrl(res.data.notify_webhook_url ?? "");
       setWebhookSecret(res.data.notify_webhook_secret ?? "");
       setWebhookEvents(res.data.notify_webhook_events ?? []);
+      const currentMaxJobs = (res.data.phases?.["discovery"] as { max_jobs?: number } | undefined)?.max_jobs ?? null;
+      setMaxJobs(currentMaxJobs);
+      setMaxJobsInput(currentMaxJobs !== null ? String(currentMaxJobs) : "");
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Error al cargar configuración");
@@ -106,56 +90,74 @@ export default function PipelineManagerPage() {
     }
   }, [token]);
 
-  const loadRuns = useCallback(async () => {
+  const loadBudget = useCallback(async () => {
     if (!token) return;
     try {
-      const res = await listPipelineRuns(token, { limit: 10 });
-      setRuns(res.data);
-      setSelectedRun((current) => current ? res.data.find((run) => run.id === current.id) ?? current : res.data[0] ?? null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Error al cargar runs");
-    }
-  }, [token]);
-
-  const loadRunDetail = useCallback(async (runId: string) => {
-    if (!token) return;
-    try {
-      const [runRes, logRes] = await Promise.all([
-        getPipelineRun(token, runId),
-        getPipelineRunLog(token, runId),
-      ]);
-      setSelectedRun(runRes.data);
-      setRunLogs(logRes.data);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Error al cargar detalle del run");
+      const res = await getGpBudget(token);
+      setBudget(res.data);
+      setBudgetTotal(String(res.data.budget_total));
+      setBudgetThreshold(String(res.data.alert_threshold));
+    } catch {
+      // non-blocking
     }
   }, [token]);
 
   useEffect(() => {
     void loadConfig();
-    void loadRuns();
-  }, [loadConfig, loadRuns]);
+    void loadBudget();
+  }, [loadConfig, loadBudget]);
 
-  useEffect(() => {
-    if (!selectedRunId) return;
-    void loadRunDetail(selectedRunId);
-  }, [loadRunDetail, selectedRunId]);
-
-  useEffect(() => {
-    if (!(activeRun?.id ?? selectedRunId)) {
-      if (pollRef.current) clearInterval(pollRef.current);
+  async function handleSaveBudget() {
+    if (!token) return;
+    const total = parseFloat(budgetTotal);
+    const threshold = parseFloat(budgetThreshold);
+    if (isNaN(total) || total <= 0) {
+      setError("Budget total debe ser un número positivo");
       return;
     }
+    setSavingBudget(true);
+    try {
+      const res = await updateGpBudget(token, { budget_total: total, alert_threshold: isNaN(threshold) ? undefined : threshold });
+      setBudget(res.data);
+      setBudgetOk(true);
+      setTimeout(() => setBudgetOk(false), 2500);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Error al guardar budget");
+    } finally {
+      setSavingBudget(false);
+    }
+  }
 
-    pollRef.current = setInterval(() => {
-      void loadRuns();
-      if (selectedRunId) void loadRunDetail(selectedRunId);
-    }, 5000);
+  async function handleResetBudgetSpent() {
+    if (!token) return;
+    if (!window.confirm("¿Resetear el gasto de Google Places a 0?")) return;
+    try {
+      const res = await resetGpBudgetSpent(token);
+      setBudget(res.data);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Error al resetear gasto");
+    }
+  }
 
-    return () => {
-      if (pollRef.current) clearInterval(pollRef.current);
-    };
-  }, [activeRun?.id, loadRunDetail, loadRuns, selectedRunId]);
+  async function handleSaveMaxJobs() {
+    if (!token) return;
+    const value = parseInt(maxJobsInput, 10);
+    if (isNaN(value) || value < 1 || value > 50) {
+      setError("max_jobs debe ser un número entre 1 y 50");
+      return;
+    }
+    setSavingMaxJobs(true);
+    try {
+      await updateMaxJobs(token, value);
+      setMaxJobs(value);
+      setMaxJobsOk(true);
+      setTimeout(() => setMaxJobsOk(false), 2500);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Error al guardar max_jobs");
+    } finally {
+      setSavingMaxJobs(false);
+    }
+  }
 
   async function handleSaveConfig() {
     if (!token) return;
@@ -183,32 +185,16 @@ export default function PipelineManagerPage() {
     }
   }
 
-  async function handleTrigger(dryRun: boolean) {
+  async function handleTrigger() {
     if (!token) return;
-    setTriggeringMode(dryRun ? "dry" : "full");
+    setTriggeringMode("full");
     setError(null);
     try {
-      const res = await triggerPipelineRun(token, dryRun);
-      await loadRuns();
-      await loadRunDetail(res.data.run_id);
+      await triggerPipelineRun(token, false);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Error al iniciar el run");
     } finally {
       setTriggeringMode(null);
-    }
-  }
-
-  async function handleAbort() {
-    if (!token || !activeRun) return;
-    setAborting(true);
-    try {
-      await abortPipelineRun(token);
-      await loadRuns();
-      await loadRunDetail(activeRun.id);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Error al abortar el run");
-    } finally {
-      setAborting(false);
     }
   }
 
@@ -230,8 +216,6 @@ export default function PipelineManagerPage() {
     setWebhookEvents((prev) => prev.includes(event) ? prev.filter((entry) => entry !== event) : [...prev, event]);
   }
 
-  const phaseEntries = selectedRun?.phase_results ? Object.entries(selectedRun.phase_results) : [];
-
   return (
     <div className="space-y-4">
       <div>
@@ -240,20 +224,6 @@ export default function PipelineManagerPage() {
       </div>
 
       {error ? <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</div> : null}
-
-      {activeRun ? (
-        <div className="rounded-2xl border border-blue-200 bg-blue-50 p-4">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <p className="text-sm font-semibold text-blue-900">Run activo</p>
-              <p className="mt-1 text-xs text-blue-700">{describeRun(activeRun)} · {formatRelative(activeRun.started_at ?? activeRun.created_at)}</p>
-            </div>
-            <button onClick={handleAbort} disabled={aborting} className="rounded-lg bg-red-600 px-3 py-2 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-50">
-              {aborting ? "Abortando…" : "Abortar run"}
-            </button>
-          </div>
-        </div>
-      ) : null}
 
       <Section title="Configuración" description="La agenda se simplifica a una hora fija diaria. Al guardar, siempre se normaliza a cron diario `0 HH * * *`.">
         <div className="space-y-4">
@@ -295,84 +265,80 @@ export default function PipelineManagerPage() {
         </div>
       </Section>
 
-      <Section title="Ejecución manual" description="El run completo dispara discovery, enriquecimiento, scoring y refresh operativo. El dry-run ejecuta las mismas fases sin persistir cambios.">
+      <Section title="Ejecución manual" description="Dispara el pipeline completo ahora: refresh, discovery, enriquecimiento y scoring sobre todos los leads activos.">
         <div className="space-y-4">
-          <div className="grid gap-3 md:grid-cols-2">
-            <button onClick={() => void handleTrigger(false)} disabled={triggeringMode !== null || !!activeRun} className="rounded-2xl border border-sky-200 bg-sky-50 px-4 py-4 text-left transition-colors hover:bg-sky-100 disabled:opacity-50">
-              <div className="text-sm font-semibold text-sky-900">Run completo</div>
-              <p className="mt-1 text-sm text-sky-700">Persiste cambios, actualiza resultados y deja el dashboard operativo.</p>
-            </button>
-            <button onClick={() => void handleTrigger(true)} disabled={triggeringMode !== null || !!activeRun} className="rounded-2xl border border-slate-200 bg-white px-4 py-4 text-left transition-colors hover:bg-slate-50 disabled:opacity-50">
-              <div className="text-sm font-semibold text-slate-900">Dry-run</div>
-              <p className="mt-1 text-sm text-slate-600">Corre todas las fases pero sin escribir cambios persistentes.</p>
-            </button>
-          </div>
-          {triggeringMode ? <div className="text-sm text-slate-500">Iniciando {triggeringMode === "dry" ? "dry-run" : "run completo"}…</div> : null}
+          <button onClick={() => void handleTrigger()} disabled={triggeringMode !== null} className="rounded-2xl border border-sky-200 bg-sky-50 px-4 py-4 text-left transition-colors hover:bg-sky-100 disabled:opacity-50">
+            <div className="text-sm font-semibold text-sky-900">Run completo</div>
+            <p className="mt-1 text-sm text-sky-700">Persiste cambios, actualiza resultados y deja el dashboard operativo.</p>
+          </button>
+          {triggeringMode ? <div className="text-sm text-slate-500">Iniciando run completo…</div> : null}
         </div>
       </Section>
 
-      <Section title="Estado del run" description="Seguimiento en vivo del último run lanzado o seleccionado, incluyendo fases y log incremental.">
-        {!selectedRun ? (
-          <p className="text-sm text-slate-500">Todavía no hay un run para inspeccionar.</p>
-        ) : (
+      {budget !== null ? (
+        <Section title="Budget Google Places" description="Presupuesto mensual para discovery con Google Places API.">
           <div className="space-y-4">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className={cn("rounded-full px-2 py-1 text-xs font-semibold", RUN_STATUS_COLORS[normalizeStatus(selectedRun.status)] ?? "bg-slate-100 text-slate-700")}>{normalizeStatus(selectedRun.status)}</span>
-              <span className="font-mono text-xs text-slate-500">{selectedRun.id}</span>
-              {selectedRun.overrides?.dry_run ? <span className="rounded-full bg-amber-50 px-2 py-1 text-xs font-medium text-amber-700">dry-run</span> : null}
-            </div>
-
             <div className="grid gap-3 md:grid-cols-3">
-              <MetricCard label="Creado" value={formatRelative(selectedRun.created_at)} />
-              <MetricCard label="Inicio" value={selectedRun.started_at ? formatRelative(selectedRun.started_at) : "En cola"} />
-              <MetricCard label="Fin" value={selectedRun.completed_at ? formatRelative(selectedRun.completed_at) : "—"} />
-            </div>
-
-            <div className="grid gap-3 lg:grid-cols-2">
-              <div className="rounded-xl border border-slate-200 p-4">
-                <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Fases</div>
-                {phaseEntries.length === 0 ? <p className="text-sm text-slate-500">Todavía no hay `phase_results` reportados.</p> : (
-                  <div className="space-y-3">
-                    {phaseEntries.map(([phase, result]) => (
-                      <div key={phase} className="rounded-xl bg-slate-50 p-3">
-                        <div className="text-sm font-semibold text-slate-900">{phase}</div>
-                        <pre className="mt-2 overflow-auto text-xs text-slate-600">{JSON.stringify(result, null, 2)}</pre>
-                      </div>
-                    ))}
-                  </div>
-                )}
+              <div className="rounded-xl border border-slate-200 px-3 py-3">
+                <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Total mensual</div>
+                <div className="mt-1 text-sm text-slate-800">USD {budget.budget_total.toFixed(2)}</div>
               </div>
-
-              <div className="rounded-xl border border-slate-200 p-4">
-                <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Log incremental</div>
-                <div className="max-h-80 space-y-2 overflow-auto rounded-xl bg-slate-950 p-3 text-xs text-slate-200">
-                  {runLogs.length === 0 ? <div className="text-slate-500">Sin líneas registradas todavía.</div> : runLogs.map((line, index) => (
-                    <div key={`${line.ts ?? "line"}-${index}`}>
-                      <span className="text-slate-500">[{line.ts ? new Date(line.ts).toLocaleTimeString("es-UY") : "--:--:--"}]</span>{" "}
-                      <span className="text-sky-300">{line.level ?? "info"}</span>{" "}
-                      <span>{line.msg ?? JSON.stringify(line)}</span>
-                    </div>
-                  ))}
-                </div>
+              <div className="rounded-xl border border-slate-200 px-3 py-3">
+                <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Gastado</div>
+                <div className={cn("mt-1 text-sm", budget.over_alert ? "text-amber-700 font-semibold" : "text-slate-800")}>USD {budget.budget_spent.toFixed(2)}</div>
+              </div>
+              <div className="rounded-xl border border-slate-200 px-3 py-3">
+                <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Restante</div>
+                <div className="mt-1 text-sm text-slate-800">USD {budget.budget_remaining.toFixed(2)}</div>
               </div>
             </div>
-          </div>
-        )}
-      </Section>
-
-      <Section title="Historial de runs" description="Últimas ejecuciones para saltar entre runs recientes y comparar resultado completo vs dry-run.">
-        {runs.length === 0 ? <p className="text-sm text-slate-500">Sin runs registrados.</p> : (
-          <div className="space-y-2">
-            {runs.map((run) => (
-              <button key={run.id} onClick={() => void loadRunDetail(run.id)} className={cn("flex w-full items-center gap-3 rounded-xl border px-3 py-3 text-left text-sm transition-colors", selectedRun?.id === run.id ? "border-sky-200 bg-sky-50" : "border-slate-200 hover:bg-slate-50")}>
-                <span className={cn("rounded-full px-2 py-1 text-xs font-semibold", RUN_STATUS_COLORS[normalizeStatus(run.status)] ?? "bg-slate-100 text-slate-700")}>{normalizeStatus(run.status)}</span>
-                <span className="font-mono text-xs text-slate-500">{run.id.slice(0, 8)}…</span>
-                <span className="text-xs text-slate-500">{run.overrides?.dry_run ? "dry-run" : run.triggered_by}</span>
-                <span className="ml-auto text-xs text-slate-400">{formatRelative(run.created_at)}</span>
+            <div className="grid gap-4 md:grid-cols-2 md:items-end">
+              <div>
+                <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Total mensual (USD)</label>
+                <input type="number" min="0.01" step="1" value={budgetTotal} onChange={(e) => setBudgetTotal(e.target.value)} className="w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm" />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Umbral de alerta (USD)</label>
+                <input type="number" min="0" step="1" value={budgetThreshold} onChange={(e) => setBudgetThreshold(e.target.value)} className="w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm" />
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-3">
+              <button onClick={() => void handleSaveBudget()} disabled={savingBudget} className="rounded-lg bg-sky-600 px-4 py-2 text-sm font-medium text-white hover:bg-sky-700 disabled:opacity-50">
+                {savingBudget ? "Guardando…" : "Guardar budget"}
               </button>
-            ))}
+              <button onClick={() => void handleResetBudgetSpent()} className="rounded-lg border border-slate-300 px-4 py-2 text-sm hover:bg-slate-50">
+                Resetear gasto del mes
+              </button>
+              {budgetOk ? <span className="text-sm text-emerald-700">Guardado</span> : null}
+            </div>
           </div>
-        )}
+        </Section>
+      ) : null}
+
+      <Section title="Configuración de jobs" description="Máximo de discovery jobs procesados en cada ciclo del pipeline.">
+        <div className="space-y-3">
+          <div>
+            <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+              Max jobs por ciclo
+              {maxJobs !== null ? <span className="ml-2 font-normal text-slate-400">Actual: {maxJobs}</span> : null}
+            </label>
+            <input
+              type="number"
+              min="1"
+              max="50"
+              value={maxJobsInput}
+              onChange={(e) => setMaxJobsInput(e.target.value)}
+              className="w-48 rounded-xl border border-slate-300 px-3 py-2.5 text-sm"
+              placeholder="ej: 5"
+            />
+          </div>
+          <div className="flex items-center gap-3">
+            <button onClick={() => void handleSaveMaxJobs()} disabled={savingMaxJobs} className="rounded-lg bg-sky-600 px-4 py-2 text-sm font-medium text-white hover:bg-sky-700 disabled:opacity-50">
+              {savingMaxJobs ? "Guardando…" : "Guardar"}
+            </button>
+            {maxJobsOk ? <span className="text-sm text-emerald-700">Guardado</span> : null}
+          </div>
+        </div>
       </Section>
 
       <Section title="Webhook de notificaciones" description="Configuración aparte del control de runs para no mezclar agenda, ejecución y entrega de eventos.">
@@ -409,11 +375,3 @@ export default function PipelineManagerPage() {
   );
 }
 
-function MetricCard({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-xl border border-slate-200 px-3 py-3">
-      <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</div>
-      <div className="mt-1 text-sm text-slate-800">{value}</div>
-    </div>
-  );
-}

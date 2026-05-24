@@ -1,0 +1,187 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - complementary [ref=e3]:
+      - generic [ref=e4]:
+        - link "Blindspot Panel operativo" [ref=e5] [cursor=pointer]:
+          - /url: /admin
+          - generic [ref=e6]: Blindspot
+          - paragraph [ref=e7]: Panel operativo
+        - paragraph [ref=e8]: admin@blindspot.local
+        - paragraph [ref=e9]: Administrador
+      - generic [ref=e11]:
+        - generic [ref=e12]: Buscar sección
+        - generic [ref=e13]:
+          - img [ref=e14]
+          - textbox "Buscar sección" [ref=e17]:
+            - /placeholder: Buscar sección o acción
+      - navigation [ref=e18]:
+        - generic [ref=e19]:
+          - button "Operación 4 opciónes" [ref=e20] [cursor=pointer]:
+            - generic [ref=e21]:
+              - img [ref=e23]
+              - generic [ref=e28]:
+                - paragraph [ref=e29]: Operación
+                - paragraph [ref=e30]: 4 opciónes
+            - img [ref=e31]
+          - generic [ref=e33]:
+            - link "Inicio Prioridades, métricas y colas de trabajo" [ref=e34] [cursor=pointer]:
+              - /url: /admin
+              - generic [ref=e35]:
+                - img [ref=e37]
+                - generic [ref=e42]:
+                  - generic [ref=e43]: Inicio
+                  - paragraph [ref=e44]: Prioridades, métricas y colas de trabajo
+            - link "Leads Explorar, priorizar y entender oportunidades" [ref=e45] [cursor=pointer]:
+              - /url: /admin/leads
+              - generic [ref=e46]:
+                - img [ref=e48]
+                - generic [ref=e50]:
+                  - generic [ref=e51]: Leads
+                  - paragraph [ref=e52]: Explorar, priorizar y entender oportunidades
+            - link "Discovery Jobs de discovery y entrada de nuevos leads" [ref=e53] [cursor=pointer]:
+              - /url: /admin/discovery
+              - generic [ref=e54]:
+                - img [ref=e56]
+                - generic [ref=e59]:
+                  - generic [ref=e60]: Discovery
+                  - paragraph [ref=e61]: Jobs de discovery y entrada de nuevos leads
+            - link "Pipeline Runs, cron y webhooks del pipeline" [ref=e62] [cursor=pointer]:
+              - /url: /admin/pipeline
+              - generic [ref=e63]:
+                - img [ref=e65]
+                - generic [ref=e69]:
+                  - generic [ref=e70]: Pipeline
+                  - paragraph [ref=e71]: Runs, cron y webhooks del pipeline
+        - button "Comercial 2 opciónes" [ref=e73] [cursor=pointer]:
+          - generic [ref=e74]:
+            - img [ref=e76]
+            - generic [ref=e79]:
+              - paragraph [ref=e80]: Comercial
+              - paragraph [ref=e81]: 2 opciónes
+          - img [ref=e82]
+        - button "Plataforma 6 opciónes" [ref=e85] [cursor=pointer]:
+          - generic [ref=e86]:
+            - img [ref=e88]
+            - generic [ref=e89]:
+              - paragraph [ref=e90]: Plataforma
+              - paragraph [ref=e91]: 6 opciónes
+          - img [ref=e92]
+        - button "Ayuda 1 opción" [ref=e95] [cursor=pointer]:
+          - generic [ref=e96]:
+            - img [ref=e98]
+            - generic [ref=e101]:
+              - paragraph [ref=e102]: Ayuda
+              - paragraph [ref=e103]: 1 opción
+          - img [ref=e104]
+      - button "Cerrar sesión" [ref=e107] [cursor=pointer]
+    - main [ref=e108]:
+      - generic [ref=e109]:
+        - generic [ref=e110]:
+          - paragraph [ref=e111]: Leads
+          - generic [ref=e113]:
+            - heading "Lead Explorer" [level=1] [ref=e114]
+            - paragraph [ref=e115]: "Usá esta vista como cola de trabajo: encontrá, entendé y abrí oportunidades sin perder el hilo comercial."
+        - generic [ref=e116]:
+          - generic [ref=e117]:
+            - generic [ref=e119]:
+              - heading "Colas sugeridas" [level=2] [ref=e120]
+              - paragraph [ref=e121]: Atajos rápidos para empezar el barrido del día.
+            - generic [ref=e123]:
+              - button "Hot leads Score 70+" [ref=e124] [cursor=pointer]:
+                - generic [ref=e125]: Hot leads
+                - generic [ref=e126]: Score 70+
+              - button "Tier A Mejor base de contacto" [ref=e127] [cursor=pointer]:
+                - generic [ref=e128]: Tier A
+                - generic [ref=e129]: Mejor base de contacto
+              - button "Google Places Barrido por fuente" [ref=e130] [cursor=pointer]:
+                - generic [ref=e131]: Google Places
+                - generic [ref=e132]: Barrido por fuente
+              - button "Oferta sugerida Ordenar por score" [ref=e133] [cursor=pointer]:
+                - generic [ref=e134]: Oferta sugerida
+                - generic [ref=e135]: Ordenar por score
+          - generic [ref=e136]:
+            - generic [ref=e138]:
+              - heading "Filtros" [level=2] [ref=e139]
+              - paragraph [ref=e140]: Afiná la búsqueda según valor comercial, origen y preparación del contacto.
+            - generic [ref=e142]:
+              - generic [ref=e143]:
+                - generic [ref=e144]:
+                  - generic [ref=e145]:
+                    - text: Buscar
+                    - button "Buscar" [ref=e147] [cursor=pointer]: "?"
+                  - searchbox "Nombre, dirección o niche" [ref=e148]
+                - generic [ref=e149]:
+                  - generic [ref=e150]: Niche
+                  - 'textbox "Ej: restaurante" [ref=e151]'
+                - generic [ref=e152]:
+                  - generic [ref=e153]: Oferta sugerida
+                  - 'textbox "Ej: sitio_web" [ref=e154]'
+                - generic [ref=e155]:
+                  - generic [ref=e156]: Ordenar por
+                  - combobox [ref=e157]:
+                    - option "Más nuevos" [selected]
+                    - option "Score alto primero"
+                    - option "Score bajo primero"
+              - generic [ref=e158]:
+                - generic [ref=e159]:
+                  - generic [ref=e160]: Score mínimo
+                  - spinbutton [ref=e161]
+                - generic [ref=e162]:
+                  - paragraph [ref=e163]: Fuente
+                  - generic [ref=e164]:
+                    - button "Todas las fuentes" [ref=e165] [cursor=pointer]
+                    - button "Yelu" [ref=e166] [cursor=pointer]
+                    - button "PedidosYa" [ref=e167] [cursor=pointer]
+                    - button "MINTUR" [ref=e168] [cursor=pointer]
+                    - button "OSM" [ref=e169] [cursor=pointer]
+                    - button "Google Places" [ref=e170] [cursor=pointer]
+                - generic [ref=e171]:
+                  - paragraph [ref=e172]: Tier de contacto
+                  - generic [ref=e173]:
+                    - button "Todos los tiers" [ref=e174] [cursor=pointer]
+                    - button "Tier A" [ref=e175] [cursor=pointer]
+                    - button "Tier B" [ref=e176] [cursor=pointer]
+                    - button "Tier C" [ref=e177] [cursor=pointer]
+                    - button "Tier D" [ref=e178] [cursor=pointer]
+                    - button "Tier X" [ref=e179] [cursor=pointer]
+              - generic [ref=e181]: Sin filtros activos
+          - generic [ref=e182]:
+            - generic [ref=e184]:
+              - heading "Enrichment de colección" [level=2] [ref=e185]
+              - paragraph [ref=e186]: Tomá la colección actual de leads filtrados y lanzá enrichment solo sobre ese subconjunto, con guardrails de volumen y trazabilidad por run.
+            - generic [ref=e188]:
+              - generic [ref=e189]:
+                - generic [ref=e190]:
+                  - generic [ref=e191]: Colección activa
+                  - generic [ref=e192]: 0 leads · 0 filtros relevantes
+                  - generic [ref=e193]: Requiere al menos un filtro activo y rechaza colecciones de más de 250 leads.
+                - generic [ref=e194]:
+                  - generic [ref=e195]: Concurrencia
+                  - combobox "Concurrencia" [ref=e196]:
+                    - option "2"
+                    - option "4" [selected]
+                    - option "6"
+                - generic [ref=e197]:
+                  - checkbox "With heuristic Incluye website/social/WhatsApp discovery antes del enrich normal." [checked] [ref=e198]
+                  - generic [ref=e199]:
+                    - generic [ref=e200]: With heuristic
+                    - generic [ref=e201]: Incluye website/social/WhatsApp discovery antes del enrich normal.
+                - button "Enriquecer colección" [disabled] [ref=e202]
+              - generic [ref=e203]: Definí al menos un filtro relevante antes de encolar enrichment.
+          - generic [ref=e204]:
+            - generic [ref=e205]:
+              - generic [ref=e206]:
+                - heading "Listado" [level=2] [ref=e207]
+                - paragraph [ref=e208]: Cada fila resume valor, contexto y próxima lectura del lead antes de abrir la ficha.
+              - generic [ref=e209]: Bloque 1
+            - generic [ref=e211]:
+              - paragraph [ref=e212]: Todavía no hay leads para explorar
+              - paragraph [ref=e213]: Cuando entren registros, esta vista va a convertirse en la cola principal de trabajo.
+          - generic [ref=e214]:
+            - generic [ref=e215]: Sin resultados para mostrar
+            - generic [ref=e216]:
+              - button "Anterior 50" [disabled] [ref=e217]
+              - button "Siguiente 50" [disabled] [ref=e218]
+    - button "Cambiar a modo claro" [ref=e219] [cursor=pointer]:
+      - img [ref=e220]
+  - alert [ref=e223]

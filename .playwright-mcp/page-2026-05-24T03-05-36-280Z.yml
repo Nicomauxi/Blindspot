@@ -1,0 +1,95 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - complementary [ref=e3]:
+      - generic [ref=e4]:
+        - link "Blindspot Panel operativo" [ref=e5] [cursor=pointer]:
+          - /url: /admin
+          - generic [ref=e6]: Blindspot
+          - paragraph [ref=e7]: Panel operativo
+        - paragraph [ref=e8]: admin@blindspot.local
+        - paragraph [ref=e9]: Administrador
+      - generic [ref=e11]:
+        - generic [ref=e12]: Buscar sección
+        - generic [ref=e13]:
+          - img [ref=e14]
+          - textbox "Buscar sección" [ref=e17]:
+            - /placeholder: Buscar sección o acción
+      - navigation [ref=e18]:
+        - button "Operación 4 opciónes" [ref=e20] [cursor=pointer]:
+          - generic [ref=e21]:
+            - img [ref=e23]
+            - generic [ref=e28]:
+              - paragraph [ref=e29]: Operación
+              - paragraph [ref=e30]: 4 opciónes
+          - img [ref=e31]
+        - button "Comercial 2 opciónes" [ref=e34] [cursor=pointer]:
+          - generic [ref=e35]:
+            - img [ref=e37]
+            - generic [ref=e40]:
+              - paragraph [ref=e41]: Comercial
+              - paragraph [ref=e42]: 2 opciónes
+          - img [ref=e43]
+        - generic [ref=e45]:
+          - button "Plataforma 6 opciónes" [ref=e46] [cursor=pointer]:
+            - generic [ref=e47]:
+              - img [ref=e49]
+              - generic [ref=e50]:
+                - paragraph [ref=e51]: Plataforma
+                - paragraph [ref=e52]: 6 opciónes
+            - img [ref=e53]
+          - generic [ref=e55]:
+            - link "Backups Dump manual, cron y retención operativa" [ref=e56] [cursor=pointer]:
+              - /url: /admin/backups
+              - generic [ref=e57]:
+                - img [ref=e59]
+                - generic [ref=e63]:
+                  - generic [ref=e64]: Backups
+                  - paragraph [ref=e65]: Dump manual, cron y retención operativa
+            - link "Monitoreo Estado operativo, presupuesto y procesos" [ref=e66] [cursor=pointer]:
+              - /url: /admin/monitoring
+              - generic [ref=e67]:
+                - img [ref=e69]
+                - generic [ref=e71]:
+                  - generic [ref=e72]: Monitoreo
+                  - paragraph [ref=e73]: Estado operativo, presupuesto y procesos
+            - link "Costos Uso de proveedores y costo por lead" [ref=e74] [cursor=pointer]:
+              - /url: /admin/costs
+              - generic [ref=e75]:
+                - img [ref=e77]
+                - generic [ref=e79]:
+                  - generic [ref=e80]: Costos
+                  - paragraph [ref=e81]: Uso de proveedores y costo por lead
+            - link "Calidad Rendimiento, errores y cobertura de datos" [ref=e82] [cursor=pointer]:
+              - /url: /admin/performance
+              - generic [ref=e83]:
+                - img [ref=e85]
+                - generic [ref=e88]:
+                  - generic [ref=e89]: Calidad
+                  - paragraph [ref=e90]: Rendimiento, errores y cobertura de datos
+            - link "Usuarios Roles, filtros y acceso operativo" [ref=e91] [cursor=pointer]:
+              - /url: /admin/users
+              - generic [ref=e92]:
+                - img [ref=e94]
+                - generic [ref=e99]:
+                  - generic [ref=e100]: Usuarios
+                  - paragraph [ref=e101]: Roles, filtros y acceso operativo
+            - link "Auditoría Cambios administrativos y trazabilidad" [ref=e102] [cursor=pointer]:
+              - /url: /admin/audit-log
+              - generic [ref=e103]:
+                - img [ref=e105]
+                - generic [ref=e107]:
+                  - generic [ref=e108]: Auditoría
+                  - paragraph [ref=e109]: Cambios administrativos y trazabilidad
+        - button "Ayuda 1 opción" [ref=e111] [cursor=pointer]:
+          - generic [ref=e112]:
+            - img [ref=e114]
+            - generic [ref=e117]:
+              - paragraph [ref=e118]: Ayuda
+              - paragraph [ref=e119]: 1 opción
+          - img [ref=e120]
+      - button "Cerrar sesión" [ref=e123] [cursor=pointer]
+    - main [ref=e124]:
+      - generic [ref=e125]: Cargando...
+    - button "Cambiar a modo claro" [ref=e126] [cursor=pointer]:
+      - img [ref=e127]
+  - alert [ref=e130]

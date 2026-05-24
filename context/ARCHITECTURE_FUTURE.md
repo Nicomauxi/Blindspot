@@ -46,10 +46,14 @@ La configuración de backups debe diferenciar explícitamente:
 
 ### Estado deseado
 
+Estado actual (`BKP-1` cerrado): los dos límites ya se persisten, la poda por tipo está activa y backups/monitoreo ya muestran tamaño estimado de DB y huella agregada de backups.
+
 - ambos límites persistidos
 - limpieza por tipo, determinística
 - peso actual de DB visible en backups/monitoreo
 - restore sigue siendo admin-only y con checkpoint previo obligatorio
+
+Estado actual (`MINTUR-1` cerrado): MINTUR ya aporta mejores niches canónicos usando `TipoOperador` y nombre del operador sin abrir una taxonomía paralela.
 
 ## Geografía y mapas objetivo
 

@@ -65,6 +65,60 @@
 | 15 | CRM | CRM-2 | autonomous | API/RBAC/audit del nuevo seguimiento CRM implementados; `iniciar campaña` deja paso a `iniciar seguimiento`. |
 | 16 | CRM | CRM-3 | autonomous | Pantalla CRM tipo board móvil estilo Jira, con cards por etapa y permisos correctos. |
 | 17 | CRM | CRM-4 | autonomous | Modal/flujo completo por card: notas, archivos, canal exitoso, observado con recordatorio, rechazado y aceptado. |
+| 18 | UI deuda | UI-2 | autonomous | Página y entrada de sidebar "Campañas/Outreach" eliminada; solo queda CRM como interfaz de seguimiento comercial. |
+| 19 | UI deuda | UI-1 | autonomous | Lista de batches recientes en Discovery tiene scrollbar y altura máxima para no desbordar la vista. |
+| 20 | Navegación | NAV-2 | autonomous | Al navegar a una sección del sidebar, las otras secciones se colapsan automáticamente; solo la activa permanece expandida. |
+| 21 | UX base | THEME-2 | autonomous | Botón flotante de cambio de tema (oscuro/claro) en esquina inferior derecha; solo ícono, sin texto; reemplaza el control previo. |
+| 22 | Monitoreo | MON-3 | autonomous | Sección "Estado del run" movida de Pipeline a Monitoreo con polling real de 5 s y logs en vivo; Pipeline solo configura y dispara. |
+| 23 | Monitoreo | MON-4 | autonomous | Monitoreo muestra lista de discovery jobs por estado (queued/running/completed/failed) con conteos y detalle operativo. |
+| 24 | Operaciones | OPS-1 | autonomous | Botones de acciones del sistema en Monitoreo: reiniciar API/core desde UI; reset-db solo para admin con confirmación explícita. |
+| 25 | Pipeline | PIPE-1 | autonomous | Budget GP (total mensual y gasto actual) visible y editable desde Pipeline UI; sin salir al CLI. |
+| 26 | Pipeline | PIPE-3 | autonomous | `max_jobs` del pipeline configurable desde Pipeline UI; campo validado con mínimo 1 y máximo razonable. |
+| 27 | Pipeline | PIPE-2 | autonomous | Decremento atómico del Budget GP en DB al completar cada job; race condition entre jobs paralelos eliminada. |
+| 28 | CRM | CRM-5 | dependency-approval | Board CRM con drag & drop entre columnas; clic en card abre popup con detalle del lead y controles de transición; título de card = nombre del lead. |
+| 29 | Discovery | DISC-4 | autonomous | Algoritmo de búsqueda de lugares subdivide ubicaciones grandes en sub-áreas, lanza multi-query y deduplica por `placeId`. |
+| 30 | Discovery | DISC-5 | autonomous | Algoritmo de georreferenciación valida que GPS esté dentro de los límites del país/departamento e infiere departamento desde nombre o coordenadas. |
+| 31 | Discovery | DISC-6 | autonomous | Creación masiva de jobs desde UI: selector de ciudad × nicho predefinido, estimación de costo total antes de confirmar, inserción en lote. |
+
+### Ciclo 3 — Mejoras operativas y comerciales (abierto 2026-05-24)
+
+| Orden | Bloque | Fase | Modo | Definición de listo |
+|---:|---|---|---|---|
+| 32 | Bugfix | BUG-1 | autonomous | Budget GP `spent` se calcula y persiste correctamente; backfill reproducible documentado. |
+| 33 | Bugfix | BUG-2 | autonomous | Card "Discovery en cola" en home muestra el `budget_remaining` real (depende: BUG-1). |
+| 34 | Operaciones | OPS-2 | autonomous | Pantalla `/admin/operations` con secciones colapsables Pipeline y Monitoreo reusando JSX existente; pantallas viejas eliminadas. |
+| 35 | Operaciones | OPS-3 | autonomous | "Enrichment de colección" migrado a Operaciones con filtros combinables; sale del home. |
+| 36 | Operaciones | OPS-4 | autonomous | Apartado "Variables" en Operaciones edita config runtime (cron, max_jobs, budget, webhook, etc.) con auditoría. |
+| 37 | Operaciones | OPS-5 | dependency-approval | Apartado "Procesos" con hilos, consumo CPU/MEM, logs en vivo y gráficos tipo grafana. Requiere librería de charts si no hay. |
+| 38 | Discovery UX | DISC-7 | autonomous | "Creación masiva" debajo de "Composer" en Discovery. |
+| 39 | Discovery | DISC-8 | autonomous | Refresh masivo de leads en Discovery con filtros lógicos + `missing_*`. Reusa endpoint enrichment filter-jobs. |
+| 40 | Discovery | DISC-9 | autonomous | Refresh permite modo re-discovery (Google Places Details) además de enrichment. |
+| 41 | Discovery | DISC-10 | dependency-approval | Importación de XLS con catálogo de lugares; aparece como recomendaciones en composer. |
+| 42 | Discovery | DISC-11 | autonomous | Optimización del costo USD por lead nuevo de Google Places, con A/B controlable via Variables. |
+| 43 | Pipeline | PIPE-4 | autonomous | Hard cap mensual del Budget GP: imposible superar, validado en UI, API y core. |
+| 44 | Pipeline | PIPE-5 | autonomous | Concurrencia configurable por run con perfiles de consumo (fijo o % RAM). |
+| 45 | Geografía | MAP-2 | dependency-approval | Mapa heatmap granular por barrio/cuadrícula, con geocoding de leads con address pero sin gps. |
+| 46 | Geografía | MAP-3 | autonomous | Filtros del mapa: source, niche, score, tier, gps_source. |
+| 47 | Geografía | MAP-4 | dependency-approval | Mapa con modo dual heatmap / leads individuales con clustering. |
+| 48 | UI limpieza | UI-3 | autonomous | Eliminar referencias UI visibles a Campañas (home, lead detail, help, login). |
+| 49 | UI limpieza | UI-4 | autonomous | Sacar alerta "Presupuesto Google Places" del home. |
+| 50 | UI limpieza | UI-5 | autonomous | Sacar "Colas de trabajo" del home. |
+| 51 | UI nuevo | UI-6 | autonomous | Reemplazar bloques eliminados del home (UI-4 + UI-5) por el mapa interactivo MAP-4 como filtro vivo. |
+| 52 | UI limpieza | UI-7 | autonomous | Sacar de la ficha de lead: "Asistente comercial", "Outreach e historial", botón "Ver acciones". |
+| 53 | Alertas | ALERT-1 | autonomous | Tabla `system_alerts` + API con kind/severity/status; producers iniciales escriben a DB. |
+| 54 | Alertas | ALERT-2 | autonomous | Campanita en header con counter de unread, dropdown con últimas 10, página `/admin/alerts`. |
+| 55 | CRM | CRM-6 | autonomous | Transiciones bidireccionales (retroceso y reapertura de terminales con nota obligatoria). |
+| 56 | CRM | CRM-7 | autonomous | Historial completo de transiciones en el popup de cualquier card del board CRM. |
+| 57 | CRM | CRM-8 | autonomous | Filtros server-side en pantalla CRM (niche, source, tier, score, owner, status, q). |
+| 58 | RBAC | RBAC-1 | autonomous | Datos de contacto ocultos para rol comercial hasta iniciar tracking; redacción server-side. |
+| 59 | CRM | CRM-9 | autonomous | Bloque de contacto embebido en popup CRM (estado `contact`); marca canal usado y feedback inline. Depende: RBAC-1 + LEAD-1. |
+| 60 | Lead Detail | LEAD-1 | autonomous | Resumen comercial dual (Software | Marketing) full-width con líneas/evidencia que justifican ofertas. |
+| 61 | Lead Detail | LEAD-2 | autonomous | Bloque contacto/datos con filtros (fuente, tipo, confiabilidad) y scroll interno. |
+| 62 | Lead Detail | LEAD-3 | autonomous | Feedback por variable inline en contacto/datos; elimina "Feedback humano" deprecated. |
+| 63 | Lead Detail | LEAD-4 | autonomous | Traza de evidencia comercial integrada al Resumen comercial como expandible "Ver por qué". |
+| 64 | Lead Detail | LEAD-5 | autonomous | Rediseño global de la ficha con auditoría triple obligatoria (técnico, UX, vendedor) documentada en `context/research/lead-5-audits.md`. |
+| 65 | Calidad | QUAL-1 | autonomous | Apartado "Nichos" en Calidad con aliasing/sinónimos; filtros expanden automáticamente al grupo. |
+| 66 | Responsive | UI-RESP-1 | autonomous | Contenedor global responsive; smoke Playwright en 3 viewports por pantallas clave; partir en sub-paquetes si excede límites. |
 
 ## Dependencias entre fases
 
@@ -74,7 +128,37 @@
 - `MINTUR-1` antes de campañas fuertes de repoblación futuras y antes de cerrar del todo `DISC-3` si se apoya en la taxonomía mejorada.
 - `MAP-1` después de `DISC-1` para aislar el riesgo cartográfico y antes de cerrar cualquier rediseño final de `Contexto y mapa`.
 - `FDBK-1` antes de `FDBK-2`; `FDBK-2` antes de `FDBK-3`.
-- `CRM-1` antes de `CRM-2`; `CRM-2` antes de `CRM-3`; `CRM-3` antes de `CRM-4`.
+- `CRM-1` antes de `CRM-2`; `CRM-2` antes de `CRM-3`; `CRM-3` antes de `CRM-4`; `CRM-4` antes de `CRM-5`.
+- `UI-2` antes de `CRM-5` (no tiene sentido conservar Outreach/Campañas si CRM-5 completa el board).
+- `MON-2` antes de `MON-3` y `MON-4`.
+- `PIPE-1` y `PIPE-3` pueden ejecutarse en cualquier orden entre sí; ambas antes de `PIPE-2`.
+- `DISC-3` antes de `DISC-4`; `DISC-4` antes de `DISC-5` y `DISC-6`.
+- `CRM-5` requiere aprobación de dependencia nueva (biblioteca drag & drop).
+
+### Dependencias del ciclo 3
+
+- `BUG-1` antes de `BUG-2` y antes de cerrar `UI-4` (la alerta sale después de que el valor esté bien).
+- `OPS-2` antes de `OPS-3`, `OPS-4`, `OPS-5`.
+- `OPS-3` después de `DISC-8` para que el bloque migrado ya incluya los filtros `missing_*`.
+- `DISC-7` independiente; preferentemente antes de `DISC-8` para que la UX final ya esté ordenada.
+- `DISC-8` antes de `DISC-9` y antes de `OPS-3`.
+- `PIPE-4` antes de `DISC-11` y antes de cualquier campaña de discovery real.
+- `MAP-2` antes de `MAP-3` y `MAP-4`.
+- `MAP-4` antes de `UI-6`.
+- `UI-4` y `UI-5` antes de `UI-6`.
+- `UI-3` independiente del resto del ciclo, puede ir en cualquier punto.
+- `UI-7` antes de `LEAD-5` para limpiar antes de rediseñar.
+- `ALERT-1` antes de `ALERT-2`.
+- `CRM-6` antes de `CRM-7` (el historial muestra retrocesos también).
+- `RBAC-1` antes de `CRM-9`.
+- `LEAD-1` antes de `LEAD-4` y `CRM-9`.
+- `LEAD-2` antes de `LEAD-3` (los botones de feedback viven en el bloque rediseñado).
+- `LEAD-1`, `LEAD-2`, `LEAD-3`, `LEAD-4`, `UI-7` antes de `LEAD-5` (rediseño consolidado).
+- `UI-RESP-1` debe ejecutarse **al final** del ciclo, después de cerrar todas las pantallas nuevas o modificadas, salvo que se decida partirlo en sub-paquetes por pantalla y entrelazar.
+- `OPS-5` requiere aprobación de dependencia nueva (charting library) si no hay una en `package.json`.
+- `DISC-10` requiere aprobación de dependencia `xlsx` si no está en deps.
+- `MAP-2` requiere aprobación si se usa Mapbox/Google Geocoding pagos; con Nominatim queda autónomo bajo rate-limit estricto.
+- `MAP-4` requiere aprobación de `leaflet.markercluster` si no está en deps.
 
 ## Criterios globales de validación por tipo de fase
 
@@ -108,6 +192,19 @@
 - `Jobs legacy` en discovery se considera deuda de UI y debe retirarse de la experiencia principal.
 - El CRM nuevo usa tablas propias. No se reusa `outreach_campaigns` como modelo central del seguimiento; solo puede haber compatibilidad transitoria.
 - La retroalimentación humana debe quedar persistida y trazable; no alcanza con un flag efímero en frontend.
+
+### Decisiones del ciclo 3 (2026-05-24)
+
+- `Pipeline` y `Monitoreo` se reemplazan conceptualmente por una sola pantalla `Operaciones` con secciones colapsables. Las pantallas viejas dejan de existir (no se mantienen como redirects).
+- `Enrichment de colección` deja de vivir en el home y pasa a ser un proceso operativo en `Operaciones`.
+- La ficha de Lead se rediseña con foco comercial; cualquier información técnica queda en bloques colapsables secundarios. Ningún dato existente se elimina.
+- Los datos de contacto del lead no son visibles para usuarios con rol `comercial` hasta iniciar un tracking (`RBAC-1`). Admin no está afectado.
+- Las "Campañas/Outreach" siguen como ciclo cerrado: en el ciclo 3 solo se eliminan las referencias UI visibles; endpoints, lib client y tablas DB quedan intactos por seguridad.
+- El Budget mensual de Google Places es un hard cap. Cualquier mecanismo que pueda superarlo se cierra antes de aceptar nuevas optimizaciones de discovery.
+- El mapa heatmap debe ser útil como filtro vivo en el home, no solo como visualización pasiva. La granularidad por barrio/cuadrícula es objetivo, no por departamento.
+- Los procesos del pipeline se observan en tiempo real desde la nueva pantalla `Operaciones > Procesos`, con métricas físicas y logs en vivo. Si la dependencia de charts requiere aprobación, el agente debe detenerse antes de importar.
+- La auditoría de la ficha rediseñada (LEAD-5) es **triple y obligatoria**: técnico, UX, vendedor. Sin las tres aprobadas, la fase no cierra.
+- La responsividad global (UI-RESP-1) se ejecuta como cierre del ciclo. No tiene sentido auditar responsive de pantallas que aún están en rediseño.
 
 ## Histórico
 

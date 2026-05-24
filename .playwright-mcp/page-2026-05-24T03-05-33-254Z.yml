@@ -1,0 +1,106 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - complementary [ref=e3]:
+      - generic [ref=e4]:
+        - link "Blindspot Panel operativo" [ref=e5] [cursor=pointer]:
+          - /url: /admin
+          - generic [ref=e6]: Blindspot
+          - paragraph [ref=e7]: Panel operativo
+        - paragraph [ref=e8]: admin@blindspot.local
+        - paragraph [ref=e9]: Administrador
+      - generic [ref=e11]:
+        - generic [ref=e12]: Buscar sección
+        - generic [ref=e13]:
+          - img [ref=e14]
+          - textbox "Buscar sección" [ref=e17]:
+            - /placeholder: Buscar sección o acción
+      - navigation [ref=e18]:
+        - button "Operación 4 opciónes" [ref=e20] [cursor=pointer]:
+          - generic [ref=e21]:
+            - img [ref=e23]
+            - generic [ref=e28]:
+              - paragraph [ref=e29]: Operación
+              - paragraph [ref=e30]: 4 opciónes
+          - img [ref=e31]
+        - generic [ref=e33]:
+          - button "Comercial 2 opciónes" [ref=e34] [cursor=pointer]:
+            - generic [ref=e35]:
+              - img [ref=e37]
+              - generic [ref=e40]:
+                - paragraph [ref=e41]: Comercial
+                - paragraph [ref=e42]: 2 opciónes
+            - img [ref=e43]
+          - generic [ref=e45]:
+            - link "CRM Board de seguimiento por etapa" [ref=e46] [cursor=pointer]:
+              - /url: /admin/crm
+              - generic [ref=e47]:
+                - img [ref=e49]
+                - generic [ref=e56]:
+                  - generic [ref=e57]: CRM
+                  - paragraph [ref=e58]: Board de seguimiento por etapa
+            - link "Segmentos Atajos de exploración y volumen por corte" [ref=e59] [cursor=pointer]:
+              - /url: /admin/segments
+              - generic [ref=e60]:
+                - img [ref=e62]
+                - generic [ref=e65]:
+                  - generic [ref=e66]: Segmentos
+                  - paragraph [ref=e67]: Atajos de exploración y volumen por corte
+        - button "Plataforma 6 opciónes" [ref=e69] [cursor=pointer]:
+          - generic [ref=e70]:
+            - img [ref=e72]
+            - generic [ref=e73]:
+              - paragraph [ref=e74]: Plataforma
+              - paragraph [ref=e75]: 6 opciónes
+          - img [ref=e76]
+        - button "Ayuda 1 opción" [ref=e79] [cursor=pointer]:
+          - generic [ref=e80]:
+            - img [ref=e82]
+            - generic [ref=e85]:
+              - paragraph [ref=e86]: Ayuda
+              - paragraph [ref=e87]: 1 opción
+          - img [ref=e88]
+      - button "Cerrar sesión" [ref=e91] [cursor=pointer]
+    - main [ref=e92]:
+      - generic [ref=e93]:
+        - generic [ref=e95]:
+          - generic [ref=e96]:
+            - heading "CRM — Board de seguimiento" [level=1] [ref=e97]
+            - paragraph [ref=e98]: Seguimientos activos por etapa
+          - generic [ref=e100]:
+            - generic [ref=e101]: "Filtrar por owner:"
+            - textbox "uuid del usuario…" [ref=e102]
+        - button "CRM" [ref=e104] [cursor=pointer]: "?"
+        - generic [ref=e105]:
+          - generic [ref=e106]:
+            - generic [ref=e107]:
+              - generic [ref=e108]: Pendiente
+              - generic [ref=e109]: "0"
+            - generic [ref=e111]: Sin leads
+          - generic [ref=e112]:
+            - generic [ref=e113]:
+              - generic [ref=e114]: Validación
+              - generic [ref=e115]: "0"
+            - generic [ref=e117]: Sin leads
+          - generic [ref=e118]:
+            - generic [ref=e119]:
+              - generic [ref=e120]: Contacto
+              - generic [ref=e121]: "0"
+            - generic [ref=e123]: Sin leads
+          - generic [ref=e124]:
+            - generic [ref=e125]:
+              - generic [ref=e126]: Observado
+              - generic [ref=e127]: "0"
+            - generic [ref=e129]: Sin leads
+          - generic [ref=e130]:
+            - generic [ref=e131]:
+              - generic [ref=e132]: Rechazado
+              - generic [ref=e133]: "0"
+            - generic [ref=e135]: Sin leads
+          - generic [ref=e136]:
+            - generic [ref=e137]:
+              - generic [ref=e138]: Aceptado
+              - generic [ref=e139]: "0"
+            - generic [ref=e141]: Sin leads
+    - button "Cambiar a modo claro" [ref=e142] [cursor=pointer]:
+      - img [ref=e143]
+  - alert [ref=e146]

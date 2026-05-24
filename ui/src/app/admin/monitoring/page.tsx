@@ -1,16 +1,35 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ApiError,
+  getMonitoringDiscoveryJobs,
   getMonitoringOverview,
+  getPipelineRun,
+  getPipelineRunLog,
+  listPipelineRuns,
+  resetDatabase,
+  restartAll,
   restartSystemProcess,
+  type DiscoveryJobsSummary,
   type MonitoringOverview,
+  type PipelineLogLine,
+  type PipelineRun,
 } from "@/lib/api";
 import { useAuthStore } from "@/lib/auth-store";
+import { formatBackupSize } from "@/lib/backups";
 import { cn, formatDate, formatRelative } from "@/lib/utils";
 import { AdminPageLayout, SectionCard, StatCard } from "@/components/admin-shell";
+
+const RUN_STATUS_COLORS: Record<string, string> = {
+  queued: "bg-yellow-50 text-yellow-700",
+  running: "bg-blue-50 text-blue-700 animate-pulse",
+  completed: "bg-green-50 text-green-700",
+  partial: "bg-orange-50 text-orange-700",
+  failed: "bg-red-50 text-red-700",
+  aborted: "bg-gray-50 text-gray-600",
+};
 
 export default function MonitoringPage() {
   const token = useAuthStore((s) => s.token);
@@ -19,6 +38,16 @@ export default function MonitoringPage() {
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
   const [restartTarget, setRestartTarget] = useState<"core" | "api" | null>(null);
   const [restartMessage, setRestartMessage] = useState<string | null>(null);
+  const [runs, setRuns] = useState<PipelineRun[]>([]);
+  const [selectedRun, setSelectedRun] = useState<PipelineRun | null>(null);
+  const [runLogs, setRunLogs] = useState<PipelineLogLine[]>([]);
+  const runPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [jobsSummary, setJobsSummary] = useState<DiscoveryJobsSummary | null>(null);
+  const [jobsTab, setJobsTab] = useState<string>("queued");
+  const [resetConfirm, setResetConfirm] = useState("");
+  const [resetRunning, setResetRunning] = useState(false);
+  const [resetMessage, setResetMessage] = useState<string | null>(null);
+  const [restartAllRunning, setRestartAllRunning] = useState(false);
 
   const refresh = useCallback(async () => {
     if (!token) return;
@@ -37,6 +66,66 @@ export default function MonitoringPage() {
     const interval = setInterval(() => void refresh(), 10000);
     return () => clearInterval(interval);
   }, [refresh]);
+
+  const loadRuns = useCallback(async () => {
+    if (!token) return;
+    try {
+      const res = await listPipelineRuns(token, { limit: 10 });
+      setRuns(res.data);
+      setSelectedRun((current) => current ? res.data.find((run) => run.id === current.id) ?? current : res.data[0] ?? null);
+    } catch {
+      // non-blocking: run status is best-effort
+    }
+  }, [token]);
+
+  const loadRunDetail = useCallback(async (runId: string) => {
+    if (!token) return;
+    try {
+      const [runRes, logRes] = await Promise.all([
+        getPipelineRun(token, runId),
+        getPipelineRunLog(token, runId),
+      ]);
+      setSelectedRun(runRes.data);
+      setRunLogs(logRes.data);
+    } catch {
+      // non-blocking
+    }
+  }, [token]);
+
+  useEffect(() => {
+    void loadRuns();
+  }, [loadRuns]);
+
+  useEffect(() => {
+    if (!selectedRun?.id) return;
+    void loadRunDetail(selectedRun.id);
+  }, [loadRunDetail, selectedRun?.id]);
+
+  useEffect(() => {
+    runPollRef.current = setInterval(() => {
+      void loadRuns();
+      if (selectedRun?.id) void loadRunDetail(selectedRun.id);
+    }, 5000);
+    return () => {
+      if (runPollRef.current) clearInterval(runPollRef.current);
+    };
+  }, [loadRunDetail, loadRuns, selectedRun?.id]);
+
+  const loadJobsSummary = useCallback(async () => {
+    if (!token) return;
+    try {
+      const res = await getMonitoringDiscoveryJobs(token);
+      setJobsSummary(res.data);
+    } catch {
+      // non-blocking
+    }
+  }, [token]);
+
+  useEffect(() => {
+    void loadJobsSummary();
+    const interval = setInterval(() => void loadJobsSummary(), 30000);
+    return () => clearInterval(interval);
+  }, [loadJobsSummary]);
 
   const handleRestart = useCallback(async (target: "core" | "api") => {
     if (!token) return;
@@ -68,6 +157,36 @@ export default function MonitoringPage() {
       setRestartTarget(null);
     }, 10_000);
   }, [refresh, token]);
+
+  async function handleRestartAll() {
+    if (!token) return;
+    setRestartAllRunning(true);
+    try {
+      await restartAll(token);
+      setRestartMessage("Restart de todos los procesos solicitado.");
+    } catch {
+      setRestartMessage("Error al reiniciar todos los procesos.");
+    } finally {
+      setRestartAllRunning(false);
+      window.setTimeout(() => void refresh(), 12_000);
+    }
+  }
+
+  async function handleResetDb() {
+    if (!token) return;
+    if (resetConfirm.trim().toLowerCase() !== "reset") return;
+    setResetRunning(true);
+    setResetMessage(null);
+    try {
+      await resetDatabase(token);
+      setResetMessage("Reset de DB iniciado. El sistema se reconectará en unos minutos.");
+    } catch (err) {
+      setResetMessage(`Error al ejecutar reset-db: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setResetRunning(false);
+      setResetConfirm("");
+    }
+  }
 
   const statusTone = overview?.status === "degraded" ? "warn" : "good";
 
@@ -162,8 +281,15 @@ export default function MonitoringPage() {
                     <InfoRow label="Directorio" value={overview.backups.config.directory} />
                     <InfoRow label="Directorio válido" value={overview.backups.config.directory_valid ? "sí" : "no"} />
                     <InfoRow label="Próximo backup" value={formatDate(overview.backups.config.next_backup_at)} />
-                    <InfoRow label="Máximo backups" value={String(overview.backups.config.max_backups)} />
+                    <InfoRow label="Máximo legado" value={String(overview.backups.config.max_backups)} />
+                    <InfoRow label="Máximo manual" value={String(overview.backups.config.max_manual_backups)} />
+                    <InfoRow label="Máximo programado" value={String(overview.backups.config.max_scheduled_backups)} />
                     <InfoRow label="Backups presentes" value={String(overview.backups.summary.backup_count)} />
+                    <InfoRow label="Peso DB" value={formatBackupSize(overview.backups.summary.database_size_bytes)} />
+                    <InfoRow label="Backups retenidos" value={formatBackupSize(overview.backups.summary.stored_backup_size_bytes)} />
+                    <InfoRow label="Manual en retención" value={`${overview.backups.summary.retention.manual.count}/${overview.backups.summary.retention.manual.max}`} />
+                    <InfoRow label="Programados en retención" value={`${overview.backups.summary.retention.scheduled.count}/${overview.backups.summary.retention.scheduled.max}`} />
+                    <InfoRow label="Checkpoints restore" value={String(overview.backups.summary.restore_checkpoint_count)} />
                     <InfoRow label="Restore activo" value={overview.backups.restore.active ? overview.backups.restore.active.status : "ninguno"} />
                   </div>
                   <ListCard title="Alertas de backups" items={overview.backups.alerts.length > 0 ? overview.backups.alerts : ["Sin alertas de backups"]} />
@@ -190,6 +316,145 @@ export default function MonitoringPage() {
               </div>
             </SectionCard>
           </div>
+
+          <SectionCard title="Acciones del sistema" description="Reiniciar procesos o ejecutar reset de DB con confirmación explícita.">
+            <div className="space-y-4">
+              {resetMessage ? <Banner tone="info" text={resetMessage} /> : null}
+              <div className="flex flex-wrap gap-3">
+                <button onClick={() => void handleRestart("api")} disabled={restartTarget !== null} className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium hover:bg-slate-50 disabled:opacity-50">
+                  {restartTarget === "api" ? "Reiniciando API…" : "Reiniciar API"}
+                </button>
+                <button onClick={() => void handleRestart("core")} disabled={restartTarget !== null} className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium hover:bg-slate-50 disabled:opacity-50">
+                  {restartTarget === "core" ? "Reiniciando Core…" : "Reiniciar Core"}
+                </button>
+                <button onClick={() => void handleRestartAll()} disabled={restartAllRunning} className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium hover:bg-slate-50 disabled:opacity-50">
+                  {restartAllRunning ? "Reiniciando…" : "Reiniciar todo"}
+                </button>
+              </div>
+              <div className="rounded-xl border border-rose-200 bg-rose-50 p-4 space-y-3">
+                <p className="text-sm font-semibold text-rose-900">Reset de base de datos</p>
+                <p className="text-xs text-rose-700">Esta acción es destructiva e irreversible en datos locales. Borra todo y vuelve a correr las migraciones desde cero.</p>
+                <div className="flex flex-wrap items-center gap-3">
+                  <input
+                    type="text"
+                    value={resetConfirm}
+                    onChange={(e) => setResetConfirm(e.target.value)}
+                    placeholder='Escribí "reset" para confirmar'
+                    className="rounded-lg border border-rose-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-rose-400"
+                  />
+                  <button
+                    onClick={() => void handleResetDb()}
+                    disabled={resetRunning || resetConfirm.trim().toLowerCase() !== "reset"}
+                    className="rounded-lg bg-rose-600 px-4 py-2 text-sm font-medium text-white hover:bg-rose-700 disabled:opacity-50"
+                  >
+                    {resetRunning ? "Ejecutando…" : "Ejecutar Reset DB"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </SectionCard>
+
+          <SectionCard title="Estado del run" description="Seguimiento en vivo del último run o el seleccionado — actualizado cada 5 s.">
+            {!selectedRun ? (
+              <p className="text-sm theme-text-muted">Sin runs recientes.</p>
+            ) : (
+              <div className="space-y-4">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className={cn("rounded-full px-2 py-1 text-xs font-semibold", RUN_STATUS_COLORS[selectedRun.status === "pending" ? "queued" : selectedRun.status] ?? "bg-slate-100 text-slate-700")}>{selectedRun.status === "pending" ? "queued" : selectedRun.status}</span>
+                  <span className="font-mono text-xs theme-text-muted">{selectedRun.id}</span>
+                  <span className="ml-auto text-xs theme-text-muted">{selectedRun.triggered_by}</span>
+                </div>
+                <div className="grid gap-3 md:grid-cols-3">
+                  {[
+                    { label: "Creado", value: formatRelative(selectedRun.created_at) },
+                    { label: "Inicio", value: selectedRun.started_at ? formatRelative(selectedRun.started_at) : "En cola" },
+                    { label: "Fin", value: selectedRun.completed_at ? formatRelative(selectedRun.completed_at) : "—" },
+                  ].map(({ label, value }) => (
+                    <div key={label} className="rounded-xl border px-3 py-3 theme-panel">
+                      <div className="text-xs font-semibold uppercase tracking-wide theme-text-muted">{label}</div>
+                      <div className="mt-1 text-sm theme-text-strong">{value}</div>
+                    </div>
+                  ))}
+                </div>
+                <div className="grid gap-3 lg:grid-cols-2">
+                  <div className="rounded-xl border border-slate-200 p-4">
+                    <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Fases</div>
+                    {Object.keys(selectedRun.phase_results ?? {}).length === 0 ? (
+                      <p className="text-sm text-slate-500">Sin phase_results todavía.</p>
+                    ) : (
+                      <div className="space-y-2">
+                        {Object.entries(selectedRun.phase_results ?? {}).map(([phase, result]) => (
+                          <div key={phase} className="rounded-xl bg-slate-50 p-3">
+                            <div className="text-sm font-semibold text-slate-900">{phase}</div>
+                            <pre className="mt-1 overflow-auto text-xs text-slate-600">{JSON.stringify(result, null, 2)}</pre>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <div className="rounded-xl border border-slate-200 p-4">
+                    <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Log en vivo</div>
+                    <div className="max-h-64 space-y-1 overflow-auto rounded-xl bg-slate-950 p-3 text-xs text-slate-200">
+                      {runLogs.length === 0 ? (
+                        <div className="text-slate-500">Sin líneas todavía.</div>
+                      ) : runLogs.map((line, index) => (
+                        <div key={`${line.ts ?? "line"}-${index}`}>
+                          <span className="text-slate-500">[{line.ts ? new Date(line.ts).toLocaleTimeString("es-UY") : "--:--:--"}]</span>{" "}
+                          <span className="text-sky-300">{line.level ?? "info"}</span>{" "}
+                          <span>{line.msg ?? JSON.stringify(line)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {runs.slice(0, 6).map((run) => (
+                    <button key={run.id} onClick={() => void loadRunDetail(run.id)} className={cn("rounded-lg border px-2 py-1 text-xs transition-colors", selectedRun.id === run.id ? "border-sky-300 bg-sky-50 text-sky-800" : "border-slate-200 hover:bg-slate-50 theme-text-muted")}>
+                      {run.id.slice(0, 8)} · {run.status === "pending" ? "queued" : run.status}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </SectionCard>
+
+          {jobsSummary ? (
+            <SectionCard title="Discovery jobs" description="Jobs por estado — actualizado cada 30 s.">
+              <div className="space-y-3">
+                <div className="flex flex-wrap gap-2">
+                  {(["queued", "running", "completed", "failed"] as const).map((s) => (
+                    <button
+                      key={s}
+                      onClick={() => setJobsTab(s)}
+                      className={cn(
+                        "rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors",
+                        jobsTab === s ? "border-sky-300 bg-sky-50 text-sky-800" : "border-slate-200 hover:bg-slate-50 theme-text-muted"
+                      )}
+                    >
+                      {s} <span className="ml-1 rounded-full bg-slate-200 px-1.5 py-0.5 text-[10px] text-slate-700">{jobsSummary.counts[s] ?? 0}</span>
+                    </button>
+                  ))}
+                </div>
+                {(jobsSummary.by_status[jobsTab] ?? []).length === 0 ? (
+                  <p className="text-sm theme-text-muted">Sin jobs con estado &quot;{jobsTab}&quot;.</p>
+                ) : (
+                  <div className="space-y-2">
+                    {(jobsSummary.by_status[jobsTab] ?? []).map((job) => (
+                      <div key={job.id} className="rounded-xl border border-slate-200 px-3 py-2 text-sm">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="font-medium theme-text-strong">{job.location}</span>
+                          {job.niche ? <span className="text-xs theme-text-muted">· {job.niche}</span> : null}
+                          <span className="text-xs theme-text-muted">· {job.source}</span>
+                          <span className="ml-auto text-xs theme-text-muted">{formatRelative(job.created_at)}</span>
+                        </div>
+                        {job.error_message ? <p className="mt-1 text-xs text-rose-600">{job.error_message}</p> : null}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </SectionCard>
+          ) : null}
 
           <SectionCard title="Logs recientes" description="Errores operativos recientes listos para drill-down técnico.">
             <div className="space-y-3">

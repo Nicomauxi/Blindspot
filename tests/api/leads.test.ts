@@ -14,6 +14,9 @@ let _mockUser: Record<string, unknown> = {
 let _lastLlmUsageInsert: Record<string, unknown> | null = null;
 let _mockLeadBriefError: Error | null = null;
 let _mockTemplateLeadBriefError: Error | null = null;
+let _mockLeadFeedbackRows: Array<Record<string, unknown>> = [];
+let _lastLeadFeedbackInsert: Record<string, unknown> | null = null;
+let _auditLogInserts: Array<Record<string, unknown>> = [];
 
 const mockLeadBrief = {
   summary: "Resumen comercial",
@@ -131,6 +134,25 @@ function makeLeadQueryChain() {
   return chain;
 }
 
+function makeLeadFeedbackQueryChain() {
+  let rows = [..._mockLeadFeedbackRows];
+  const chain: Record<string, unknown> = {};
+  chain["eq"] = (column: string, value: string) => {
+    rows = rows.filter((row) => row[column] === value);
+    return chain;
+  };
+  chain["order"] = () => {
+    rows = rows.slice().sort((a, b) => String(b.created_at ?? "").localeCompare(String(a.created_at ?? "")));
+    return chain;
+  };
+  chain["limit"] = async (value: number) => ({
+    data: rows.slice(0, value),
+    error: null,
+    count: rows.length,
+  });
+  return chain;
+}
+
 
 vi.mock("../../api/src/llm/factory.js", () => ({
   createLLMProvider: () => ({
@@ -219,6 +241,33 @@ vi.mock("../../api/src/db/client.js", () => ({
           },
         };
       }
+      if (table === "lead_feedback") {
+        return {
+          select: () => makeLeadFeedbackQueryChain(),
+          insert: (payload: unknown) => {
+            _lastLeadFeedbackInsert = payload as Record<string, unknown>;
+            const row = {
+              id: `feedback-${_mockLeadFeedbackRows.length + 1}`,
+              created_at: `2026-01-0${_mockLeadFeedbackRows.length + 1}T00:00:00Z`,
+              ...(payload as Record<string, unknown>),
+            };
+            _mockLeadFeedbackRows = [row, ..._mockLeadFeedbackRows];
+            return {
+              select: () => ({
+                single: async () => ({ data: row, error: null }),
+              }),
+            };
+          },
+        };
+      }
+      if (table === "audit_log") {
+        return {
+          insert: (payload: unknown) => {
+            _auditLogInserts.push(payload as Record<string, unknown>);
+            return Promise.resolve({ error: null });
+          },
+        };
+      }
       return {};
     },
   }),
@@ -231,6 +280,9 @@ describe("GET /api/v1/leads", () => {
     _lastLlmUsageInsert = null;
     _mockLeadBriefError = null;
     _mockTemplateLeadBriefError = null;
+    _mockLeadFeedbackRows = [];
+    _lastLeadFeedbackInsert = null;
+    _auditLogInserts = [];
     _mockUser = {
       id: "admin-user-id",
       email: "admin@blindspot.local",
@@ -364,6 +416,9 @@ describe("GET /api/v1/leads/:id", () => {
       lead_filter: null,
       active: true,
     };
+    _mockLeadFeedbackRows = [];
+    _lastLeadFeedbackInsert = null;
+    _auditLogInserts = [];
   });
 
   it("returns 401 without token", async () => {
@@ -497,6 +552,186 @@ describe("GET /api/v1/leads/:id", () => {
       headers: { authorization: `Bearer ${token}` },
     });
     expect(res.statusCode).toBe(200);
+    await app.close();
+  });
+});
+
+describe("Lead feedback routes", () => {
+  beforeEach(() => {
+    process.env["API_JWT_SECRET"] = "test-secret-at-least-32-chars-long-1234";
+    _mockUser = {
+      id: "admin-user-id",
+      email: "admin@blindspot.local",
+      role: "admin",
+      lead_filter: null,
+      active: true,
+    };
+    _mockLeadFeedbackRows = [
+      {
+        id: "feedback-1",
+        lead_id: LEAD_ID,
+        field_key: "phone",
+        field_value: "+59899123456",
+        verdict: "good",
+        comment: "Telefono confirmado",
+        actor_user_id: "admin-user-id",
+        actor_role: "admin",
+        created_at: "2026-01-02T00:00:00Z",
+      },
+      {
+        id: "feedback-2",
+        lead_id: LEAD_ID,
+        field_key: "phone",
+        field_value: "+59899123456",
+        verdict: "bad",
+        comment: "Tenia un digito mal",
+        actor_user_id: "cm-user-id",
+        actor_role: "cm",
+        created_at: "2026-01-01T00:00:00Z",
+      },
+      {
+        id: "feedback-3",
+        lead_id: LEAD_ID,
+        field_key: "website",
+        field_value: "https://parrilla.example.com",
+        verdict: "good",
+        comment: null,
+        actor_user_id: "admin-user-id",
+        actor_role: "admin",
+        created_at: "2025-12-31T00:00:00Z",
+      },
+    ];
+    _lastLeadFeedbackInsert = null;
+    _auditLogInserts = [];
+  });
+
+  it("GET /api/v1/leads/:id/feedback lists persisted feedback", async () => {
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/v1/leads/${LEAD_ID}/feedback?field_key=phone&limit=10`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ total: 2, lead_id: LEAD_ID });
+    expect(res.json().data).toHaveLength(2);
+    expect(res.json().data[0]).toMatchObject({ field_key: "phone", verdict: "good" });
+    await app.close();
+  });
+
+  it("GET /api/v1/leads/:id/feedback-summary aggregates feedback by field", async () => {
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/v1/leads/${LEAD_ID}/feedback-summary`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().data).toEqual([
+      expect.objectContaining({ field_key: "phone", total: 2, good_count: 1, bad_count: 1, latest_verdict: "good" }),
+      expect.objectContaining({ field_key: "website", total: 1, good_count: 1, bad_count: 0, latest_verdict: "good" }),
+    ]);
+    await app.close();
+  });
+
+  it("POST /api/v1/leads/:id/feedback creates feedback and audit trail", async () => {
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/v1/leads/${LEAD_ID}/feedback`,
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ field_key: "whatsapp", field_value: "+59899123456", verdict: "good", comment: "Confirmado por contacto directo" }),
+    });
+
+    expect(res.statusCode).toBe(201);
+    expect(_lastLeadFeedbackInsert).toMatchObject({
+      lead_id: LEAD_ID,
+      field_key: "whatsapp",
+      verdict: "good",
+      actor_user_id: "admin-user-id",
+      actor_role: "admin",
+    });
+    expect(_auditLogInserts[0]).toMatchObject({
+      action: "lead.feedback.create",
+      target_type: "lead",
+      target_id: LEAD_ID,
+    });
+    await app.close();
+  });
+
+  it("CM gets 404 when trying to read feedback for a lead outside their filter", async () => {
+    _mockUser = {
+      id: "cm-user-id",
+      email: "cm@blindspot.local",
+      role: "cm",
+      lead_filter: { contact_tier: ["C"] },
+      active: true,
+    };
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "cm-user-id", email: "cm@blindspot.local" });
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/v1/leads/${LEAD_ID}/feedback`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+
+    expect(res.statusCode).toBe(404);
+    await app.close();
+  });
+
+  it("GET /api/v1/leads/:id/feedback-adjusted-confidence returns adjusted scores", async () => {
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/v1/leads/${LEAD_ID}/feedback-adjusted-confidence`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.lead_id).toBe(LEAD_ID);
+    expect(body.data).toMatchObject({
+      contact_delta: expect.any(Number),
+      data_delta: expect.any(Number),
+      flagged_fields: expect.any(Array),
+      confirmed_fields: expect.any(Array),
+    });
+    // phone latest verdict is "good" after the mock data; website is "good" — both confirmed
+    expect(body.data.confirmed_fields).toContain("website");
+    // scores should be adjusted from base (0.92 contact, 0.85 data)
+    expect(typeof body.data.contact_reliability_score).toBe("number");
+    expect(typeof body.data.data_confidence_score).toBe("number");
+    await app.close();
+  });
+
+  it("GET /api/v1/leads/:id/feedback-adjusted-confidence returns 404 for unknown lead", async () => {
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/v1/leads/00000000-0000-0000-0000-000000000099/feedback-adjusted-confidence`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+
+    expect(res.statusCode).toBe(404);
     await app.close();
   });
 });

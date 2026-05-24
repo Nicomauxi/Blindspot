@@ -44,6 +44,7 @@ const state: {
   deletedPaths: string[];
   files: string[];
   fileSizes: Record<string, number>;
+  databaseSizeBytes: number;
 } = {
   user: {
     id: "admin-id",
@@ -69,6 +70,8 @@ const state: {
     scheduled_for: null,
     directory: "/safe/backups",
     max_backups: 2,
+    max_manual_backups: 2,
+    max_scheduled_backups: 2,
     last_started_at: null,
     last_completed_at: null,
     last_successful_at: null,
@@ -87,6 +90,7 @@ const state: {
   deletedPaths: [],
   files: [],
   fileSizes: {},
+  databaseSizeBytes: 73400320,
 };
 
 const { execFileMock, statMock, accessMock, unlinkMock, readdirMock } = vi.hoisted(() => ({
@@ -305,6 +309,10 @@ vi.mock("../../api/src/db/client.js", () => ({
 
       return {};
     },
+    rpc: async (fn: string) => {
+      if (fn === "get_database_size_bytes") return { data: state.databaseSizeBytes, error: null };
+      return { data: null, error: { message: "rpc not found" } };
+    },
   }),
 }));
 
@@ -340,6 +348,8 @@ describe("admin backups", () => {
       scheduled_for: null,
       directory: "/safe/backups",
       max_backups: 2,
+      max_manual_backups: 2,
+      max_scheduled_backups: 2,
       last_started_at: null,
       last_completed_at: null,
       last_successful_at: null,
@@ -373,6 +383,7 @@ describe("admin backups", () => {
     state.backupRestores = [];
     state.deletedPaths = [];
     state.files = ["blindspot_20260520_010000.sql.gz"];
+    state.databaseSizeBytes = 73400320;
     state.fileSizes = {
       "/safe/backups": 0,
       "/safe/backups/blindspot_20260520_010000.sql.gz": 20480,
@@ -508,7 +519,7 @@ describe("admin backups", () => {
       payload: { enabled: true, cron_expression: "0 4 * * *", max_backups: 5 },
     });
     expect(patchRes.statusCode).toBe(200);
-    expect(state.backupConfig).toMatchObject({ enabled: true, cron_expression: "0 4 * * *", max_backups: 5 });
+    expect(state.backupConfig).toMatchObject({ enabled: true, cron_expression: "0 4 * * *", max_backups: 5, max_manual_backups: 5, max_scheduled_backups: 5 });
 
     const restoreRes = await app.inject({
       method: "POST",
@@ -520,7 +531,9 @@ describe("admin backups", () => {
 
     const healthRes = await app.inject({ method: "GET", url: "/api/v1/health" });
     expect(healthRes.statusCode).toBe(200);
-    expect(healthRes.json().backups).toMatchObject({ max_backups: 5 });
+    expect(healthRes.json().backups).toMatchObject({ max_backups: 5, manual_backup_count: 2, scheduled_backup_count: 0, database_size_bytes: 73400320 });
+    expect(healthRes.json().backups.retention).toMatchObject({ manual: { max: 5 }, scheduled: { max: 5 } });
+    expect(healthRes.json().backups.stored_backup_size_by_trigger).toMatchObject({ manual: 61440, scheduled: 0 });
     expect(healthRes.json().backups.last_restore.status).toBe("completed");
 
     const systemRes = await app.inject({
@@ -529,7 +542,7 @@ describe("admin backups", () => {
       headers: { authorization: `Bearer ${token}` },
     });
     expect(systemRes.statusCode).toBe(200);
-    expect(systemRes.json().data.backups?.config).toMatchObject({ max_backups: 5, cron_expression: "0 4 * * *" });
+    expect(systemRes.json().data.backups?.config).toMatchObject({ max_backups: 5, max_manual_backups: 5, max_scheduled_backups: 5, cron_expression: "0 4 * * *" });
     expect(systemRes.json().data.backups?.restore?.last_restore?.status).toBe("completed");
 
     await app.close();

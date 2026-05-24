@@ -106,7 +106,7 @@ export default function AdminHomePage() {
             <QuickQueueCard href="/admin/leads?prospect_score_gte=70" title="Hot leads" description="Oportunidades con score alto para priorizar contacto." />
             <QuickQueueCard href="/admin/leads?contact_tier=A" title="Tier A" description="Leads con contacto fuerte y mejor base de acción." />
             <QuickQueueCard href="/admin/leads?source=google_places" title="Google Places" description="Barrido por fuente para validar calidad y novedades." />
-            <QuickQueueCard href="/admin/outreach" title="Seguimiento comercial" description="Abrir respuestas, outcomes y registros recientes." />
+            <QuickQueueCard href="/admin/crm" title="Seguimiento comercial" description="Abrir respuestas, outcomes y registros recientes." />
           </div>
         </SectionCard>
 

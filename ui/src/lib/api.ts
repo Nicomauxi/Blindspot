@@ -272,6 +272,14 @@ export async function restartSystemProcess(token: string, target: "core" | "api"
   return request<RestartResponse>(`/api/v1/admin/system/restart-${target}`, { method: "POST" }, token);
 }
 
+export async function restartAll(token: string) {
+  return request<RestartResponse>("/api/v1/admin/system/restart", { method: "POST", body: JSON.stringify({ target: "all" }) }, token);
+}
+
+export async function resetDatabase(token: string) {
+  return request<{ ok: boolean; output?: string }>("/api/v1/admin/system/reset-db", { method: "POST", body: JSON.stringify({ confirm: true }) }, token);
+}
+
 export type MonitoringOverview = {
   status: "ok" | "degraded";
   generated_at: string;
@@ -411,6 +419,25 @@ export async function getMonitoringOverview(token: string) {
   return request<{ data: MonitoringOverview }>("/api/v1/admin/monitoring/overview", {}, token);
 }
 
+export type DiscoveryJobSummaryRow = {
+  id: string;
+  source: string;
+  location: string;
+  niche: string | null;
+  status: string;
+  created_at: string;
+  error_message: string | null;
+};
+
+export type DiscoveryJobsSummary = {
+  counts: Record<string, number>;
+  by_status: Record<string, DiscoveryJobSummaryRow[]>;
+};
+
+export async function getMonitoringDiscoveryJobs(token: string) {
+  return request<{ data: DiscoveryJobsSummary }>("/api/v1/admin/monitoring/discovery-jobs", {}, token);
+}
+
 export type BackupRun = {
   id: string;
   trigger: "manual" | "scheduled";
@@ -493,6 +520,12 @@ export type BackupOverview = {
     retention: {
       manual: { count: number; max: number };
       scheduled: { count: number; max: number };
+    };
+    database_size_bytes: number | null;
+    stored_backup_size_bytes: number;
+    stored_backup_size_by_trigger: {
+      manual: number;
+      scheduled: number;
     };
     last_restore: BackupRestoreRun | null;
   };
@@ -581,6 +614,30 @@ export type PipelineConfig = {
 
 export async function getPipelineConfig(token: string) {
   return request<SingleResponse<PipelineConfig>>("/api/v1/pipeline/config", {}, token);
+}
+
+export type GpBudgetStatus = {
+  budget_total: number;
+  budget_spent: number;
+  budget_remaining: number;
+  alert_threshold: number;
+  over_alert: boolean;
+};
+
+export async function getGpBudget(token: string) {
+  return request<{ data: GpBudgetStatus }>("/api/v1/pipeline/gp-budget", {}, token);
+}
+
+export async function updateGpBudget(token: string, data: { budget_total?: number; alert_threshold?: number }) {
+  return request<{ data: GpBudgetStatus }>("/api/v1/pipeline/gp-budget", { method: "PUT", body: JSON.stringify(data) }, token);
+}
+
+export async function resetGpBudgetSpent(token: string) {
+  return request<{ data: GpBudgetStatus }>("/api/v1/pipeline/gp-budget/reset-spent", { method: "POST" }, token);
+}
+
+export async function updateMaxJobs(token: string, max_jobs: number) {
+  return request<{ data: { max_jobs: number } }>("/api/v1/pipeline/config/max-jobs", { method: "PUT", body: JSON.stringify({ max_jobs }) }, token);
 }
 
 export async function patchPipelineConfig(
@@ -768,17 +825,107 @@ export async function listLeads(
   return request<PaginatedResponse<LeadDashboard>>(`/api/v1/leads?${qp}`, {}, token);
 }
 
+export async function createFilteredEnrichmentJob(
+  token: string,
+  data: {
+    contact_tier?: string;
+    prospect_score_gte?: number;
+    niche?: string;
+    source?: string;
+    primary_offer?: string;
+    q?: string;
+    with_heuristic?: boolean;
+    concurrency?: number;
+  }
+) {
+  return request<{ data: { run_id: string; lead_count: number; filters: Record<string, unknown>; with_heuristic: boolean; concurrency: number } }>("/api/v1/admin/enrichment/filter-jobs", {
+    method: "POST",
+    body: JSON.stringify(data),
+  }, token);
+}
+
 export async function getLead(token: string, id: string) {
   return request<SingleResponse<LeadDetail>>(`/api/v1/leads/${id}`, {}, token);
 }
 
 export type OwnerGroupMember = Pick<LeadDashboard, "id" | "name" | "niche" | "contact_tier" | "prospect_score" | "owner_group_id">;
 
+export type LeadFeedbackVerdict = "good" | "bad";
+
+export type LeadFeedbackEntry = {
+  id: string;
+  lead_id: string;
+  field_key: string;
+  field_value: unknown;
+  verdict: LeadFeedbackVerdict;
+  comment: string | null;
+  actor_user_id: string;
+  actor_role: "admin" | "cm";
+  created_at: string;
+};
+
+export type LeadFeedbackSummaryEntry = {
+  field_key: string;
+  total: number;
+  good_count: number;
+  bad_count: number;
+  latest_verdict: LeadFeedbackVerdict;
+  latest_comment: string | null;
+  latest_at: string | null;
+  latest_actor_user_id: string | null;
+  latest_actor_role: string | null;
+};
+
+export type FeedbackAdjustedConfidence = {
+  contact_reliability_score: number | null;
+  data_confidence_score: number | null;
+  contact_delta: number;
+  data_delta: number;
+  flagged_fields: string[];
+  confirmed_fields: string[];
+};
+
 export async function getOwnerGroup(token: string, leadId: string) {
   return request<{ data: OwnerGroupMember[] }>(`/api/v1/leads/${leadId}/owner-group`, {}, token);
 }
 
-// Outreach
+export async function listLeadFeedback(
+  token: string,
+  leadId: string,
+  params: { field_key?: string; limit?: number } = {}
+) {
+  const qp = new URLSearchParams();
+  if (params.field_key) qp.set("field_key", params.field_key);
+  if (params.limit) qp.set("limit", String(params.limit));
+  const suffix = qp.toString() ? `?${qp}` : "";
+  return request<{ data: LeadFeedbackEntry[]; total: number; lead_id: string }>(`/api/v1/leads/${leadId}/feedback${suffix}`, {}, token);
+}
+
+export async function getLeadFeedbackSummary(token: string, leadId: string) {
+  return request<{ data: LeadFeedbackSummaryEntry[]; lead_id: string }>(`/api/v1/leads/${leadId}/feedback-summary`, {}, token);
+}
+
+export async function getLeadFeedbackAdjustedConfidence(token: string, leadId: string) {
+  return request<{ data: FeedbackAdjustedConfidence; lead_id: string }>(`/api/v1/leads/${leadId}/feedback-adjusted-confidence`, {}, token);
+}
+
+export async function createLeadFeedback(
+  token: string,
+  leadId: string,
+  data: {
+    field_key: string;
+    field_value?: unknown;
+    verdict: LeadFeedbackVerdict;
+    comment?: string;
+  }
+) {
+  return request<{ data: LeadFeedbackEntry; lead_id: string }>(`/api/v1/leads/${leadId}/feedback`, {
+    method: "POST",
+    body: JSON.stringify(data),
+  }, token);
+}
+
+// Outreach — @deprecated: replaced by CRM tracking. Functions kept for FK bridge; do not use in new UI.
 export type Campaign = {
   id: string;
   name: string;
@@ -861,10 +1008,8 @@ export async function patchCampaign(
   }, token);
 }
 
-export async function closeCampaign(token: string, id: string) {
-  const BASE = process.env["NEXT_PUBLIC_API_URL"] ?? "http://localhost:3001";
-  const headers: Record<string, string> = { Authorization: `Bearer ${token}` };
-  await fetch(`${BASE}/api/v1/campaigns/${id}`, { method: "DELETE", headers });
+export async function closeCampaign(token: string, id: string): Promise<void> {
+  await request<void>(`/api/v1/campaigns/${id}`, { method: "DELETE" }, token);
 }
 
 export async function createOutreach(
@@ -930,6 +1075,10 @@ export type DiscoveryJob = {
   actual_cost_usd?: number | null;
   cost_cap_usd?: number | null;
   linked_run_id?: string | null;
+  enrich_after_discovery?: boolean;
+  enrich_status?: "queued" | "running" | "completed" | "failed" | "skipped";
+  linked_enrich_run_id?: string | null;
+  enrich_error_message?: string | null;
   source_params?: Record<string, unknown> | null;
   created_at: string;
 };
@@ -951,6 +1100,7 @@ export type DiscoveryJobBatch = {
     type: "coverage_gap" | "location_density" | "top_niche" | "manual";
     key?: string;
   } | null;
+  enrich_after_discovery: boolean;
   estimated_cost_usd: number | null;
   actual_cost_usd: number | null;
   cost_cap_usd: number | null;
@@ -1044,6 +1194,29 @@ export async function createDiscoveryJob(
   }, token);
 }
 
+export type DiscoverySource = "mintur" | "osm" | "yelu" | "pedidosya" | "google_places";
+
+export type BulkJobDefinition = {
+  source: DiscoverySource;
+  location: string;
+  niche: string;
+  max_results?: number;
+  cost_cap_usd?: number;
+};
+
+export type BulkJobResult = {
+  ids: string[];
+  count: number;
+  total_estimated_cost_usd: number;
+};
+
+export async function bulkCreateDiscoveryJobs(token: string, jobs: BulkJobDefinition[]) {
+  return request<{ data: BulkJobResult }>("/api/v1/discovery/jobs/bulk", {
+    method: "POST",
+    body: JSON.stringify({ jobs }),
+  }, token);
+}
+
 export async function patchDiscoveryJob(
   token: string,
   id: string,
@@ -1077,6 +1250,7 @@ export async function createDiscoveryJobBatch(
     cpu_budget?: "conservative" | "balanced" | "aggressive";
     google_places?: { profile?: "A" | "B" | "C" | "D"; concurrency?: number; cost_cap_usd: number };
     recommendation_origin?: { type: "coverage_gap" | "location_density" | "top_niche" | "manual"; key?: string };
+    enrich_after_discovery?: boolean;
   }
 ) {
   return request<SingleResponse<DiscoveryJobBatch>>("/api/v1/discovery/job-batches", {
@@ -1404,6 +1578,96 @@ export function generateLeadBrief(token: string, leadId: string) {
   return request<SingleResponse<LeadAssistantBrief>>(
     "/api/v1/leads/" + leadId + "/assistant-brief",
     { method: "POST" },
+    token
+  );
+}
+
+// CRM Tracking
+
+export type CrmStatus = "pending" | "validation" | "contact" | "observed" | "rejected" | "accepted";
+
+export type LeadTracking = {
+  id: string;
+  lead_id: string;
+  lead_name: string | null;
+  owner_id: string;
+  status: CrmStatus;
+  campaign_id: string | null;
+  notes: string | null;
+  started_at: string;
+  updated_at: string;
+};
+
+export type LeadTrackingEvent = {
+  id: string;
+  tracking_id: string;
+  from_status: CrmStatus | null;
+  to_status: CrmStatus;
+  actor_user_id: string;
+  actor_role: "admin" | "cm";
+  notes: string | null;
+  channel: string | null;
+  reminder_at: string | null;
+  created_at: string;
+};
+
+export type LeadTrackingLeadData = {
+  name: string;
+  niche: string | null;
+  address: string | null;
+  website: string | null;
+  phone: string | null;
+};
+
+export type LeadTrackingDetail = LeadTracking & {
+  events: LeadTrackingEvent[];
+  lead: LeadTrackingLeadData | null;
+};
+
+export function createTracking(
+  token: string,
+  data: { lead_id: string; notes?: string; campaign_id?: string }
+) {
+  return request<{ data: LeadTracking }>(
+    "/api/v1/tracking",
+    { method: "POST", body: JSON.stringify(data) },
+    token
+  );
+}
+
+export function listTrackings(
+  token: string,
+  params: { status?: CrmStatus; owner_id?: string; lead_id?: string; limit?: number } = {}
+) {
+  const qp = new URLSearchParams();
+  if (params.status) qp.set("status", params.status);
+  if (params.owner_id) qp.set("owner_id", params.owner_id);
+  if (params.lead_id) qp.set("lead_id", params.lead_id);
+  if (params.limit) qp.set("limit", String(params.limit));
+  const suffix = qp.toString() ? `?${qp}` : "";
+  return request<{ data: LeadTracking[]; total: number }>(`/api/v1/tracking${suffix}`, {}, token);
+}
+
+export function getTracking(token: string, trackingId: string) {
+  return request<{ data: LeadTrackingDetail }>(`/api/v1/tracking/${trackingId}`, {}, token);
+}
+
+export function transitionTracking(
+  token: string,
+  trackingId: string,
+  data: { to_status: CrmStatus; notes?: string; channel?: string; reminder_at?: string }
+) {
+  return request<{ data: LeadTracking }>(
+    `/api/v1/tracking/${trackingId}/transition`,
+    { method: "POST", body: JSON.stringify(data) },
+    token
+  );
+}
+
+export function addTrackingNote(token: string, trackingId: string, notes: string) {
+  return request<{ data: LeadTrackingEvent }>(
+    `/api/v1/tracking/${trackingId}/note`,
+    { method: "POST", body: JSON.stringify({ notes }) },
     token
   );
 }

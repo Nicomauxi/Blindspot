@@ -123,7 +123,7 @@ function normalizePm2Process(entry: Pm2Process | null | undefined): ProcessSnaps
   };
 }
 
-function detectProcess(processes: Pm2Process[], name: "core" | "api") {
+function detectProcess(processes: Pm2Process[], name: string) {
   return processes.find((entry) => entry.name === name) ?? null;
 }
 
@@ -251,7 +251,7 @@ export async function buildMonitoringOverview() {
   const currentMonth = parseCurrentMonth();
   const performanceWindow = buildWindow(performanceDays);
 
-  const [configResult, runsResult, activeRunResult, discoveryResult, llmRes, runCostsRes, errorsRes] = await Promise.all([
+  const settled = await Promise.allSettled([
     db
       .from("pipeline_config")
       .select(
@@ -295,6 +295,22 @@ export async function buildMonitoringOverview() {
   ]);
   const dbLatency = round(diffMs(dbStartedAt, Date.now()), 1);
 
+  const settled0 = settled[0].status === "fulfilled" ? settled[0].value : { data: null, error: new Error("query failed") };
+  const settled1 = settled[1].status === "fulfilled" ? settled[1].value : { data: null, error: new Error("query failed") };
+  const settled2 = settled[2].status === "fulfilled" ? settled[2].value : { data: null, error: new Error("query failed") };
+  const settled3 = settled[3].status === "fulfilled" ? settled[3].value : { data: null, error: new Error("query failed") };
+  const settled4 = settled[4].status === "fulfilled" ? settled[4].value : { data: null, error: new Error("query failed") };
+  const settled5 = settled[5].status === "fulfilled" ? settled[5].value : { data: null, error: new Error("query failed") };
+  const settled6 = settled[6].status === "fulfilled" ? settled[6].value : { data: null, error: new Error("query failed") };
+
+  const configResult = settled0;
+  const runsResult = settled1;
+  const activeRunResult = settled2;
+  const discoveryResult = settled3;
+  const llmRes = settled4;
+  const runCostsRes = settled5;
+  const errorsRes = settled6;
+
   const config = (configResult.data ?? null) as PipelineConfigRow | null;
   const runsRecent = (runsResult.data ?? []) as PipelineRunRow[];
   const activeRun = (activeRunResult.data ?? null) as PipelineRunRow | null;
@@ -332,8 +348,8 @@ export async function buildMonitoringOverview() {
   if (process.env["NODE_ENV"] === "production") {
     try {
       const processes = await listPm2Processes();
-      coreProcess = normalizePm2Process(detectProcess(processes, "core"));
-      apiProcess = normalizePm2Process(detectProcess(processes, "api"));
+      coreProcess = normalizePm2Process(detectProcess(processes, "blindspot-core"));
+      apiProcess = normalizePm2Process(detectProcess(processes, "blindspot-api"));
     } catch {
       coreProcess = {
         running: false,
@@ -523,7 +539,6 @@ export async function buildMonitoringOverview() {
       webhook: {
         configured: Boolean(config?.notify_webhook_url),
         events: config?.notify_webhook_events ?? [],
-        url: config?.notify_webhook_url ?? null,
       },
       concurrency: operationalConcurrency,
     },

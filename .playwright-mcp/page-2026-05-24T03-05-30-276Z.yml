@@ -1,0 +1,91 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - complementary [ref=e3]:
+      - generic [ref=e4]:
+        - link "Blindspot Panel operativo" [ref=e5] [cursor=pointer]:
+          - /url: /admin
+          - generic [ref=e6]: Blindspot
+          - paragraph [ref=e7]: Panel operativo
+        - paragraph [ref=e8]: admin@blindspot.local
+        - paragraph [ref=e9]: Administrador
+      - generic [ref=e11]:
+        - generic [ref=e12]: Buscar sección
+        - generic [ref=e13]:
+          - img [ref=e14]
+          - textbox "Buscar sección" [ref=e17]:
+            - /placeholder: Buscar sección o acción
+      - navigation [ref=e18]:
+        - generic [ref=e19]:
+          - button "Operación 4 opciónes" [ref=e20] [cursor=pointer]:
+            - generic [ref=e21]:
+              - img [ref=e23]
+              - generic [ref=e28]:
+                - paragraph [ref=e29]: Operación
+                - paragraph [ref=e30]: 4 opciónes
+            - img [ref=e31]
+          - generic [ref=e33]:
+            - link "Inicio Prioridades, métricas y colas de trabajo" [ref=e34] [cursor=pointer]:
+              - /url: /admin
+              - generic [ref=e35]:
+                - img [ref=e37]
+                - generic [ref=e42]:
+                  - generic [ref=e43]: Inicio
+                  - paragraph [ref=e44]: Prioridades, métricas y colas de trabajo
+            - link "Leads Explorar, priorizar y entender oportunidades" [ref=e45] [cursor=pointer]:
+              - /url: /admin/leads
+              - generic [ref=e46]:
+                - img [ref=e48]
+                - generic [ref=e50]:
+                  - generic [ref=e51]: Leads
+                  - paragraph [ref=e52]: Explorar, priorizar y entender oportunidades
+            - link "Discovery Jobs de discovery y entrada de nuevos leads" [ref=e53] [cursor=pointer]:
+              - /url: /admin/discovery
+              - generic [ref=e54]:
+                - img [ref=e56]
+                - generic [ref=e59]:
+                  - generic [ref=e60]: Discovery
+                  - paragraph [ref=e61]: Jobs de discovery y entrada de nuevos leads
+            - link "Pipeline Runs, cron y webhooks del pipeline" [ref=e62] [cursor=pointer]:
+              - /url: /admin/pipeline
+              - generic [ref=e63]:
+                - img [ref=e65]
+                - generic [ref=e69]:
+                  - generic [ref=e70]: Pipeline
+                  - paragraph [ref=e71]: Runs, cron y webhooks del pipeline
+        - button "Comercial 2 opciónes" [ref=e73] [cursor=pointer]:
+          - generic [ref=e74]:
+            - img [ref=e76]
+            - generic [ref=e79]:
+              - paragraph [ref=e80]: Comercial
+              - paragraph [ref=e81]: 2 opciónes
+          - img [ref=e82]
+        - button "Plataforma 6 opciónes" [ref=e85] [cursor=pointer]:
+          - generic [ref=e86]:
+            - img [ref=e88]
+            - generic [ref=e89]:
+              - paragraph [ref=e90]: Plataforma
+              - paragraph [ref=e91]: 6 opciónes
+          - img [ref=e92]
+        - button "Ayuda 1 opción" [ref=e95] [cursor=pointer]:
+          - generic [ref=e96]:
+            - img [ref=e98]
+            - generic [ref=e101]:
+              - paragraph [ref=e102]: Ayuda
+              - paragraph [ref=e103]: 1 opción
+          - img [ref=e104]
+      - button "Cerrar sesión" [ref=e107] [cursor=pointer]
+    - main [ref=e108]:
+      - generic [ref=e109]:
+        - generic [ref=e110]:
+          - paragraph [ref=e111]: Admin
+          - generic [ref=e112]:
+            - generic [ref=e113]:
+              - heading "Backups" [level=1] [ref=e114]
+              - paragraph [ref=e115]: Control operativo de backups manuales, programados y restores guiados con checkpoint previo.
+            - generic [ref=e116]:
+              - button "Refrescar" [ref=e117] [cursor=pointer]
+              - button "Ejecutar backup ahora" [ref=e118] [cursor=pointer]
+        - generic [ref=e119]: Cargando estado de backups...
+    - button "Cambiar a modo claro" [ref=e120] [cursor=pointer]:
+      - img [ref=e121]
+  - alert [ref=e124]

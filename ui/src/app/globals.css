@@ -1,3 +1,5 @@
+@import "leaflet/dist/leaflet.css";
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -311,4 +313,36 @@ html[data-theme="dark"] .placeholder\:text-slate-500::placeholder {
 html[data-theme="dark"] .shadow-sm,
 html[data-theme="dark"] .shadow-xl {
   box-shadow: var(--shadow) !important;
+}
+
+
+.location-density-leaflet {
+  background: linear-gradient(180deg, rgba(8, 47, 73, 0.74), rgba(15, 23, 42, 0.92));
+}
+
+.location-density-leaflet .leaflet-control-attribution {
+  background: rgba(15, 23, 42, 0.78);
+  color: #e2e8f0;
+  border-radius: 12px 0 0 0;
+  padding: 4px 8px;
+}
+
+.location-density-leaflet .leaflet-control-attribution a {
+  color: #bae6fd;
+}
+
+.location-density-leaflet .leaflet-popup-content-wrapper,
+.location-density-leaflet .leaflet-popup-tip {
+  background: rgba(255, 255, 255, 0.96);
+  color: #0f172a;
+}
+
+html[data-theme="dark"] .location-density-leaflet .leaflet-popup-content-wrapper,
+html[data-theme="dark"] .location-density-leaflet .leaflet-popup-tip {
+  background: rgba(8, 17, 31, 0.96);
+  color: #e5eef9;
+}
+
+html[data-theme="dark"] .location-density-leaflet .leaflet-tile {
+  filter: saturate(0.92) brightness(0.76) contrast(1.08);
 }

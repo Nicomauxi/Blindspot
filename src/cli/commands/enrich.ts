@@ -11,7 +11,9 @@ import {
   loadLeadsByRunId,
   loadLeadsBySource,
   loadAllPassedLeads,
+  loadLeadsByFilterSelection,
   updateLeadEnrichment,
+  type EnrichmentLeadFilterSelection,
 } from "../../storage/leads.js";
 import { detectOwnerGroups } from "../../storage/owner-group.js";
 import { recordPipelineError, type PipelineErrorType } from "../../storage/pipeline-errors.js";
@@ -25,32 +27,42 @@ import {
   retroactiveEmailCleanup,
 } from "../../storage/system-lists.js";
 import type { AllRuntime } from "../../storage/system-lists.js";
-import type { EnrichmentRunStats } from "../../shared/types.js";
+import type { EnrichmentRunStats, Run } from "../../shared/types.js";
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+const filterSelectionSchema = z.object({
+  contact_tier: z.string().optional(),
+  prospect_score_gte: z.number().int().min(0).max(100).optional(),
+  niche: z.string().optional(),
+  source: z.string().optional(),
+  primary_offer: z.string().optional(),
+  q: z.string().optional(),
+});
 
 const EnrichArgsSchema = z
   .object({
     run: z.string().regex(UUID_RE).optional(),
     source: z.string().optional(),
+    filters: filterSelectionSchema.optional(),
     all: z.coerce.boolean().default(false),
     forceRefresh: z.coerce.boolean().default(false),
     withHeuristic: z.coerce.boolean().default(false),
     concurrency: z.coerce.number().int().min(1).max(50).default(5),
   })
   .superRefine((args, ctx) => {
-    const modeCount = [!!args.run, !!args.source, args.all].filter(Boolean).length;
+    const modeCount = [!!args.run, !!args.source, !!args.filters, args.all].filter(Boolean).length;
     if (modeCount === 0) {
       ctx.addIssue({
         code: "custom",
-        message: "One of --run <uuid>, --source <source>, or --all is required",
+        message: "One of --run <uuid>, --source <source>, --filters <selection>, or --all is required",
       });
     }
     if (modeCount > 1) {
       ctx.addIssue({
         code: "custom",
-        message: "--run, --source, and --all are mutually exclusive",
+        message: "--run, --source, --filters, and --all are mutually exclusive",
       });
     }
   });
@@ -58,10 +70,46 @@ const EnrichArgsSchema = z
 interface RawEnrichArgs {
   run?: string;
   source?: string;
+  filters?: EnrichmentLeadFilterSelection;
   forceRefresh: boolean | string;
   withHeuristic: boolean | string;
   concurrency: string | number;
   all?: boolean | string;
+}
+
+interface EnrichExecutionOptions {
+  mode: "run" | "source" | "all" | "filter";
+  sourceRun?: Run;
+  source?: string;
+  filters?: EnrichmentLeadFilterSelection;
+  forceRefresh: boolean;
+  withHeuristic: boolean;
+  concurrency: number;
+}
+
+function normalizeFilterSelection(
+  filters:
+    | EnrichmentLeadFilterSelection
+    | {
+        contact_tier?: string | undefined;
+        prospect_score_gte?: number | undefined;
+        niche?: string | undefined;
+        source?: string | undefined;
+        primary_offer?: string | undefined;
+        q?: string | undefined;
+      }
+    | undefined
+): EnrichmentLeadFilterSelection {
+  if (!filters) return {};
+
+  return {
+    ...(filters.contact_tier ? { contact_tier: filters.contact_tier } : {}),
+    ...(filters.prospect_score_gte != null ? { prospect_score_gte: filters.prospect_score_gte } : {}),
+    ...(filters.niche ? { niche: filters.niche } : {}),
+    ...(filters.source ? { source: filters.source } : {}),
+    ...(filters.primary_offer ? { primary_offer: filters.primary_offer } : {}),
+    ...(filters.q ? { q: filters.q } : {}),
+  };
 }
 
 function optionalSet<T>(values: ReadonlySet<T> | undefined): ReadonlySet<T> | undefined {
@@ -152,81 +200,32 @@ function buildRuntimeCtx(runtime: AllRuntime, niche: string | null): EnrichmentC
   };
 }
 
-export async function enrichCommand(rawArgs: RawEnrichArgs): Promise<void> {
+export interface EnrichCommandResult {
+  runId: string;
+  stats: EnrichmentRunStats;
+}
+
+async function executeEnrichmentRun(
+  options: EnrichExecutionOptions,
+  enrichRun: Run
+): Promise<EnrichCommandResult> {
   const log = getLogger();
-
-  const parsed = EnrichArgsSchema.safeParse(rawArgs);
-  if (!parsed.success) {
-    const msgs = parsed.error.issues
-      .map((e) => `  ${e.path.map(String).join(".")}: ${e.message}`)
-      .join("\n");
-    log.error(`Invalid arguments:\n${msgs}`);
-    process.exit(1);
-  }
-  const opts = parsed.data;
-  const effectiveConcurrency = opts.withHeuristic
-    ? Math.min(opts.concurrency, 2)
-    : opts.concurrency;
-
-  const mode = opts.run ? "run" : opts.source ? "source" : "all";
-
-  let sourceRun: import("../../shared/types.js").Run | undefined;
-  if (mode === "run") {
-    const found = await getRunById(opts.run!);
-    if (!found) {
-      log.error({ runId: opts.run }, "Source run not found");
-      process.exit(1);
-    }
-    sourceRun = found;
-  }
-
   const startedAt = Date.now();
-  log.info(
-    {
-      mode,
-      ...(mode === "run" ? { sourceRunId: sourceRun!.id } : {}),
-      ...(mode === "source" ? { source: opts.source } : {}),
-      forceRefresh: opts.forceRefresh,
-      withHeuristic: opts.withHeuristic,
-      concurrency: opts.concurrency,
-      effectiveConcurrency,
-    },
-    "Starting enrich command"
-  );
-  log.info({ concurrency: effectiveConcurrency }, "Using effective enrich concurrency");
-
-  const enrichRun = await createEnrichmentRun(
-    mode === "run"
-      ? { mode: "run", sourceRun: sourceRun!, forceRefresh: opts.forceRefresh, withHeuristic: opts.withHeuristic, concurrency: opts.concurrency }
-      : mode === "source"
-      ? { mode: "source", source: opts.source!, forceRefresh: opts.forceRefresh, withHeuristic: opts.withHeuristic, concurrency: opts.concurrency }
-      : { mode: "all", forceRefresh: opts.forceRefresh, withHeuristic: opts.withHeuristic, concurrency: opts.concurrency }
-  );
-  log.info({ runId: enrichRun.id }, "Enrichment run created");
-
-  const cleanup = async (signal: string) => {
-    log.warn({ runId: enrichRun.id, signal }, "Process interrupted, marking run as failed");
-    try {
-      await failRun(enrichRun.id, `Process interrupted (${signal})`, Date.now() - startedAt);
-    } catch {
-      // best effort
-    }
-    process.exit(1);
-  };
-  const onSigterm = () => void cleanup("SIGTERM");
-  const onSigint = () => void cleanup("SIGINT");
-  process.once("SIGTERM", onSigterm);
-  process.once("SIGINT", onSigint);
+  const effectiveConcurrency = options.withHeuristic
+    ? Math.min(options.concurrency, 2)
+    : options.concurrency;
 
   try {
     const runtime = await loadAllRuntime();
     const leads =
-      mode === "run"
-        ? await loadLeadsByRunId(sourceRun!.id, { passedOnly: true })
-        : mode === "source"
-        ? await loadLeadsBySource(opts.source!, { passedOnly: true })
-        : await loadAllPassedLeads();
-    log.info({ count: leads.length }, "Leads loaded");
+      options.mode === "run"
+        ? await loadLeadsByRunId(options.sourceRun!.id, { passedOnly: true })
+        : options.mode === "source"
+          ? await loadLeadsBySource(options.source!, { passedOnly: true })
+          : options.mode === "filter"
+            ? await loadLeadsByFilterSelection(options.filters ?? {}, { passedOnly: true, limit: 250 })
+            : await loadAllPassedLeads();
+    log.info({ count: leads.length, mode: options.mode }, "Leads loaded");
 
     if (leads.length === 0) {
       const duration_ms = Date.now() - startedAt;
@@ -238,7 +237,7 @@ export async function enrichCommand(rawArgs: RawEnrichArgs): Promise<void> {
         leads_updated: 0,
         duration_ms,
         command: "enrich",
-        ...(mode === "run" ? { source_run_id: sourceRun!.id } : {}),
+        ...(options.mode === "run" ? { source_run_id: options.sourceRun!.id } : {}),
         leads_processed: 0,
         significant_changes: 0,
         skipped_no_website: 0,
@@ -250,7 +249,7 @@ export async function enrichCommand(rawArgs: RawEnrichArgs): Promise<void> {
       };
       await completeRun(enrichRun.id, stats);
       printSummary(enrichRun.id, stats);
-      return;
+      return { runId: enrichRun.id, stats };
     }
 
     const uniqueNiches = [...new Set(
@@ -290,8 +289,8 @@ export async function enrichCommand(rawArgs: RawEnrichArgs): Promise<void> {
               : new Set<string>();
             const leadRuntimeCtx = buildRuntimeCtx(runtime, lead.niche);
             const result = await enrichLead(lead, {
-              forceRefresh: opts.forceRefresh,
-              withHeuristic: opts.withHeuristic,
+              forceRefresh: options.forceRefresh,
+              withHeuristic: options.withHeuristic,
               ...(extraStopWords.size > 0 ? { extraStopWords } : {}),
             }, undefined, leadRuntimeCtx);
             const enrichmentUpdate = await updateLeadEnrichment(
@@ -377,7 +376,7 @@ export async function enrichCommand(rawArgs: RawEnrichArgs): Promise<void> {
       leads_updated: leads_processed,
       duration_ms,
       command: "enrich",
-      ...(mode === "run" ? { source_run_id: sourceRun!.id } : {}),
+      ...(options.mode === "run" ? { source_run_id: options.sourceRun!.id } : {}),
       leads_processed,
       significant_changes,
       skipped_no_website,
@@ -414,12 +413,134 @@ export async function enrichCommand(rawArgs: RawEnrichArgs): Promise<void> {
       }
     }
     printSummary(enrichRun.id, stats);
+    return { runId: enrichRun.id, stats };
   } catch (err: unknown) {
     const duration_ms = Date.now() - startedAt;
     const msg = err instanceof Error ? err.message : String(err);
     log.error({ runId: enrichRun.id, err: msg }, "Enrich command failed");
     await failRun(enrichRun.id, msg, duration_ms);
     throw err;
+  }
+}
+
+export async function startFilterEnrichmentJob(params: {
+  filters: EnrichmentLeadFilterSelection;
+  withHeuristic: boolean;
+  concurrency: number;
+  forceRefresh?: boolean;
+}): Promise<{ runId: string }> {
+  const enrichRun = await createEnrichmentRun({
+    mode: "filter",
+    filters: params.filters,
+    forceRefresh: params.forceRefresh ?? false,
+    withHeuristic: params.withHeuristic,
+    concurrency: params.concurrency,
+  });
+
+  void executeEnrichmentRun({
+    mode: "filter",
+    filters: params.filters,
+    forceRefresh: params.forceRefresh ?? false,
+    withHeuristic: params.withHeuristic,
+    concurrency: params.concurrency,
+  }, enrichRun).catch((err) => {
+    const log = getLogger();
+    log.error({ runId: enrichRun.id, err: err instanceof Error ? err.message : String(err) }, "Background filter enrichment failed");
+  });
+
+  return { runId: enrichRun.id };
+}
+
+export async function enrichCommand(rawArgs: RawEnrichArgs): Promise<EnrichCommandResult> {
+  const log = getLogger();
+
+  const parsed = EnrichArgsSchema.safeParse(rawArgs);
+  if (!parsed.success) {
+    const msgs = parsed.error.issues
+      .map((e) => `  ${e.path.map(String).join(".")}: ${e.message}`)
+      .join("\n");
+    log.error(`Invalid arguments:\n${msgs}`);
+    process.exit(1);
+  }
+  const opts = parsed.data;
+
+  const mode = opts.run ? "run" : opts.source ? "source" : opts.filters ? "filter" : "all";
+  const normalizedFilters = normalizeFilterSelection(opts.filters);
+
+  let sourceRun: import("../../shared/types.js").Run | undefined;
+  if (mode === "run") {
+    const found = await getRunById(opts.run!);
+    if (!found) {
+      log.error({ runId: opts.run }, "Source run not found");
+      process.exit(1);
+    }
+    sourceRun = found;
+  }
+
+  log.info(
+    {
+      mode,
+      ...(mode === "run" ? { sourceRunId: sourceRun!.id } : {}),
+      ...(mode === "source" ? { source: opts.source } : {}),
+      ...(mode === "filter" ? { filters: normalizedFilters } : {}),
+      forceRefresh: opts.forceRefresh,
+      withHeuristic: opts.withHeuristic,
+      concurrency: opts.concurrency,
+    },
+    "Starting enrich command"
+  );
+
+  const executionOptions: EnrichExecutionOptions =
+    mode === "run"
+      ? {
+          mode: "run",
+          sourceRun: sourceRun!,
+          forceRefresh: opts.forceRefresh,
+          withHeuristic: opts.withHeuristic,
+          concurrency: opts.concurrency,
+        }
+      : mode === "source"
+        ? {
+            mode: "source",
+            source: opts.source!,
+            forceRefresh: opts.forceRefresh,
+            withHeuristic: opts.withHeuristic,
+            concurrency: opts.concurrency,
+          }
+        : mode === "filter"
+          ? {
+              mode: "filter",
+              filters: normalizedFilters,
+              forceRefresh: opts.forceRefresh,
+              withHeuristic: opts.withHeuristic,
+              concurrency: opts.concurrency,
+            }
+          : {
+              mode: "all",
+              forceRefresh: opts.forceRefresh,
+              withHeuristic: opts.withHeuristic,
+              concurrency: opts.concurrency,
+            };
+
+  const enrichRun = await createEnrichmentRun(executionOptions);
+  log.info({ runId: enrichRun.id }, "Enrichment run created");
+
+  const cleanup = async (signal: string) => {
+    log.warn({ runId: enrichRun.id, signal }, "Process interrupted, marking run as failed");
+    try {
+      await failRun(enrichRun.id, `Process interrupted (${signal})`, 1);
+    } catch {
+      // best effort
+    }
+    process.exit(1);
+  };
+  const onSigterm = () => void cleanup("SIGTERM");
+  const onSigint = () => void cleanup("SIGINT");
+  process.once("SIGTERM", onSigterm);
+  process.once("SIGINT", onSigint);
+
+  try {
+    return await executeEnrichmentRun(executionOptions, enrichRun);
   } finally {
     process.removeListener("SIGTERM", onSigterm);
     process.removeListener("SIGINT", onSigint);

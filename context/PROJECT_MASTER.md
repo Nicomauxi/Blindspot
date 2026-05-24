@@ -52,7 +52,7 @@ CRM real con feedback humano estructurado.
 - monitoreo fragmentado entre health/system/costs/performance
 - no hay dark mode
 - density map no está apoyado sobre mapa real
-- backups aún no separan retención manual vs scheduled
+- backup policy ya separa retención manual vs scheduled y expone métricas de capacidad
 - discovery workspace todavía tiene deuda de UX y orquestación
 - MINTUR sigue aportando demasiado `other`
 - no existe feedback humano estructurado sobre calidad de datos
@@ -67,7 +67,7 @@ CRM real con feedback humano estructurado.
 
 ## ESTADO DE SESIÓN
 
-**Fecha:** 2026-05-22
+**Fecha:** 2026-05-23
 
 **Contexto sincronizado:** sí, `CTX-0` completo.
 
@@ -80,6 +80,13 @@ CRM real con feedback humano estructurado.
 - `THEME-1` cerrado: dark mode admin con toggle persistido, tokens compartidos y shell/superficies críticas cubiertas
 - `MON-1` cerrado: contrato backend `admin/monitoring/overview` agregado sin romper endpoints legacy; smoke API sigue fallando por `backup_restore_failed` ya presente en health
 - `MON-2` cerrado: nueva pantalla `Monitoreo` consume el contrato unificado y `/admin/health` queda como alias por redirect
+- `BKP-1` cerrado: retención manual/programada separada, métricas de capacidad visibles y tamaño de DB expuesto en backups/monitoreo
+- `DISC-1` cerrado: composer persistente, nichos sugeridos con breakdown por fuente y jobs legacy retirados de la experiencia principal
+- `MINTUR-1` cerrado: el provider usa `TipoOperador`/`Operador` para mapear niches canónicos y reducir `other`
+- `DISC-3` cerrado: Lead Explorer puede encolar enrichment por colección filtrada con límite operativo, filtros aprobados y run trazable propio
+- `FDBK-1` cerrado: existe persistencia de feedback por lead/campo, API de create/list/summary y auditoría en `audit_log`
+- `FDBK-2` cerrado: UI de feedback en Lead Detail — controles por campo, resumen de actividad, registro de veredicto; cliente en `ui/src/lib/api.ts` y helpers en `ui/src/lib/lead-feedback.ts`
+- `FDBK-3` cerrado: consumo operativo — `GET /leads/:id/feedback-adjusted-confidence` expone scores ajustados por feedback usando helper `src/modules/feedback/summary.ts`; documentado qué usa y qué no usa feedback todavía
 
 **Programa activo:**
 - `CTX-0` done
@@ -87,14 +94,51 @@ CRM real con feedback humano estructurado.
 - `THEME-1` done
 - `MON-1` done
 - `MON-2` done
-- próxima fase: `BKP-1`
+- `BKP-1` done
+- `DISC-1` done
+- `MINTUR-1` done
+- `MAP-1` done
+- `DISC-2` done
+- `DISC-3` done
+- `FDBK-1` done
+- `FDBK-2` done
+- `FDBK-3` done
+- `CRM-1` cerrado: tablas `lead_tracking` y `lead_tracking_events` con 6 estados canónicos, unique parcial para tracking activo, FK nullable a `outreach_campaigns` como puente — estructuras viejas intactas
+- `CRM-2` cerrado: API completa de tracking — POST create, GET list/detail, POST transition, POST note; RBAC admin/CM; auditoría
+- `CRM-3` cerrado: board UI por estado, nav CRM, botón "Iniciar seguimiento" en lead detail
+- `CRM-4` cerrado: modal de detalle con timeline de eventos, notas standalone, controles ricos por tipo de transición (canal, recordatorio, notes recomendadas para terminal states), shortcut "Sin canal"
 
-**Objetivo inmediato de la siguiente sesión:**
-- ejecutar `BKP-1`
-- separar retención de backups manuales vs programados en config/servicio/UI
-- exponer peso actual de DB y métricas operativas asociadas en backups/monitoreo
+**Programa activo:**
+- Ciclo 2 completado (2026-05-23/24): UI-2, UI-1, NAV-2, THEME-2, MON-3, MON-4, OPS-1, PIPE-1, PIPE-3, PIPE-2, CRM-5, DISC-4, DISC-5, DISC-6 — todos done
+- Snapshot 2026-05-24: sistema estable, roadmap canónico sin fases pendientes
+
+**Cambios del ciclo 2:**
+- PIPE-2: incremento atómico de budget GP via RPC PostgreSQL, race condition eliminada
+- CRM-5: drag & drop en board (dnd-kit), popup con datos del lead, card título = nombre real, enriquecimiento de GET /tracking con JOIN a leads
+- DISC-4: location subdivider para Montevideo y otras ciudades UY, fetchPlaceCandidates paraleliza sub-áreas y deduplica por placeId
+- DISC-5: geo-validator con bounding box Uruguay + departamentos, campo lat/lng/geo_suspect/departamento en PlaceCandidate, places.location en field mask
+- DISC-6: endpoint POST /discovery/jobs/bulk + bulkInsertDiscoveryJobs + UI creación masiva con ciudades × nichos predefinidos
+
+**Siguiente paso:**
+- Ciclo 3 abierto el 2026-05-24 con 35 fases nuevas (BUG-1 → UI-RESP-1) cubriendo: bugfixes urgentes, pantalla Operaciones unificada con Variables/Procesos, refresh masivo de leads, optimización de discovery + hard cap del budget GP, mapa heatmap granular con filtros, limpieza UI deprecated, sistema de alertas, mejoras CRM + RBAC de contacto, rediseño completo de la ficha de Lead con auditoría triple, aliasing de nichos y responsive global.
+- Primera fase a ejecutar: `BUG-1` (Budget Google Places muestra 0 gastado). Es bugfix puro y prerequisito de BUG-2 y UI-4.
+- El usuario adjuntó `context/prompts/deepsearch-discovery-places.md` como input aparte para generar el XLS que consume `DISC-10`.
 
 **Lo que no hacer al retomar:**
-- no volver a planificar desde cero el roadmap histórico
-- no correr discovery billable por costumbre
-- no mezclar `BKP-1` con monitoreo visual nuevo, discovery o CRM en el mismo diff
+- no revertir lógica CRM por "simplicidad" — está diseñada para escalar
+- no correr discovery billable sin necesidad
+- no agregar fases nuevas sin definirlas primero en FUTURE.md y ROADMAP_CANONICAL.md
+- no cerrar `LEAD-5` sin las tres auditorías documentadas en `context/research/lead-5-audits.md`
+- no importar dependencias nuevas (charts, markercluster, xlsx, mapbox) sin pedir aprobación explícita antes
+- no ejecutar `UI-RESP-1` antes de cerrar todas las pantallas nuevas o modificadas del ciclo 3
+
+**Ciclo 3 — gaps que cubre (snapshot al abrir):**
+- bug: Budget GP spent muestra 0 en lugar del valor real
+- Pipeline y Monitoreo viven como pantallas separadas, sin variables ni vista de procesos en vivo
+- Discovery permite crear jobs pero no refrescar/re-enriquecer leads existentes ni traer datos de Google Places sobre leads viejos
+- mapa de densidad agrupa solo a nivel departamento; no hay filtros; no hay modo individual; geocoding ausente para leads con address pero sin gps
+- home muestra alertas hardcoded y bloques poco accionables; falta sistema de alertas persistido con campanita y counter
+- CRM funciona pero las transiciones de retroceso, el historial completo en popup y los filtros no están implementados; los datos de contacto son visibles a comercial sin gating
+- ficha de Lead mezcla técnico y comercial; no diferencia ofertas de software vs marketing; el feedback humano está separado del dato que valida; bloques deprecated siguen visibles
+- nichos divergen por sinónimos sin forma de unirlos
+- no hay garantía de responsive en todo el admin
