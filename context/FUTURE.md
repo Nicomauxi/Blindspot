@@ -54,7 +54,7 @@
 - `DISC-9` — done (2026-05-24)
 - `DISC-10` — done (2026-05-24)
 - `DISC-11` — done (2026-05-24)
-- `PIPE-4` — pending
+- `PIPE-4` — done
 - `PIPE-5` — pending
 - `MAP-2` — pending
 - `MAP-3` — pending
@@ -1495,7 +1495,7 @@
 
 ## PIPE-4 — Hard cap mensual del Budget Google Places
 
-**Status:** `pending`
+**Status:** `done`
 
 **Resultado esperado**
 - Es imposible que el sistema corra un job de google_places si el `budget_spent_month` actual + estimated_cost del job > `budget_total`.
