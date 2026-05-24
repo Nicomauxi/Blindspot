@@ -56,9 +56,9 @@ export const adminNavGroups: NavGroup[] = [
         roles: ["admin"],
       },
       {
-        href: "/admin/pipeline",
-        label: "Pipeline",
-        description: "Runs, cron y webhooks del pipeline",
+        href: "/admin/operations",
+        label: "Operaciones",
+        description: "Pipeline, monitoreo y control del sistema",
         icon: PipelineIcon,
         roles: ["admin"],
       },
@@ -95,13 +95,7 @@ export const adminNavGroups: NavGroup[] = [
         icon: BackupIcon,
         roles: ["admin"],
       },
-      {
-        href: "/admin/monitoring",
-        label: "Monitoreo",
-        description: "Estado operativo, presupuesto y procesos",
-        icon: MonitoringIcon,
-        roles: ["admin"],
-      },
+
       {
         href: "/admin/costs",
         label: "Costos",

@@ -1,8 +1,7 @@
 const ADMIN_ONLY_PREFIXES = [
   "/admin/discovery",
-  "/admin/pipeline",
+  "/admin/operations",
   "/admin/backups",
-  "/admin/monitoring",
   "/admin/health",
   "/admin/costs",
   "/admin/performance",
