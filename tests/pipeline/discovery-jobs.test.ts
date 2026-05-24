@@ -90,4 +90,39 @@ describe("processQueuedDiscoveryJobs", () => {
     expect(mocks.updateDiscoveryJobEnrichmentStatus).toHaveBeenNthCalledWith(2, "job-1", "completed", { linked_enrich_run_id: "enrich-run-1" });
     expect(mocks.enrichCommand).toHaveBeenCalledWith(expect.objectContaining({ run: "discover-run-1", withHeuristic: true }));
   });
+
+  it("fetches exactly concurrency jobs from the queue", async () => {
+    await processQueuedDiscoveryJobs(3);
+    expect(mocks.listChain.limit).toHaveBeenCalledWith(3);
+  });
+
+  it("processes multiple jobs concurrently and aggregates results", async () => {
+    mocks.listChain.limit.mockResolvedValue({
+      data: [
+        { id: "job-1", source: "yelu", location: "Montevideo", niche: "restaurant", profile: null, concurrency: null, max_results: 100, cost_cap_usd: null, cpu_budget: null, enrich_after_discovery: false },
+        { id: "job-2", source: "yelu", location: "Canelones", niche: "hotel", profile: null, concurrency: null, max_results: 100, cost_cap_usd: null, cpu_budget: null, enrich_after_discovery: false },
+      ],
+      error: null,
+    });
+    mocks.createRun
+      .mockResolvedValueOnce({ id: "run-1" })
+      .mockResolvedValueOnce({ id: "run-2" });
+    mocks.executeExternalDiscovery
+      .mockResolvedValueOnce({ fetched: 10, inserted: 3, corroborated: 0 })
+      .mockResolvedValueOnce({ fetched: 8, inserted: 2, corroborated: 0 });
+
+    const result = await processQueuedDiscoveryJobs(2);
+
+    expect(result.jobs_processed).toBe(2);
+    expect(result.leads_found).toBe(18);
+    expect(result.leads_new).toBe(5);
+    expect(mocks.updateDiscoveryJobStatus).toHaveBeenCalledWith("job-1", "running");
+    expect(mocks.updateDiscoveryJobStatus).toHaveBeenCalledWith("job-2", "running");
+  });
+
+  it("returns empty summary when no jobs are queued", async () => {
+    mocks.listChain.limit.mockResolvedValue({ data: [], error: null });
+    const result = await processQueuedDiscoveryJobs(4);
+    expect(result).toEqual({ jobs_processed: 0, leads_found: 0, leads_new: 0 });
+  });
 });
