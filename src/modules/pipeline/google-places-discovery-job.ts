@@ -177,7 +177,8 @@ export async function executeGooglePlacesDiscoveryJob(opts: {
         logger.warn({ budget_spent: budgetResult.budget_spent, budget_total: budgetResult.budget_total }, "GP budget exceeded after job completion");
       }
     } catch (err) {
-      logger.error({ err }, "Failed to increment GP budget spent");
+      logger.error({ err, run_id: run.id, cost_usd: actualCostUsd }, "Failed to increment GP budget spent; run saved, use POST /pipeline/gp-budget/backfill to recover");
+      throw err;
     }
 
     if (normalizedNiche && normalizedNiche !== "all") {
