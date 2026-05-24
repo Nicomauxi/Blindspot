@@ -5,6 +5,7 @@ import { requireAuth, requireAdmin, getAuthUser, type AuthUser } from "../auth/m
 import { createLLMProvider } from "../llm/factory.js";
 import { countLeadsByFilterSelection, type EnrichmentLeadFilterSelection } from "../../../src/storage/leads.js";
 import { startFilterEnrichmentJob } from "../../../src/cli/commands/enrich.js";
+import { startReDiscoveryJob } from "../../../src/cli/commands/re-discover.js";
 import { summarizeFeedbackRows, computeFeedbackAdjustedConfidence } from "../../../src/modules/feedback/summary.js";
 
 const permissiveUuid = z
@@ -26,6 +27,13 @@ const enrichCollectionSchema = z.object({
   source: z.string().trim().min(1).optional(),
   primary_offer: z.string().trim().min(1).optional(),
   q: z.string().trim().min(1).optional(),
+  missing_gps: z.boolean().optional(),
+  missing_address: z.boolean().optional(),
+  missing_phone: z.boolean().optional(),
+  missing_whatsapp: z.boolean().optional(),
+  missing_email: z.boolean().optional(),
+  missing_website: z.boolean().optional(),
+  mode: z.enum(["enrichment", "re_discovery"]).default("enrichment"),
   with_heuristic: z.boolean().default(true),
   concurrency: z.number().int().min(1).max(8).default(4),
 });
@@ -58,7 +66,13 @@ function hasRelevantEnrichmentFilter(filters: EnrichmentLeadFilterSelection): bo
     filters.niche ||
     filters.source ||
     filters.primary_offer ||
-    filters.q
+    filters.q ||
+    filters.missing_gps ||
+    filters.missing_address ||
+    filters.missing_phone ||
+    filters.missing_whatsapp ||
+    filters.missing_email ||
+    filters.missing_website
   );
 }
 
@@ -845,6 +859,39 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
   );
 
   app.post(
+    "/admin/enrichment/filter-jobs/estimate",
+    { preHandler: requireAdmin },
+    async (request, reply) => {
+      const estimateSchema = enrichCollectionSchema.omit({ with_heuristic: true, concurrency: true });
+      const parseResult = estimateSchema.safeParse(request.body);
+      if (!parseResult.success) {
+        return reply.status(400).send({ error: "Validation error", details: parseResult.error.flatten().fieldErrors });
+      }
+      const { contact_tier, prospect_score_gte, niche, source, primary_offer, q,
+        missing_gps, missing_address, missing_phone, missing_whatsapp, missing_email, missing_website } = parseResult.data;
+      const filters: EnrichmentLeadFilterSelection = {
+        ...(contact_tier !== undefined && { contact_tier }),
+        ...(prospect_score_gte !== undefined && { prospect_score_gte }),
+        ...(niche !== undefined && { niche }),
+        ...(source !== undefined && { source }),
+        ...(primary_offer !== undefined && { primary_offer }),
+        ...(q !== undefined && { q }),
+        ...(missing_gps && { missing_gps }),
+        ...(missing_address && { missing_address }),
+        ...(missing_phone && { missing_phone }),
+        ...(missing_whatsapp && { missing_whatsapp }),
+        ...(missing_email && { missing_email }),
+        ...(missing_website && { missing_website }),
+      };
+      if (!hasRelevantEnrichmentFilter(filters)) {
+        return reply.status(400).send({ error: "At least one filter is required", error_code: "filters_required" });
+      }
+      const lead_count = await countLeadsByFilterSelection(filters);
+      return reply.status(200).send({ data: { lead_count } });
+    }
+  );
+
+  app.post(
     "/admin/enrichment/filter-jobs",
     { preHandler: requireAdmin },
     async (request, reply) => {
@@ -857,7 +904,11 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
         });
       }
 
-      const { contact_tier, prospect_score_gte, niche, source, primary_offer, q } = parseResult.data;
+      const {
+        contact_tier, prospect_score_gte, niche, source, primary_offer, q,
+        missing_gps, missing_address, missing_phone, missing_whatsapp, missing_email, missing_website,
+        mode, with_heuristic, concurrency,
+      } = parseResult.data;
       const filters: EnrichmentLeadFilterSelection = {
         ...(contact_tier !== undefined && { contact_tier }),
         ...(prospect_score_gte !== undefined && { prospect_score_gte }),
@@ -865,6 +916,12 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
         ...(source !== undefined && { source }),
         ...(primary_offer !== undefined && { primary_offer }),
         ...(q !== undefined && { q }),
+        ...(missing_gps && { missing_gps }),
+        ...(missing_address && { missing_address }),
+        ...(missing_phone && { missing_phone }),
+        ...(missing_whatsapp && { missing_whatsapp }),
+        ...(missing_email && { missing_email }),
+        ...(missing_website && { missing_website }),
       };
 
       if (!hasRelevantEnrichmentFilter(filters)) {
@@ -890,10 +947,17 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
         });
       }
 
+      if (mode === "re_discovery") {
+        const job = await startReDiscoveryJob({ filters, concurrency });
+        return reply.status(202).send({
+          data: { run_id: job.runId, lead_count: leadCount, filters, mode, concurrency },
+        });
+      }
+
       const job = await startFilterEnrichmentJob({
         filters,
-        withHeuristic: parseResult.data.with_heuristic,
-        concurrency: parseResult.data.concurrency,
+        withHeuristic: with_heuristic,
+        concurrency,
       });
 
       return reply.status(202).send({
@@ -901,8 +965,9 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
           run_id: job.runId,
           lead_count: leadCount,
           filters,
-          with_heuristic: parseResult.data.with_heuristic,
-          concurrency: parseResult.data.concurrency,
+          mode,
+          with_heuristic,
+          concurrency,
         },
       });
     }

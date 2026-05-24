@@ -47,11 +47,11 @@
 - `BUG-2` — done (2026-05-24, resuelto por BUG-1)
 - `OPS-2` — done (2026-05-24)
 - `OPS-3` — done (2026-05-24)
-- `OPS-4` — pending
-- `OPS-5` — pending
-- `DISC-7` — pending
-- `DISC-8` — pending
-- `DISC-9` — pending
+- `OPS-4` — done (2026-05-24)
+- `OPS-5` — done (2026-05-24)
+- `DISC-7` — done (2026-05-24)
+- `DISC-8` — done (2026-05-24)
+- `DISC-9` — done (2026-05-24)
 - `DISC-10` — pending
 - `DISC-11` — pending
 - `PIPE-4` — pending

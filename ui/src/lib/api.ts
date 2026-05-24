@@ -616,6 +616,89 @@ export async function getPipelineConfig(token: string) {
   return request<SingleResponse<PipelineConfig>>("/api/v1/pipeline/config", {}, token);
 }
 
+export type VariableItem = {
+  key: string;
+  label: string;
+  description: string;
+  type: "boolean" | "number" | "string" | "string_array";
+  sensitive: boolean;
+  nullable: boolean;
+  value: boolean | number | string | string[] | null;
+};
+
+export async function getAdminVariables(token: string) {
+  return request<{ data: VariableItem[] }>("/api/v1/admin/variables", {}, token);
+}
+
+export async function patchAdminVariable(
+  token: string,
+  key: string,
+  value: boolean | number | string | string[] | null
+) {
+  return request<{ data: VariableItem[] }>(
+    `/api/v1/admin/variables/${encodeURIComponent(key)}`,
+    { method: "PATCH", body: JSON.stringify({ value }) },
+    token
+  );
+}
+
+export type ProcessMetricSnapshot = {
+  process: string;
+  cpu_pct: number | null;
+  mem_bytes: number | null;
+  uptime_seconds: number;
+  recorded_at: string;
+};
+
+export type ProcessMetricsData = {
+  current: ProcessMetricSnapshot[];
+  history: ProcessMetricSnapshot[];
+};
+
+export async function getProcessMetrics(token: string) {
+  return request<{ data: ProcessMetricsData }>("/api/v1/admin/operations/process-metrics", {}, token);
+}
+
+export type MissingFilters = {
+  missing_gps?: boolean;
+  missing_address?: boolean;
+  missing_phone?: boolean;
+  missing_whatsapp?: boolean;
+  missing_email?: boolean;
+  missing_website?: boolean;
+};
+
+export type EnrichmentFilters = MissingFilters & {
+  contact_tier?: string;
+  prospect_score_gte?: number;
+  niche?: string;
+  source?: string;
+  primary_offer?: string;
+  q?: string;
+  mode?: "enrichment" | "re_discovery";
+  with_heuristic?: boolean;
+  concurrency?: number;
+};
+
+export async function estimateEnrichmentImpact(token: string, filters: Omit<EnrichmentFilters, "with_heuristic" | "concurrency">) {
+  return request<{ data: { lead_count: number } }>(
+    "/api/v1/admin/enrichment/filter-jobs/estimate",
+    { method: "POST", body: JSON.stringify(filters) },
+    token
+  );
+}
+
+export async function createFilteredEnrichmentJob(
+  token: string,
+  filters: EnrichmentFilters
+) {
+  return request<{ data: { lead_count: number; run_id: string } }>(
+    "/api/v1/admin/enrichment/filter-jobs",
+    { method: "POST", body: JSON.stringify(filters) },
+    token
+  );
+}
+
 export type GpBudgetStatus = {
   budget_total: number;
   budget_spent: number;
@@ -823,25 +906,6 @@ export async function listLeads(
   if (params.cursor) qp.set("cursor", params.cursor);
   if (params.limit) qp.set("limit", String(params.limit));
   return request<PaginatedResponse<LeadDashboard>>(`/api/v1/leads?${qp}`, {}, token);
-}
-
-export async function createFilteredEnrichmentJob(
-  token: string,
-  data: {
-    contact_tier?: string;
-    prospect_score_gte?: number;
-    niche?: string;
-    source?: string;
-    primary_offer?: string;
-    q?: string;
-    with_heuristic?: boolean;
-    concurrency?: number;
-  }
-) {
-  return request<{ data: { run_id: string; lead_count: number; filters: Record<string, unknown>; with_heuristic: boolean; concurrency: number } }>("/api/v1/admin/enrichment/filter-jobs", {
-    method: "POST",
-    body: JSON.stringify(data),
-  }, token);
 }
 
 export async function getLead(token: string, id: string) {
