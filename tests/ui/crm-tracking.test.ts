@@ -4,6 +4,7 @@ import {
   CRM_COLUMNS,
   groupTrackingsByStatus,
   isTerminalStatus,
+  isRegressionTransition,
 } from "../../ui/src/lib/crm-tracking";
 import type { LeadTracking, CrmStatus } from "../../ui/src/lib/api";
 
@@ -39,9 +40,18 @@ describe("CRM state machine", () => {
     expect(VALID_TRANSITIONS.contact).not.toContain("pending");
   });
 
-  it("terminal states have no valid transitions", () => {
-    expect(VALID_TRANSITIONS.rejected).toHaveLength(0);
-    expect(VALID_TRANSITIONS.accepted).toHaveLength(0);
+  it("terminal states can only reopen to validation", () => {
+    expect(VALID_TRANSITIONS.rejected).toEqual(["validation"]);
+    expect(VALID_TRANSITIONS.accepted).toEqual(["validation"]);
+  });
+
+  it("isRegressionTransition identifies backwards moves", () => {
+    expect(isRegressionTransition("observed", "contact")).toBe(true);
+    expect(isRegressionTransition("contact", "observed")).toBe(false);
+    expect(isRegressionTransition("accepted", "validation")).toBe(true);
+    expect(isRegressionTransition("rejected", "validation")).toBe(true);
+    expect(isRegressionTransition("pending", "validation")).toBe(false);
+    expect(isRegressionTransition("validation", "contact")).toBe(false);
   });
 
   it("isTerminalStatus correctly identifies terminal states", () => {

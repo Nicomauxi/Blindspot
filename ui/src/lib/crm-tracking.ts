@@ -14,12 +14,25 @@ export const VALID_TRANSITIONS: Record<CrmStatus, CrmStatus[]> = {
   validation: ["contact", "rejected"],
   contact:    ["observed", "accepted", "rejected"],
   observed:   ["contact", "accepted", "rejected"],
-  rejected:   [],
-  accepted:   [],
+  rejected:   ["validation"],
+  accepted:   ["validation"],
+};
+
+export const STATUS_ORDER: Record<CrmStatus, number> = {
+  pending:    0,
+  validation: 1,
+  contact:    2,
+  observed:   3,
+  rejected:   4,
+  accepted:   4,
 };
 
 export function isTerminalStatus(status: CrmStatus): boolean {
   return status === "rejected" || status === "accepted";
+}
+
+export function isRegressionTransition(from: CrmStatus, to: CrmStatus): boolean {
+  return STATUS_ORDER[to] < STATUS_ORDER[from];
 }
 
 export function groupTrackingsByStatus(

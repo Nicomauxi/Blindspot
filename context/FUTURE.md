@@ -66,7 +66,7 @@
 - `UI-7` — done
 - `ALERT-1` — done
 - `ALERT-2` — done
-- `CRM-6` — pending
+- `CRM-6` — done
 - `CRM-7` — pending
 - `CRM-8` — pending
 - `RBAC-1` — pending
@@ -1790,7 +1790,7 @@
 
 ## CRM-6 — Transiciones CRM bidireccionales
 
-**Status:** `pending`
+**Status:** `done`
 
 **Resultado esperado**
 - La UI del CRM board permite retroceder de cualquier estado a un estado válido anterior según `VALID_TRANSITIONS` (que ya soporta `observed → contact`, por ejemplo).

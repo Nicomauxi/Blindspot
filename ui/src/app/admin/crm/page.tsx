@@ -22,7 +22,7 @@ import {
 import { useAuthStore } from "@/lib/auth-store";
 import { AdminPageLayout, HelpTip } from "@/components/admin-shell";
 import { cn, formatRelative } from "@/lib/utils";
-import { CRM_COLUMNS, VALID_TRANSITIONS, groupTrackingsByStatus, isTerminalStatus } from "@/lib/crm-tracking";
+import { CRM_COLUMNS, VALID_TRANSITIONS, groupTrackingsByStatus, isRegressionTransition, isTerminalStatus } from "@/lib/crm-tracking";
 
 type TransitionModal = {
   tracking: LeadTracking;
@@ -30,6 +30,7 @@ type TransitionModal = {
   notes: string;
   channel: string;
   reminder_at: string;
+  isRegression: boolean;
 };
 
 type NoteModal = {
@@ -43,7 +44,7 @@ type DetailModal = {
   loading: boolean;
 };
 
-const STATUS_SUGGESTS_NOTES: Set<CrmStatus> = new Set(["rejected", "accepted"]);
+const STATUS_SUGGESTS_NOTES: Set<CrmStatus> = new Set(["rejected", "accepted", "validation"]);
 const STATUS_SHOWS_CHANNEL:  Set<CrmStatus> = new Set(["contact"]);
 const STATUS_SHOWS_REMINDER: Set<CrmStatus> = new Set(["observed"]);
 
@@ -88,7 +89,10 @@ export default function CrmBoardPage() {
   const byStatus = (status: CrmStatus) => grouped[status] ?? [];
 
   const openTransition = (tracking: LeadTracking, to_status: CrmStatus) =>
-    setTransition({ tracking, to_status, notes: "", channel: "", reminder_at: "" });
+    setTransition({
+      tracking, to_status, notes: "", channel: "", reminder_at: "",
+      isRegression: isRegressionTransition(tracking.status, to_status),
+    });
 
   const openNoChannelWorked = (tracking: LeadTracking) =>
     setTransition({
@@ -97,6 +101,7 @@ export default function CrmBoardPage() {
       notes: "Ningún canal funcionó",
       channel: "",
       reminder_at: "",
+      isRegression: false,
     });
 
   const openNote = (tracking: LeadTracking) =>
@@ -165,7 +170,13 @@ export default function CrmBoardPage() {
     if (!tracking || tracking.status === toStatus) return;
     if (!VALID_TRANSITIONS[tracking.status].includes(toStatus)) return;
 
-    // Optimistic update
+    // Regressions require a note — open modal instead of direct commit
+    if (isRegressionTransition(tracking.status, toStatus)) {
+      openTransition(tracking, toStatus);
+      return;
+    }
+
+    // Optimistic update for forward transitions
     setTrackings((prev) =>
       prev.map((t) => (t.id === trackingId ? { ...t, status: toStatus } : t))
     );
@@ -277,11 +288,35 @@ export default function CrmBoardPage() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
           <div className="theme-panel w-full max-w-md rounded-2xl p-6 shadow-xl">
             <h2 className="text-base font-semibold theme-text-strong mb-1">
-              Mover a <span className="capitalize">{transition.to_status}</span>
+              {transition.isRegression ? (
+                <span className="flex items-center gap-2">
+                  <span className="inline-block rounded px-1.5 py-0.5 text-xs bg-amber-100 text-amber-700">Retroceso</span>
+                  <span>← <span className="capitalize">{transition.to_status}</span></span>
+                </span>
+              ) : isTerminalStatus(transition.tracking.status) ? (
+                <span className="flex items-center gap-2">
+                  <span className="inline-block rounded px-1.5 py-0.5 text-xs bg-rose-100 text-rose-700">Reapertura</span>
+                  <span>Reabrir en <span className="capitalize">{transition.to_status}</span></span>
+                </span>
+              ) : (
+                <>Mover a <span className="capitalize">{transition.to_status}</span></>
+              )}
             </h2>
             <p className="text-xs theme-text-muted mb-4 truncate">
               {transition.tracking.lead_name ?? transition.tracking.lead_id}
             </p>
+
+            {transition.isRegression && (
+              <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+                Estás revirtiendo el seguimiento. Se requiere una razón.
+              </div>
+            )}
+
+            {isTerminalStatus(transition.tracking.status) && !transition.isRegression && (
+              <div className="mb-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+                Este lead estaba en estado terminal. Reabrirlo requiere confirmar con una nota explicativa.
+              </div>
+            )}
 
             {STATUS_SHOWS_CHANNEL.has(transition.to_status) && (
               <div className="mb-3">
@@ -309,18 +344,25 @@ export default function CrmBoardPage() {
 
             <div className="mb-4">
               <label className="text-xs theme-text-muted block mb-1">
-                Notas{STATUS_SUGGESTS_NOTES.has(transition.to_status) ? " (recomendado)" : " (opcional)"}
+                {transition.isRegression || isTerminalStatus(transition.tracking.status)
+                  ? "Razón del retroceso (obligatorio)"
+                  : STATUS_SUGGESTS_NOTES.has(transition.to_status)
+                  ? "Notas (recomendado)"
+                  : "Notas (opcional)"}
               </label>
               <textarea
                 className="w-full rounded-lg border px-3 py-1.5 text-sm theme-input resize-none"
                 rows={3}
                 placeholder={
-                  STATUS_SUGGESTS_NOTES.has(transition.to_status)
+                  transition.isRegression || isTerminalStatus(transition.tracking.status)
+                    ? "Explicá por qué se revierte este seguimiento…"
+                    : STATUS_SUGGESTS_NOTES.has(transition.to_status)
                     ? "Describí el motivo de la decisión…"
                     : "Contexto de la transición…"
                 }
                 value={transition.notes}
                 onChange={(e) => setTransition({ ...transition, notes: e.target.value })}
+                autoFocus={transition.isRegression || isTerminalStatus(transition.tracking.status)}
               />
             </div>
 
@@ -331,11 +373,19 @@ export default function CrmBoardPage() {
                 Cancelar
               </button>
               <button
-                className="rounded-lg bg-sky-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-700 disabled:opacity-60"
+                className={cn(
+                  "rounded-lg px-4 py-2 text-sm font-semibold text-white disabled:opacity-60",
+                  transition.isRegression || isTerminalStatus(transition.tracking.status)
+                    ? "bg-amber-600 hover:bg-amber-700"
+                    : "bg-sky-600 hover:bg-sky-700"
+                )}
                 onClick={handleTransition}
-                disabled={saving}
+                disabled={
+                  saving ||
+                  ((transition.isRegression || isTerminalStatus(transition.tracking.status)) && !transition.notes.trim())
+                }
               >
-                {saving ? "Guardando…" : "Confirmar"}
+                {saving ? "Guardando…" : transition.isRegression || isTerminalStatus(transition.tracking.status) ? "Confirmar retroceso" : "Confirmar"}
               </button>
             </div>
           </div>
@@ -436,22 +486,33 @@ export default function CrmBoardPage() {
                 )}
 
                 {/* Transition controls */}
-                {!isTerminalStatus(detail.detail.status) && (
+                {VALID_TRANSITIONS[detail.detail.status].length > 0 && (
                   <div className="border-t pt-3">
-                    <p className="text-xs theme-text-muted mb-2">Mover a:</p>
+                    <p className="text-xs theme-text-muted mb-2">
+                      {isTerminalStatus(detail.detail.status) ? "Reabrir en:" : "Mover a:"}
+                    </p>
                     <div className="flex flex-wrap gap-1">
-                      {VALID_TRANSITIONS[detail.detail.status].map((to) => (
-                        <button
-                          key={to}
-                          className="rounded px-2 py-1 text-xs border theme-text-muted hover:bg-slate-100 capitalize"
-                          onClick={() => {
-                            const tracking = trackings.find((t) => t.id === detail.trackingId);
-                            if (tracking) { closeAll(); openTransition(tracking, to); }
-                          }}
-                        >
-                          → {to}
-                        </button>
-                      ))}
+                      {VALID_TRANSITIONS[detail.detail.status].map((to) => {
+                        const isRegression = isRegressionTransition(detail.detail!.status, to);
+                        const isReopen = isTerminalStatus(detail.detail!.status);
+                        return (
+                          <button
+                            key={to}
+                            className={cn(
+                              "rounded px-2 py-1 text-xs border capitalize",
+                              isRegression || isReopen
+                                ? "border-amber-300 text-amber-700 hover:bg-amber-50"
+                                : "theme-text-muted hover:bg-slate-100"
+                            )}
+                            onClick={() => {
+                              const tracking = trackings.find((t) => t.id === detail.trackingId);
+                              if (tracking) { closeAll(); openTransition(tracking, to); }
+                            }}
+                          >
+                            {isRegression || isReopen ? `← ${to}` : `→ ${to}`}
+                          </button>
+                        );
+                      })}
                     </div>
                   </div>
                 )}
@@ -555,15 +616,24 @@ function TrackingCard({
         className="flex flex-wrap gap-1 pt-1"
         onPointerDown={(e) => e.stopPropagation()}
       >
-        {transitions.map((to) => (
-          <button
-            key={to}
-            className="rounded px-1.5 py-0.5 text-[10px] border theme-text-muted hover:bg-slate-100 capitalize"
-            onClick={() => onTransition(to)}
-          >
-            → {to}
-          </button>
-        ))}
+        {transitions.map((to) => {
+          const isRegression = isRegressionTransition(tracking.status, to);
+          return (
+            <button
+              key={to}
+              className={cn(
+                "rounded px-1.5 py-0.5 text-[10px] border capitalize",
+                isRegression || isTerminal
+                  ? "border-amber-300 text-amber-700 hover:bg-amber-50"
+                  : "theme-text-muted hover:bg-slate-100"
+              )}
+              onClick={() => onTransition(to)}
+              title={isRegression || isTerminal ? "Retroceso — requiere nota" : undefined}
+            >
+              {isRegression || isTerminal ? `← ${to}` : `→ ${to}`}
+            </button>
+          );
+        })}
         {showNoChannelWorked && (
           <button
             className="rounded px-1.5 py-0.5 text-[10px] border border-amber-300 text-amber-700 hover:bg-amber-50"
