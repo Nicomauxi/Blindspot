@@ -1735,3 +1735,72 @@ export function addTrackingNote(token: string, trackingId: string, notes: string
     token
   );
 }
+
+export type DiscoveryPlaceKind =
+  | "departamento"
+  | "ciudad"
+  | "barrio"
+  | "zona_turistica"
+  | "polo_industrial"
+  | "avenida";
+
+export interface DiscoveryPlaceCatalogEntry {
+  id: string;
+  location_key: string;
+  display_name: string;
+  parent_location: string | null;
+  kind: DiscoveryPlaceKind;
+  lat_approx: number | null;
+  lng_approx: number | null;
+  commercial_score: number | null;
+  notes: string | null;
+  source: string;
+  imported_at: string;
+}
+
+export interface DiscoveryPlacesImportResult {
+  inserted: number;
+  updated: number;
+  skipped: number;
+  row_validation_errors: Array<{ row: number; reason: string }>;
+  upsert_errors: Array<{ location_key: string; reason: string }>;
+  duplicate_keys: string[];
+}
+
+export async function listDiscoveryPlacesCatalog(
+  token: string,
+  params: { kind?: DiscoveryPlaceKind; parent_location?: string; q?: string; limit?: number } = {}
+) {
+  const qs = new URLSearchParams();
+  if (params.kind) qs.set("kind", params.kind);
+  if (params.parent_location) qs.set("parent_location", params.parent_location);
+  if (params.q) qs.set("q", params.q);
+  if (params.limit) qs.set("limit", String(params.limit));
+  const suffix = qs.toString() ? `?${qs.toString()}` : "";
+  return request<{ data: DiscoveryPlaceCatalogEntry[]; total: number }>(
+    `/api/v1/admin/discovery/places${suffix}`,
+    {},
+    token
+  );
+}
+
+export async function importDiscoveryPlacesXlsx(
+  token: string,
+  file: File,
+  upsert = false
+) {
+  const formData = new FormData();
+  formData.append("file", file);
+  const suffix = upsert ? "?upsert=true" : "";
+  const BASE_URL = process.env["NEXT_PUBLIC_API_URL"] ?? "";
+  const response = await fetch(`${BASE_URL}/api/v1/admin/discovery/places/import${suffix}`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+    body: formData,
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text);
+  }
+  return response.json() as Promise<{ data: DiscoveryPlacesImportResult }>;
+}

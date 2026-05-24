@@ -10,11 +10,14 @@ import {
   getLeadDensity,
   listDiscoveryJobBatches,
   listDiscoveryJobs,
+  listDiscoveryPlacesCatalog,
+  importDiscoveryPlacesXlsx,
   patchDiscoveryJobBatch,
   type DiscoveryCoverageGap,
   type DiscoveryJob,
   type DiscoveryJobBatch,
   type DiscoveryLocationDensity,
+  type DiscoveryPlaceCatalogEntry,
   type DiscoveryRecommendationData,
   type MissingFilters,
 } from "@/lib/api";
@@ -90,6 +93,93 @@ const MISSING_FILTER_OPTIONS: { key: keyof MissingFilters; label: string }[] = [
 ];
 
 const REFRESH_ENRICH_LIMIT = 250;
+
+function CatalogSection({ onPrefill }: { onPrefill: (location: string) => void }) {
+  const token = useAuthStore((state) => state.token);
+  const [places, setPlaces] = useState<DiscoveryPlaceCatalogEntry[]>([]);
+  const [q, setQ] = useState("");
+  const [total, setTotal] = useState(0);
+  const [importing, setImporting] = useState(false);
+  const [importResult, setImportResult] = useState<string | null>(null);
+  const [importError, setImportError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!token) return;
+    void listDiscoveryPlacesCatalog(token, { q: q || undefined, limit: 100 }).then((res) => {
+      setPlaces(res.data);
+      setTotal(res.total);
+    }).catch(() => null);
+  }, [token, q]);
+
+  async function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file || !token) return;
+    setImporting(true);
+    setImportResult(null);
+    setImportError(null);
+    try {
+      const res = await importDiscoveryPlacesXlsx(token, file, false);
+      const r = res.data;
+      setImportResult(`Importado: ${r.inserted} nuevos, ${r.updated} actualizados, ${r.skipped} duplicados omitidos.${r.row_validation_errors.length > 0 ? ` ${r.row_validation_errors.length} filas con errores.` : ""}`);
+      void listDiscoveryPlacesCatalog(token, { limit: 100 }).then((res2) => { setPlaces(res2.data); setTotal(res2.total); });
+    } catch (err) {
+      setImportError(err instanceof Error ? err.message : "Error al importar.");
+    } finally {
+      setImporting(false);
+      e.target.value = "";
+    }
+  }
+
+  return (
+    <SectionCard title="Catálogo de lugares" description="Lugares importados via XLS para usar como sugerencias en el Composer.">
+      <div className="space-y-4">
+        <div className="flex items-center gap-3">
+          <input
+            type="text"
+            placeholder="Buscar por nombre o key…"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            className="flex-1 rounded-xl border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500"
+          />
+          <label className={cn("cursor-pointer rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50", importing && "opacity-50 pointer-events-none")}>
+            {importing ? "Importando…" : "Importar .xlsx"}
+            <input type="file" accept=".xlsx,.xls" className="hidden" onChange={(e) => void handleFileUpload(e)} disabled={importing} />
+          </label>
+        </div>
+
+        {importResult && <p className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{importResult}</p>}
+        {importError && <p className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{importError}</p>}
+
+        <p className="text-xs text-slate-500">{total} lugares en catálogo{q ? ` (filtrando por "${q}")` : ""}.</p>
+
+        {places.length > 0 ? (
+          <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+            {places.slice(0, 60).map((place) => (
+              <button
+                key={place.id}
+                type="button"
+                onClick={() => onPrefill(place.display_name)}
+                className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-left hover:border-sky-200 hover:bg-sky-50/40 transition-colors"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-xs font-semibold text-slate-800 truncate">{place.display_name}</p>
+                  {place.commercial_score != null && (
+                    <span className="shrink-0 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-600">{place.commercial_score}</span>
+                  )}
+                </div>
+                <p className="mt-0.5 text-[11px] text-slate-400 capitalize">{place.kind.replace("_", " ")}{place.parent_location ? ` · ${place.parent_location}` : ""}</p>
+              </button>
+            ))}
+          </div>
+        ) : (
+          <div className="rounded-2xl border border-dashed border-slate-200 px-4 py-8 text-center text-sm text-slate-500">
+            {q ? "Sin resultados para la búsqueda." : "No hay lugares en el catálogo. Importá un archivo .xlsx para comenzar."}
+          </div>
+        )}
+      </div>
+    </SectionCard>
+  );
+}
 
 type RefreshMode = "enrichment" | "re_discovery";
 
@@ -765,6 +855,8 @@ export default function DiscoveryPage() {
           </div>
         </div>
       </SectionCard>
+
+      <CatalogSection onPrefill={(location) => setComposer((current) => ({ ...current, location }))} />
 
       <RefreshMasivoSection />
 

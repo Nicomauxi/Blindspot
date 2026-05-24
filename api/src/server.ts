@@ -3,6 +3,7 @@ import cors from "@fastify/cors";
 import helmet from "@fastify/helmet";
 import rateLimit from "@fastify/rate-limit";
 import jwt from "@fastify/jwt";
+import multipart from "@fastify/multipart";
 import { authRoutes } from "./auth/routes.js";
 import { healthRoutes } from "./routes/health.js";
 import { leadsRoutes } from "./routes/leads.js";
@@ -22,6 +23,7 @@ import { backupsRoutes } from "./routes/admin/backups.js";
 import { variablesRoutes } from "./routes/admin/variables.js";
 import { operationsRoutes } from "./routes/admin/operations.js";
 import { trackingRoutes } from "./routes/tracking.js";
+import { discoveryPlacesRoutes } from "./routes/admin/discovery-places.js";
 import { getBackupScheduler } from "./modules/backups/runtime.js";
 import { startProcessMetricsRecorder, stopProcessMetricsRecorder } from "./modules/process-metrics/recorder.js";
 
@@ -73,6 +75,7 @@ export async function buildServer() {
   await app.register(helmet);
   await app.register(rateLimit, { max: 100, timeWindow: "1 minute" });
   await app.register(jwt, { secret: jwtSecret });
+  await app.register(multipart, { limits: { fileSize: 10 * 1024 * 1024 } });
 
   await app.register(authRoutes);
   await app.register(healthRoutes, { prefix: "/api/v1" });
@@ -93,6 +96,7 @@ export async function buildServer() {
   await app.register(operationsRoutes, { prefix: "/api/v1" });
   await app.register(servicePricingRoutes, { prefix: "/api/v1" });
   await app.register(trackingRoutes, { prefix: "/api/v1" });
+  await app.register(discoveryPlacesRoutes, { prefix: "/api/v1" });
 
   return app;
 }
