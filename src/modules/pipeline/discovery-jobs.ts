@@ -6,6 +6,7 @@ import { getLogger } from "../../shared/logger.js";
 import { createRun, completeRun, failRun } from "../../storage/runs.js";
 import { updateDiscoveryJobEnrichmentStatus, updateDiscoveryJobStatus } from "../../storage/discovery-jobs.js";
 import { executeGooglePlacesDiscoveryJob } from "./google-places-discovery-job.js";
+import { createAlert } from "../../storage/alerts.js";
 
 const logger = getLogger();
 
@@ -166,6 +167,14 @@ async function executeDiscoveryJob(job: QueuedDiscoveryJob): Promise<{ leadsFoun
     if (job.enrich_after_discovery) {
       await updateDiscoveryJobEnrichmentStatus(job.id, "failed", { enrich_error_message: "Discovery failed before enrichment could start" }).catch(() => undefined);
     }
+    createAlert({
+      kind: "job_failed",
+      severity: "warn",
+      title: "Discovery job falló",
+      description: `Job ${job.id} (${job.source} · ${job.location}) falló: ${message.slice(0, 200)}`,
+      payload: { job_id: job.id, source: job.source, location: job.location, error: message },
+      dedup_key: `job_failed:${job.id}`,
+    }).catch((err) => logger.warn({ err }, "Failed to create job_failed alert (non-critical)"));
     return { leadsFound: 0, leadsNew: 0 };
   }
 }

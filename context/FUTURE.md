@@ -64,7 +64,7 @@
 - `UI-5` — done
 - `UI-6` — pending (depends on MAP-4)
 - `UI-7` — done
-- `ALERT-1` — pending
+- `ALERT-1` — done
 - `ALERT-2` — pending
 - `CRM-6` — pending
 - `CRM-7` — pending
@@ -1730,7 +1730,7 @@
 
 ## ALERT-1 — Sistema de alertas en DB (schema + API)
 
-**Status:** `pending`
+**Status:** `done`
 
 **Resultado esperado**
 - Nueva tabla `system_alerts` con columnas:

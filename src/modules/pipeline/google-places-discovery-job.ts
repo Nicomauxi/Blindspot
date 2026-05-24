@@ -11,6 +11,7 @@ import { rebuildVocabularyForNiche } from "../../storage/vocabulary.js";
 import { loadAllRuntime } from "../../storage/system-lists.js";
 import { computeNicheStopWords } from "../enrichment/vocabulary.js";
 import { getSupabase } from "../../shared/supabase.js";
+import { createAlert } from "../../storage/alerts.js";
 import type { PlaceCandidate } from "../../shared/types.js";
 
 const logger = getLogger();
@@ -221,6 +222,15 @@ export async function executeGooglePlacesDiscoveryJob(opts: {
       const budgetResult = await incrementGooglePlacesBudgetSpent(actualCostUsd);
       if (budgetResult?.over_budget) {
         logger.warn({ budget_spent: budgetResult.budget_spent, budget_total: budgetResult.budget_total }, "GP budget exceeded after job completion");
+        createAlert({
+          kind: "gp_budget_threshold",
+          severity: "warn",
+          title: "Presupuesto Google Places excedido",
+          description: `Gasto mensual USD ${budgetResult.budget_spent.toFixed(2)} supera el cap de USD ${budgetResult.budget_total.toFixed(2)}.`,
+          payload: { budget_spent: budgetResult.budget_spent, budget_total: budgetResult.budget_total },
+          dedup_key: "gp_budget_threshold:over_budget",
+          dedup_window_minutes: 60,
+        }).catch((err) => logger.warn({ err }, "Failed to create GP budget alert (non-critical)"));
       }
     } catch (err) {
       logger.error({ err, run_id: run.id, cost_usd: actualCostUsd }, "Failed to increment GP budget spent; run saved, use POST /pipeline/gp-budget/backfill to recover");
