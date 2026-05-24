@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   DndContext,
   DragEndEvent,
@@ -17,6 +18,7 @@ import {
   type CrmStatus,
   type LeadTracking,
   type LeadTrackingDetail,
+  type TrackingFilters,
 } from "@/lib/api";
 import { useAuthStore } from "@/lib/auth-store";
 import { AdminPageLayout, HelpTip } from "@/components/admin-shell";
@@ -50,9 +52,46 @@ const STATUS_SHOWS_REMINDER: Set<CrmStatus> = new Set(["observed"]);
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+const EMPTY_FILTERS: TrackingFilters = {
+  q: "",
+  niche: "",
+  source: "",
+  contact_tier: "",
+  status_in: "",
+  created_after: "",
+};
+
+function filtersFromSearchParams(sp: URLSearchParams): TrackingFilters {
+  return {
+    q:             sp.get("q") ?? "",
+    niche:         sp.get("niche") ?? "",
+    source:        sp.get("source") ?? "",
+    contact_tier:  sp.get("contact_tier") ?? "",
+    status_in:     sp.get("status_in") ?? "",
+    created_after: sp.get("created_after") ?? "",
+  };
+}
+
+function hasActiveFilters(f: TrackingFilters): boolean {
+  return !!(f.q || f.niche || f.source || f.contact_tier || f.status_in || f.created_after);
+}
+
+function buildApiFilters(f: TrackingFilters): TrackingFilters {
+  const out: TrackingFilters = { limit: 300 };
+  if (f.q) out.q = f.q;
+  if (f.niche) out.niche = f.niche;
+  if (f.source) out.source = f.source;
+  if (f.contact_tier) out.contact_tier = f.contact_tier;
+  if (f.status_in) out.status_in = f.status_in;
+  if (f.created_after) out.created_after = f.created_after;
+  return out;
+}
+
 export default function CrmBoardPage() {
   const token = useAuthStore((s) => s.token);
   const role   = useAuthStore((s) => s.role);
+  const router = useRouter();
+  const searchParams = useSearchParams();
 
   const [trackings, setTrackings]   = useState<LeadTracking[]>([]);
   const [loading, setLoading]       = useState(false);
@@ -64,13 +103,27 @@ export default function CrmBoardPage() {
   const [saving, setSaving]         = useState(false);
   const [saveError, setSaveError]   = useState<string | null>(null);
   const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [filters, setFilters]       = useState<TrackingFilters>(() => filtersFromSearchParams(searchParams));
+  const [showFilters, setShowFilters] = useState(false);
 
-  const load = useCallback(async () => {
+  const applyFilters = useCallback((f: TrackingFilters) => {
+    const params = new URLSearchParams();
+    if (f.q) params.set("q", f.q);
+    if (f.niche) params.set("niche", f.niche);
+    if (f.source) params.set("source", f.source);
+    if (f.contact_tier) params.set("contact_tier", f.contact_tier);
+    if (f.status_in) params.set("status_in", f.status_in);
+    if (f.created_after) params.set("created_after", f.created_after);
+    router.replace(`?${params.toString()}`, { scroll: false });
+    setFilters(f);
+  }, [router]);
+
+  const load = useCallback(async (f: TrackingFilters = {}) => {
     if (!token) return;
     setLoading(true);
     setError(null);
     try {
-      const res = await listTrackings(token, { limit: 100 });
+      const res = await listTrackings(token, buildApiFilters(f));
       setTrackings(res.data ?? []);
     } catch {
       setError("Error cargando seguimientos.");
@@ -79,7 +132,7 @@ export default function CrmBoardPage() {
     }
   }, [token]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { void load(filters); }, [load, filters]);
 
   const ownerFilterValid = ownerFilter && UUID_REGEX.test(ownerFilter);
   const grouped = groupTrackingsByStatus(
@@ -137,7 +190,7 @@ export default function CrmBoardPage() {
         reminder_at: transition.reminder_at || undefined,
       });
       closeAll();
-      await load();
+      await load(filters);
     } catch {
       setSaveError("Error al transicionar.");
     } finally {
@@ -185,7 +238,7 @@ export default function CrmBoardPage() {
       await transitionTracking(token, trackingId, { to_status: toStatus });
     } catch {
       // Revert on failure
-      await load();
+      await load(filters);
     }
   };
 
@@ -218,6 +271,116 @@ export default function CrmBoardPage() {
       <HelpTip label="CRM">
         Board de seguimiento por etapa. Arrastrá cards entre columnas para moverlas. Hacé clic en el nombre del lead para ver el historial completo. Usá los botones de transición para mover un lead entre etapas.
       </HelpTip>
+
+      {/* Filter bar */}
+      <div className="theme-panel rounded-2xl px-4 py-3">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setShowFilters((v) => !v)}
+              className={cn(
+                "rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors",
+                showFilters ? "bg-sky-50 border-sky-200 text-sky-700" : "theme-text-muted hover:bg-slate-50"
+              )}
+            >
+              {showFilters ? "Ocultar filtros" : "Filtros"}
+              {hasActiveFilters(filters) && !showFilters && (
+                <span className="ml-1.5 inline-flex h-4 w-4 items-center justify-center rounded-full bg-sky-500 text-[9px] font-bold text-white">
+                  {[filters.q, filters.niche, filters.source, filters.contact_tier, filters.status_in, filters.created_after].filter(Boolean).length}
+                </span>
+              )}
+            </button>
+            {hasActiveFilters(filters) && (
+              <button
+                type="button"
+                onClick={() => applyFilters(EMPTY_FILTERS)}
+                className="text-xs text-rose-600 hover:underline"
+              >
+                Limpiar filtros
+              </button>
+            )}
+          </div>
+          <span className="text-xs theme-text-muted">{trackings.length} seguimiento{trackings.length !== 1 ? "s" : ""}</span>
+        </div>
+
+        {showFilters && (
+          <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+            <div>
+              <label className="text-[10px] theme-text-muted block mb-1">Texto libre (nombre)</label>
+              <input
+                className="w-full rounded-lg border px-2 py-1 text-xs theme-input"
+                placeholder="Buscar…"
+                value={filters.q ?? ""}
+                onChange={(e) => setFilters({ ...filters, q: e.target.value })}
+                onKeyDown={(e) => e.key === "Enter" && applyFilters(filters)}
+              />
+            </div>
+            <div>
+              <label className="text-[10px] theme-text-muted block mb-1">Rubro (niche)</label>
+              <input
+                className="w-full rounded-lg border px-2 py-1 text-xs theme-input"
+                placeholder="ej: restaurante"
+                value={filters.niche ?? ""}
+                onChange={(e) => setFilters({ ...filters, niche: e.target.value })}
+                onKeyDown={(e) => e.key === "Enter" && applyFilters(filters)}
+              />
+            </div>
+            <div>
+              <label className="text-[10px] theme-text-muted block mb-1">Fuente (source)</label>
+              <input
+                className="w-full rounded-lg border px-2 py-1 text-xs theme-input"
+                placeholder="ej: google_places"
+                value={filters.source ?? ""}
+                onChange={(e) => setFilters({ ...filters, source: e.target.value })}
+                onKeyDown={(e) => e.key === "Enter" && applyFilters(filters)}
+              />
+            </div>
+            <div>
+              <label className="text-[10px] theme-text-muted block mb-1">Tier de contacto</label>
+              <input
+                className="w-full rounded-lg border px-2 py-1 text-xs theme-input"
+                placeholder="ej: hot"
+                value={filters.contact_tier ?? ""}
+                onChange={(e) => setFilters({ ...filters, contact_tier: e.target.value })}
+                onKeyDown={(e) => e.key === "Enter" && applyFilters(filters)}
+              />
+            </div>
+            <div>
+              <label className="text-[10px] theme-text-muted block mb-1">Estados (separados por ,)</label>
+              <input
+                className="w-full rounded-lg border px-2 py-1 text-xs theme-input"
+                placeholder="ej: contact,observed"
+                value={filters.status_in ?? ""}
+                onChange={(e) => setFilters({ ...filters, status_in: e.target.value })}
+                onKeyDown={(e) => e.key === "Enter" && applyFilters(filters)}
+              />
+            </div>
+            <div>
+              <label className="text-[10px] theme-text-muted block mb-1">Creados desde</label>
+              <input
+                type="date"
+                className="w-full rounded-lg border px-2 py-1 text-xs theme-input"
+                value={filters.created_after ? filters.created_after.slice(0, 10) : ""}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setFilters({ ...filters, created_after: v ? `${v}T00:00:00.000Z` : "" });
+                }}
+                onKeyDown={(e) => e.key === "Enter" && applyFilters(filters)}
+              />
+            </div>
+            <div className="col-span-2 sm:col-span-3 lg:col-span-6 flex justify-end">
+              <button
+                type="button"
+                onClick={() => applyFilters(filters)}
+                className="rounded-lg bg-sky-600 px-4 py-1.5 text-xs font-semibold text-white hover:bg-sky-700"
+              >
+                Aplicar filtros
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
 
       {error && (
         <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700 mb-4">
