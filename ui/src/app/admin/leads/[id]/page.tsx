@@ -6,8 +6,6 @@ import { useParams, useRouter } from "next/navigation";
 import {
   ApiError,
   createLeadFeedback,
-  createCampaign,
-  createOutreach,
   createTracking,
   generateLeadBrief,
   generateOffer,
@@ -15,9 +13,7 @@ import {
   getLeadFeedbackSummary,
   getOwnerGroup,
   listLeadFeedback,
-  listCampaigns,
   listOutreach,
-  type Campaign,
   type CommercialEvidenceNode,
   type LeadFeedbackEntry,
   type LeadFeedbackSummaryEntry,
@@ -61,16 +57,6 @@ const CHANNEL_LABELS: Record<string, string> = {
   contacto_directo: "Contacto directo",
 };
 
-type CampaignStartForm = {
-  mode: "existing" | "new";
-  campaignId: string;
-  name: string;
-  channel: string;
-  status: string;
-  notes: string;
-  createOutreach: boolean;
-};
-
 type ContactPointKind = "whatsapp" | "phone" | "email" | "address" | "website" | "instagram" | "facebook";
 
 type ContactPoint = {
@@ -111,7 +97,6 @@ export default function LeadDetailPage() {
 
   const [lead, setLead] = useState<LeadDetail | null>(null);
   const [outreach, setOutreach] = useState<OutreachEntry[]>([]);
-  const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [ownerGroup, setOwnerGroup] = useState<OwnerGroupMember[]>([]);
   const [feedbackEntries, setFeedbackEntries] = useState<LeadFeedbackEntry[]>([]);
   const [feedbackSummary, setFeedbackSummary] = useState<LeadFeedbackSummaryEntry[]>([]);
@@ -124,8 +109,6 @@ export default function LeadDetailPage() {
   const [assistant, setAssistant] = useState<LeadAssistantBrief | null>(null);
   const [assistantLoading, setAssistantLoading] = useState(false);
   const [assistantError, setAssistantError] = useState<string | null>(null);
-  const [showCampaignModal, setShowCampaignModal] = useState(false);
-  const [startingCampaign, setStartingCampaign] = useState(false);
   const [startingTracking, setStartingTracking] = useState(false);
   const [trackingNotice, setTrackingNotice] = useState<string | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
@@ -138,16 +121,6 @@ export default function LeadDetailPage() {
     verdict: "good",
     comment: "",
   });
-  const [campaignForm, setCampaignForm] = useState<CampaignStartForm>({
-    mode: "existing",
-    campaignId: "",
-    name: "",
-    channel: "whatsapp",
-    status: "contacted",
-    notes: "",
-    createOutreach: true,
-  });
-
   useEffect(() => {
     if (!token || !id) return;
     setLoading(true);
@@ -155,13 +128,11 @@ export default function LeadDetailPage() {
       getLead(token, id),
       listOutreach(token, { lead_id: id, limit: 20 }),
       getOwnerGroup(token, id),
-      listCampaigns(token).catch(() => ({ data: [] })),
     ])
-      .then(([leadRes, outreachRes, ownerGroupRes, campaignsRes]) => {
+      .then(([leadRes, outreachRes, ownerGroupRes]) => {
         setLead(leadRes.data);
         setOutreach(outreachRes.data);
         setOwnerGroup(ownerGroupRes.data ?? []);
-        setCampaigns(campaignsRes.data);
         setError(null);
       })
       .catch((err) => setError(err instanceof Error ? err.message : "Error al cargar lead"))
@@ -181,12 +152,6 @@ export default function LeadDetailPage() {
       .finally(() => setFeedbackLoading(false));
   }, [token, id]);
 
-  const recentCampaign = useMemo(() => {
-    const latestWithCampaign = outreach.find((entry) => entry.campaign_id);
-    if (!latestWithCampaign) return null;
-    return campaigns.find((campaign) => campaign.id === latestWithCampaign.campaign_id) ?? null;
-  }, [campaigns, outreach]);
-
   useEffect(() => {
     if (!token || !id || !lead) return;
     setAssistantLoading(true);
@@ -204,21 +169,6 @@ export default function LeadDetailPage() {
       })
       .finally(() => setAssistantLoading(false));
   }, [id, lead, token]);
-
-  useEffect(() => {
-    if (!lead) return;
-    const dateLabel = new Date().toISOString().slice(0, 10);
-    setCampaignForm((current) => ({
-      ...current,
-      name: current.name || `${lead.name} · ${lead.primary_offer ?? lead.niche ?? "campaña"} · ${dateLabel}`,
-      campaignId:
-        current.campaignId ||
-        recentCampaign?.id ||
-        campaigns.find((campaign) => campaign.status !== "closed")?.id ||
-        "",
-      channel: current.channel || (assistant?.recommended_channel ?? "whatsapp"),
-    }));
-  }, [assistant?.recommended_channel, campaigns, lead, recentCampaign]);
 
   const fieldSources = lead?.field_sources ?? {};
   const evidenceTree = lead?.commercial_evidence_tree ?? [];
@@ -270,55 +220,6 @@ export default function LeadDetailPage() {
       );
     } finally {
       setOfferLoading(false);
-    }
-  }
-
-  async function handleStartCampaign() {
-    if (!token || !lead) return;
-    setStartingCampaign(true);
-    setError(null);
-    try {
-      let campaignId = campaignForm.campaignId;
-      if (campaignForm.mode === "new") {
-        const res = await createCampaign(token, {
-          name: campaignForm.name.trim(),
-          status: "active",
-          notes: campaignForm.notes.trim() || undefined,
-          segment_filter: {
-            lead_id: lead.id,
-            niche: lead.niche,
-            source: lead.source,
-            primary_offer: lead.primary_offer,
-          },
-        });
-        campaignId = res.data.id;
-        setCampaigns((prev) => [res.data, ...prev]);
-      }
-
-      if (!campaignId) {
-        throw new Error("Elegí o creá una campaña antes de continuar");
-      }
-
-      if (campaignForm.createOutreach) {
-        const outreachRes = await createOutreach(token, {
-          lead_id: lead.id,
-          campaign_id: campaignId,
-          channel: campaignForm.channel,
-          status: campaignForm.status,
-          notes: campaignForm.notes.trim() || undefined,
-        });
-        setOutreach((prev) => [outreachRes.data, ...prev]);
-      } else {
-        router.push(`/admin/crm?campaign_id=${campaignId}`);
-        return;
-      }
-
-      setShowCampaignModal(false);
-      router.push(`/admin/crm?campaign_id=${campaignId}`);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "No se pudo iniciar la campaña");
-    } finally {
-      setStartingCampaign(false);
     }
   }
 
@@ -394,29 +295,9 @@ export default function LeadDetailPage() {
           >
             {startingTracking ? "Iniciando…" : "Iniciar seguimiento"}
           </button>
-          <button onClick={() => setShowCampaignModal(true)} className="rounded-lg bg-sky-600 px-3 py-2 text-sm font-medium text-white hover:bg-sky-700">
-            Iniciar campaña
-          </button>
-          <Link href={recentCampaign ? `/admin/crm?campaign_id=${recentCampaign.id}` : `/admin/crm?lead_id=${lead.id}`} className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-sm font-medium text-sky-700 transition-colors hover:bg-sky-100">
-            Ver acciones
-          </Link>
         </>
       }
     >
-      {recentCampaign ? (
-        <div className="rounded-2xl border border-sky-200 bg-sky-50 px-4 py-4 text-sm text-sky-900">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <div className="font-semibold">Campaña asociada más reciente</div>
-              <div className="mt-1">{recentCampaign.name} · {recentCampaign.status}</div>
-            </div>
-            <Link href={`/admin/crm?campaign_id=${recentCampaign.id}`} className="rounded-lg border border-sky-200 bg-white px-3 py-2 font-medium text-sky-700 hover:bg-sky-100">
-              Abrir acciones de esta campaña
-            </Link>
-          </div>
-        </div>
-      ) : null}
-
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <StatCard label="Prospect score" value={lead.prospect_score ?? "—"} hint="Prioridad comercial relativa" tone="good" />
         <StatCard label="Oferta sugerida" value={lead.primary_offer ?? "—"} hint={lead.pitch_hook ?? "Sin pitch hook sugerido"} tone="info" />
@@ -424,8 +305,7 @@ export default function LeadDetailPage() {
         <StatCard label="Fuentes disponibles" value={lead.sources_count ?? lead.corroborating_sources.length ?? 0} hint={lead.canonical_source ? `Fuente principal: ${lead.canonical_source}` : "Sin canonical_source"} />
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-[1.2fr,0.8fr]">
-        <SectionCard title="Resumen comercial" description="Qué vender, por qué y con qué evidencia mínima para avanzar.">
+      <SectionCard title="Resumen comercial" description="Qué vender, por qué y con qué evidencia mínima para avanzar.">
           <div className="grid gap-4 lg:grid-cols-[1.2fr,0.8fr]">
             <div className="space-y-4">
               <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
@@ -505,35 +385,7 @@ export default function LeadDetailPage() {
               </div>
             </div>
           </div>
-        </SectionCard>
-
-        <SectionCard title="Asistente comercial" description="Material listo para usar por un usuario comercial sin bajar a detalle técnico.">
-          {assistantLoading ? (
-            <div className="space-y-3 animate-pulse">
-              <div className="h-4 w-full rounded bg-slate-100" />
-              <div className="h-24 rounded bg-slate-100" />
-              <div className="h-24 rounded bg-slate-100" />
-            </div>
-          ) : assistant ? (
-            <div className="space-y-4">
-              <CopyPanel title="Primer mensaje sugerido" body={assistant.first_message} copyKey="assistant-message" copiedKey={copiedKey} onCopy={copyText} />
-              <div className="grid gap-3 md:grid-cols-2">
-                <ListPanel title="Objeciones probables" items={assistant.likely_objections} />
-                <ListPanel title="Cómo responder" items={assistant.objection_handling} />
-              </div>
-              <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
-                <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Canal sugerido</div>
-                <p className="mt-1 font-medium text-slate-900">{recommendedChannelLabel}</p>
-              </div>
-            </div>
-          ) : (
-            <EmptyPanel
-              title="No se pudo generar el asistente comercial"
-              description={assistantError ?? "Podés seguir trabajando con la evidencia del lead y generar un mensaje manual."}
-            />
-          )}
-        </SectionCard>
-      </div>
+      </SectionCard>
 
       <div className="grid gap-4 xl:grid-cols-[1fr,1fr]">
         <SectionCard title="Contacto y datos listos para vender" description="Mostramos todos los contactos y redes encontradas, con acción directa y fiabilidad por dato.">
@@ -693,8 +545,7 @@ export default function LeadDetailPage() {
         )}
       </SectionCard>
 
-      <div className="grid gap-4 xl:grid-cols-[1fr,1fr]">
-        <SectionCard title="Generar mensaje alternativo" description="Versión rápida por canal si querés otro texto además del pitch asistido.">
+      <SectionCard title="Generar mensaje alternativo" description="Versión rápida por canal si querés otro texto además del pitch asistido.">
           <div className="mb-3 flex flex-wrap items-center gap-2">
             <select value={offerChannel} onChange={(event) => setOfferChannel(event.target.value)} className="rounded-lg border border-slate-300 px-2 py-2 text-sm">
               <option value="whatsapp">WhatsApp</option>
@@ -713,26 +564,6 @@ export default function LeadDetailPage() {
             <p className="text-sm text-slate-500">Elegí un canal y generá una alternativa lista para copiar.</p>
           )}
         </SectionCard>
-
-        <SectionCard title="Outreach e historial" description="Qué pasó con este lead y cómo seguir sin duplicar trabajo.">
-          {outreach.length === 0 ? (
-            <EmptyPanel title="Sin contactos registrados" description="Todavía no hay outreach para este lead." action={<button onClick={() => setShowCampaignModal(true)} className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-sm font-medium text-sky-700">Iniciar campaña</button>} />
-          ) : (
-            <div className="space-y-2">
-              {outreach.map((entry) => (
-                <div key={entry.id} className="flex items-start gap-3 rounded-xl border border-slate-200 px-3 py-3 text-sm">
-                  <span className={cn("rounded-full px-2 py-0.5 text-xs font-medium", STATUS_COLORS[entry.status] ?? "bg-slate-50 text-slate-600")}>{entry.status}</span>
-                  <div className="min-w-0 flex-1">
-                    <div className="text-slate-800">{CHANNEL_LABELS[entry.channel] ?? entry.channel}{entry.campaign_id ? <span className="text-slate-400"> · campaña</span> : null}</div>
-                    {entry.notes ? <p className="mt-1 text-xs text-slate-500">{entry.notes}</p> : null}
-                  </div>
-                  <span className="shrink-0 text-xs text-slate-400">{formatRelative(entry.contacted_at)}</span>
-                </div>
-              ))}
-            </div>
-          )}
-        </SectionCard>
-      </div>
 
       <SectionCard title="Datos completos del lead" description="Todo el registro disponible, organizado para lectura progresiva sin exponer JSON crudo como vista principal.">
         <div className="space-y-3">
@@ -816,75 +647,6 @@ export default function LeadDetailPage() {
         </SectionCard>
       ) : null}
 
-      {showCampaignModal ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-          <div className="w-full max-w-2xl rounded-2xl bg-white p-6 shadow-xl">
-            <h3 className="text-lg font-semibold text-slate-900">Iniciar campaña para {lead.name}</h3>
-            <div className="mt-4 grid gap-4 lg:grid-cols-2">
-              <div className="space-y-4">
-                <div className="flex gap-2">
-                  <button onClick={() => setCampaignForm((current) => ({ ...current, mode: "existing" }))} className={cn("rounded-lg px-3 py-2 text-sm", campaignForm.mode === "existing" ? "bg-sky-600 text-white" : "border border-slate-300 text-slate-700")}>Usar campaña existente</button>
-                  <button onClick={() => setCampaignForm((current) => ({ ...current, mode: "new" }))} className={cn("rounded-lg px-3 py-2 text-sm", campaignForm.mode === "new" ? "bg-sky-600 text-white" : "border border-slate-300 text-slate-700")}>Crear campaña nueva</button>
-                </div>
-
-                {campaignForm.mode === "existing" ? (
-                  <div>
-                    <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Campaña</label>
-                    <select value={campaignForm.campaignId} onChange={(event) => setCampaignForm((current) => ({ ...current, campaignId: event.target.value }))} className="w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm">
-                      <option value="">Elegí una campaña</option>
-                      {campaigns.filter((campaign) => campaign.status !== "closed").map((campaign) => <option key={campaign.id} value={campaign.id}>{campaign.name}</option>)}
-                    </select>
-                  </div>
-                ) : (
-                  <div className="space-y-3">
-                    <div>
-                      <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Nombre sugerido</label>
-                      <input type="text" value={campaignForm.name} onChange={(event) => setCampaignForm((current) => ({ ...current, name: event.target.value }))} className="w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm" />
-                    </div>
-                    <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-600">
-                      El <code>segment_filter</code> se precarga con <code>lead_id</code>, <code>niche</code>, <code>source</code> y <code>primary_offer</code> para dejar la campaña contextualizada desde esta ficha.
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              <div className="space-y-3">
-                <label className="flex items-center gap-2 text-sm text-slate-700">
-                  <input type="checkbox" checked={campaignForm.createOutreach} onChange={(event) => setCampaignForm((current) => ({ ...current, createOutreach: event.target.checked }))} className="rounded border-slate-300" />
-                  Registrar el primer outreach ahora
-                </label>
-                <div>
-                  <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Canal</label>
-                  <select value={campaignForm.channel} onChange={(event) => setCampaignForm((current) => ({ ...current, channel: event.target.value }))} className="w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm" disabled={!campaignForm.createOutreach}>
-                    <option value="whatsapp">WhatsApp</option>
-                    <option value="email">Email</option>
-                    <option value="phone">Teléfono</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Estado inicial</label>
-                  <select value={campaignForm.status} onChange={(event) => setCampaignForm((current) => ({ ...current, status: event.target.value }))} className="w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm" disabled={!campaignForm.createOutreach}>
-                    <option value="contacted">contacted</option>
-                    <option value="responded">responded</option>
-                    <option value="interested">interested</option>
-                    <option value="no_response">no_response</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Notas</label>
-                  <textarea value={campaignForm.notes} onChange={(event) => setCampaignForm((current) => ({ ...current, notes: event.target.value }))} rows={4} className="w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm" placeholder="Contexto del primer toque o motivo de la campaña" />
-                </div>
-              </div>
-            </div>
-            <div className="mt-5 flex justify-end gap-2">
-              <button onClick={() => setShowCampaignModal(false)} className="rounded-lg border border-slate-300 px-3 py-2 text-sm hover:bg-slate-50">Cancelar</button>
-              <button onClick={() => void handleStartCampaign()} disabled={startingCampaign} className="rounded-lg bg-sky-600 px-3 py-2 text-sm font-medium text-white hover:bg-sky-700 disabled:opacity-50">
-                {startingCampaign ? "Guardando…" : campaignForm.createOutreach ? "Crear y registrar outreach" : "Crear y abrir acciones"}
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
     </AdminPageLayout>
   );
 }
