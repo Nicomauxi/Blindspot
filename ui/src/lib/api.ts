@@ -1743,14 +1743,32 @@ export function createTracking(
   );
 }
 
-export function listTrackings(
-  token: string,
-  params: { status?: CrmStatus; owner_id?: string; lead_id?: string; limit?: number } = {}
-) {
+export type TrackingFilters = {
+  status?: CrmStatus;
+  status_in?: string;
+  owner_id?: string;
+  lead_id?: string;
+  niche?: string;
+  source?: string;
+  contact_tier?: string;
+  prospect_score_gte?: number;
+  created_after?: string;
+  q?: string;
+  limit?: number;
+};
+
+export function listTrackings(token: string, params: TrackingFilters = {}) {
   const qp = new URLSearchParams();
   if (params.status) qp.set("status", params.status);
+  if (params.status_in) qp.set("status_in", params.status_in);
   if (params.owner_id) qp.set("owner_id", params.owner_id);
   if (params.lead_id) qp.set("lead_id", params.lead_id);
+  if (params.niche) qp.set("niche", params.niche);
+  if (params.source) qp.set("source", params.source);
+  if (params.contact_tier) qp.set("contact_tier", params.contact_tier);
+  if (params.prospect_score_gte != null) qp.set("prospect_score_gte", String(params.prospect_score_gte));
+  if (params.created_after) qp.set("created_after", params.created_after);
+  if (params.q) qp.set("q", params.q);
   if (params.limit) qp.set("limit", String(params.limit));
   const suffix = qp.toString() ? `?${qp}` : "";
   return request<{ data: LeadTracking[]; total: number }>(`/api/v1/tracking${suffix}`, {}, token);

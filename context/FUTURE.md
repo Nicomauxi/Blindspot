@@ -68,7 +68,7 @@
 - `ALERT-2` — done
 - `CRM-6` — done
 - `CRM-7` — done
-- `CRM-8` — pending
+- `CRM-8` — done
 - `RBAC-1` — pending
 - `CRM-9` — pending
 - `LEAD-1` — pending
@@ -1838,7 +1838,7 @@
 
 ## CRM-8 — Filtros en pantalla CRM
 
-**Status:** `pending`
+**Status:** `done`
 
 **Resultado esperado**
 - La pantalla `/admin/crm` ofrece filtros encima del board:

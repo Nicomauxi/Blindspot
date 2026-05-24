@@ -15,8 +15,8 @@ const VALID_TRANSITIONS: Record<CrmStatus, ReadonlyArray<CrmStatus>> = {
   validation: ["contact", "rejected"],
   contact:    ["observed", "accepted", "rejected"],
   observed:   ["contact", "accepted", "rejected"],
-  rejected:   [],
-  accepted:   [],
+  rejected:   ["validation"],
+  accepted:   ["validation"],
 };
 
 const createTrackingSchema = z.object({
@@ -33,12 +33,21 @@ const transitionSchema = z.object({
 });
 
 const listQuerySchema = z.object({
-  status:   z.enum(CRM_STATUSES).optional(),
-  owner_id: uuidSchema.optional(),
-  lead_id:  uuidSchema.optional(),
-  limit:    z.string().optional()
-            .transform((v) => Math.min(Number(v ?? "50"), 100))
-            .pipe(z.number().int().min(1).max(100)),
+  status:             z.enum(CRM_STATUSES).optional(),
+  status_in:          z.string().optional(),
+  owner_id:           uuidSchema.optional(),
+  lead_id:            uuidSchema.optional(),
+  niche:              z.string().max(80).optional(),
+  source:             z.string().max(80).optional(),
+  contact_tier:       z.string().max(20).optional(),
+  prospect_score_gte: z.string().optional()
+                      .transform((v) => (v ? parseInt(v, 10) : undefined))
+                      .pipe(z.number().int().min(0).max(100).optional()),
+  created_after:      z.string().datetime().optional(),
+  q:                  z.string().max(200).optional(),
+  limit:              z.string().optional()
+                      .transform((v) => Math.min(Number(v ?? "200"), 500))
+                      .pipe(z.number().int().min(1).max(500)),
 });
 
 export async function trackingRoutes(app: FastifyInstance): Promise<void> {
@@ -140,6 +149,29 @@ export async function trackingRoutes(app: FastifyInstance): Promise<void> {
     }
 
     const db = getDb();
+    const f = parsed.data;
+
+    // Resolve lead-based filters first (niche, source, contact_tier, prospect_score_gte, q)
+    let restrictLeadIds: string[] | null = null;
+    const hasLeadFilter = f.niche ?? f.source ?? f.contact_tier ?? f.prospect_score_gte ?? f.q;
+    if (hasLeadFilter) {
+      let leadQ = db.from("lead_dashboard").select("id");
+      if (f.niche) leadQ = leadQ.eq("niche", f.niche);
+      if (f.source) leadQ = leadQ.eq("source", f.source);
+      if (f.contact_tier) leadQ = leadQ.eq("contact_tier", f.contact_tier);
+      if (f.prospect_score_gte != null) leadQ = leadQ.gte("prospect_score", f.prospect_score_gte);
+      if (f.q) leadQ = leadQ.ilike("name", `%${f.q}%`);
+      const { data: matchedLeads, error: leadErr } = await leadQ.limit(1000);
+      if (leadErr) {
+        request.log.error({ error: leadErr }, "tracking list lead filter failed");
+        return reply.status(500).send({ error: "Database error", error_code: "db_error" });
+      }
+      restrictLeadIds = (matchedLeads ?? []).map((l: { id: string }) => l.id);
+      if (restrictLeadIds.length === 0) {
+        return reply.status(200).send({ data: [], total: 0 });
+      }
+    }
+
     let query = db
       .from("lead_tracking")
       .select("*", { count: "exact" })
@@ -147,14 +179,20 @@ export async function trackingRoutes(app: FastifyInstance): Promise<void> {
 
     if (authUser.role !== "admin") {
       query = query.eq("owner_id", authUser.id);
-    } else if (parsed.data.owner_id) {
-      query = query.eq("owner_id", parsed.data.owner_id);
+    } else if (f.owner_id) {
+      query = query.eq("owner_id", f.owner_id);
     }
 
-    if (parsed.data.status) query = query.eq("status", parsed.data.status);
-    if (parsed.data.lead_id) query = query.eq("lead_id", parsed.data.lead_id);
+    if (f.status) query = query.eq("status", f.status);
+    if (f.status_in) {
+      const statuses = f.status_in.split(",").map((s) => s.trim()).filter((s) => CRM_STATUSES.includes(s as CrmStatus));
+      if (statuses.length > 0) query = query.in("status", statuses);
+    }
+    if (f.lead_id) query = query.eq("lead_id", f.lead_id);
+    if (f.created_after) query = query.gte("started_at", f.created_after);
+    if (restrictLeadIds) query = query.in("lead_id", restrictLeadIds);
 
-    const { data, error, count } = await query.limit(parsed.data.limit);
+    const { data, error, count } = await query.limit(f.limit);
     if (error) {
       request.log.error({ error }, "tracking list failed");
       return reply.status(500).send({ error: "Database error", error_code: "db_error" });
