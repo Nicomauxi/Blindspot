@@ -53,7 +53,7 @@
 - `DISC-8` — done (2026-05-24)
 - `DISC-9` — done (2026-05-24)
 - `DISC-10` — done (2026-05-24)
-- `DISC-11` — pending
+- `DISC-11` — done (2026-05-24)
 - `PIPE-4` — pending
 - `PIPE-5` — pending
 - `MAP-2` — pending

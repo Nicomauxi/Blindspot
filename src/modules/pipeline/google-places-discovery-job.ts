@@ -10,6 +10,7 @@ import { upsertLeads, loadLeadsByNiche } from "../../storage/leads.js";
 import { rebuildVocabularyForNiche } from "../../storage/vocabulary.js";
 import { loadAllRuntime } from "../../storage/system-lists.js";
 import { computeNicheStopWords } from "../enrichment/vocabulary.js";
+import { getSupabase } from "../../shared/supabase.js";
 import type { PlaceCandidate } from "../../shared/types.js";
 
 const logger = getLogger();
@@ -46,6 +47,34 @@ function resolveCandidateNiche(
   return normalizedPrimaryType === "other" ? normalizedRequestedNiche : normalizedPrimaryType;
 }
 
+const COVERAGE_LOOKBACK_DAYS = 30;
+
+export async function checkRecentCoverage(
+  location: string,
+  niche: string,
+  maxResults: number,
+  thresholdRatio = 0.8
+): Promise<{ should_skip: boolean; recent_count: number }> {
+  const cutoff = new Date(Date.now() - COVERAGE_LOOKBACK_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  const { count, error } = await getSupabase()
+    .from("leads")
+    .select("id", { count: "exact", head: true })
+    .eq("source", "google_places")
+    .ilike("location", `%${location}%`)
+    .eq("niche", niche)
+    .gte("created_at", cutoff)
+    .eq("passed_filter", true);
+
+  if (error) {
+    logger.warn({ error, location, niche }, "checkRecentCoverage query failed — proceeding with job");
+    return { should_skip: false, recent_count: 0 };
+  }
+
+  const recent_count = count ?? 0;
+  const should_skip = recent_count >= Math.floor(maxResults * thresholdRatio);
+  return { should_skip, recent_count };
+}
+
 export interface GooglePlacesDiscoveryJobResult {
   runId: string;
   fetched: number;
@@ -65,6 +94,7 @@ export async function executeGooglePlacesDiscoveryJob(opts: {
   maxResults?: number | null;
   concurrency?: number | null;
   costCapUsd: number;
+  skipCoverageCheck?: boolean;
 }): Promise<GooglePlacesDiscoveryJobResult> {
   const requestedNiche = (opts.niche ?? "").trim() || "negocios";
   const maxResults = Math.max(1, Math.min(opts.maxResults ?? 50, 200));
@@ -80,6 +110,17 @@ export async function executeGooglePlacesDiscoveryJob(opts: {
 
   if (conservativeEstimate > runtimeCap) {
     throw new Error(`Google Places estimated cost USD ${conservativeEstimate.toFixed(2)} exceeds allowed cap USD ${runtimeCap.toFixed(2)}`);
+  }
+
+  if (!opts.skipCoverageCheck) {
+    const coverage = await checkRecentCoverage(opts.location, requestedNiche, maxResults);
+    if (coverage.should_skip) {
+      logger.info(
+        { location: opts.location, niche: requestedNiche, recent_count: coverage.recent_count, maxResults },
+        "Coverage pre-check: location/niche already well-covered — skipping job"
+      );
+      throw new Error(`Coverage pre-check: ${coverage.recent_count} recent leads already found for ${requestedNiche} in ${opts.location} (threshold: ${Math.floor(maxResults * 0.8)}). Pass skipCoverageCheck=true to override.`);
+    }
   }
 
   const runtime = await loadAllRuntime();
@@ -104,7 +145,12 @@ export async function executeGooglePlacesDiscoveryJob(opts: {
   });
 
   try {
-    const { candidates, textSearchRequestCount } = await fetchPlaceCandidates(requestedNiche, opts.location, maxResults);
+    const { candidates, textSearchRequestCount } = await fetchPlaceCandidates(
+      requestedNiche,
+      opts.location,
+      maxResults,
+      { minRating: profileConfig.min_rating, minReviews: profileConfig.min_reviews, earlyStop: true }
+    );
     const { passed, rejected } = applyProfileFilter(candidates, profileConfig, discoveryConfig.social_domains);
 
     const limit = pLimit(concurrency);
