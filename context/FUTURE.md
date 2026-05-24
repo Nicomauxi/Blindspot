@@ -55,7 +55,7 @@
 - `DISC-10` — done (2026-05-24)
 - `DISC-11` — done (2026-05-24)
 - `PIPE-4` — done
-- `PIPE-5` — pending
+- `PIPE-5` — done
 - `MAP-2` — pending
 - `MAP-3` — pending
 - `MAP-4` — pending
@@ -1526,7 +1526,7 @@
 
 ## PIPE-5 — Concurrencia configurable por run con perfiles de consumo
 
-**Status:** `pending`
+**Status:** `done`
 
 **Resultado esperado**
 - En Composer (manual) y en cron config, se puede especificar:

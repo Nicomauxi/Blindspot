@@ -492,6 +492,23 @@ export async function pipelineRoutes(app: FastifyInstance): Promise<void> {
     return reply.status(200).send({ data: { max_jobs } });
   });
 
+  // PUT /pipeline/config/cpu-budget — admin only
+  app.put("/pipeline/config/cpu-budget", { preHandler: requireAdmin }, async (request, reply) => {
+    const schema = z.object({ cpu_budget: z.enum(["conservative", "balanced", "aggressive"]) });
+    const parsed = schema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: "Invalid body", issues: parsed.error.flatten() });
+    }
+    const { cpu_budget } = parsed.data;
+    const db = getDb();
+    const { error } = await db
+      .from("pipeline_config")
+      .update({ cpu_budget, updated_at: new Date().toISOString() })
+      .eq("id", "singleton");
+    if (error) return reply.status(500).send({ error: "Update failed" });
+    return reply.status(200).send({ data: { cpu_budget } });
+  });
+
   // GET /pipeline/gp-budget — admin only
   app.get("/pipeline/gp-budget", { preHandler: requireAdmin }, async (_request, reply) => {
     const status = await getGooglePlacesBudgetStatus();

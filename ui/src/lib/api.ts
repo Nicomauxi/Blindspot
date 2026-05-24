@@ -605,6 +605,7 @@ export type PipelineConfig = {
   cron_expression: string | null;
   scheduled_for: string | null;
   last_completed_at: string | null;
+  cpu_budget: "conservative" | "balanced" | "aggressive" | null;
   phases: Record<string, unknown> | null;
   notify_webhook_url: string | null;
   notify_webhook_secret: string | null;
@@ -721,6 +722,10 @@ export async function resetGpBudgetSpent(token: string) {
 
 export async function updateMaxJobs(token: string, max_jobs: number) {
   return request<{ data: { max_jobs: number } }>("/api/v1/pipeline/config/max-jobs", { method: "PUT", body: JSON.stringify({ max_jobs }) }, token);
+}
+
+export async function updateCpuBudget(token: string, cpu_budget: "conservative" | "balanced" | "aggressive") {
+  return request<{ data: { cpu_budget: string } }>("/api/v1/pipeline/config/cpu-budget", { method: "PUT", body: JSON.stringify({ cpu_budget }) }, token);
 }
 
 export async function patchPipelineConfig(

@@ -4,11 +4,20 @@ import { getLogger } from "../../shared/logger.js";
 import { executeRun, transitionToPending } from "./run-executor.js";
 import { processQueuedDiscoveryJobs } from "./discovery-jobs.js";
 import { nextCronRun } from "./scheduled-for.js";
-import type { PipelineRun, PipelineConfig } from "./types.js";
+import { discoveryJobConcurrencyFromCpuBudget } from "../../shared/ram.js";
+import type { PipelineRun, PipelineConfig, CpuBudget } from "./types.js";
 
 const logger = getLogger();
 
 const PIPELINE_POLL_INTERVAL_MS = 60_000;
+
+function resolveDiscoveryConcurrency(config: (PipelineConfig & { updated_at?: string }) | null): number {
+  if (!config) return 1;
+  const maxJobs = (config.phases?.discovery as { max_jobs?: number } | undefined)?.max_jobs;
+  if (typeof maxJobs === "number" && maxJobs > 0) return maxJobs;
+  const cpuBudget = config.cpu_budget as CpuBudget | undefined;
+  return cpuBudget ? discoveryJobConcurrencyFromCpuBudget(cpuBudget) : 1;
+}
 const CONFIG_WATCH_INTERVAL_MS = 60_000;
 const DISCOVERY_POLL_INTERVAL_MS = 30_000;
 
@@ -182,9 +191,11 @@ export class PipelineScheduler {
 
   private async pollDiscoveryJobs(): Promise<void> {
     try {
-      const summary = await processQueuedDiscoveryJobs(1);
+      const config = await this.fetchConfig();
+      const concurrency = resolveDiscoveryConcurrency(config);
+      const summary = await processQueuedDiscoveryJobs(concurrency);
       if (summary.jobs_processed > 0) {
-        logger.info(summary, "Discovery jobs processed");
+        logger.info({ ...summary, concurrency }, "Discovery jobs processed");
       }
     } catch (err) {
       logger.error({ err }, "Discovery jobs poll error");

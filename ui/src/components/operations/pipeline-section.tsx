@@ -8,6 +8,7 @@ import {
   resetGpBudgetSpent,
   testWebhook,
   triggerPipelineRun,
+  updateCpuBudget,
   updateGpBudget,
   updateMaxJobs,
   type GpBudgetStatus,
@@ -17,6 +18,14 @@ import { useAuthStore } from "@/lib/auth-store";
 import { cn, formatDate } from "@/lib/utils";
 
 type TestResult = { status: string; http_status?: number; url: string; error?: string } | null;
+
+type CpuBudget = "conservative" | "balanced" | "aggressive";
+
+const CPU_BUDGET_OPTIONS: { value: CpuBudget; label: string; jobs: number; ramPct: number }[] = [
+  { value: "conservative", label: "Conservador", jobs: 1, ramPct: 15 },
+  { value: "balanced", label: "Balanceado", jobs: 2, ramPct: 35 },
+  { value: "aggressive", label: "Agresivo", jobs: 4, ramPct: 65 },
+];
 
 function Section({ title, description, children }: { title: string; description?: string; children: React.ReactNode }) {
   return (
@@ -66,6 +75,9 @@ export function PipelineSection() {
   const [maxJobsInput, setMaxJobsInput] = useState("");
   const [savingMaxJobs, setSavingMaxJobs] = useState(false);
   const [maxJobsOk, setMaxJobsOk] = useState(false);
+  const [cpuBudget, setCpuBudget] = useState<CpuBudget>("balanced");
+  const [savingCpuBudget, setSavingCpuBudget] = useState(false);
+  const [cpuBudgetOk, setCpuBudgetOk] = useState(false);
 
   const loadConfig = useCallback(async () => {
     if (!token) return;
@@ -82,6 +94,10 @@ export function PipelineSection() {
       const currentMaxJobs = (res.data.phases?.["discovery"] as { max_jobs?: number } | undefined)?.max_jobs ?? null;
       setMaxJobs(currentMaxJobs);
       setMaxJobsInput(currentMaxJobs !== null ? String(currentMaxJobs) : "");
+      const budget = res.data.cpu_budget as CpuBudget | undefined;
+      if (budget && CPU_BUDGET_OPTIONS.some((o) => o.value === budget)) {
+        setCpuBudget(budget);
+      }
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Error al cargar configuración");
@@ -156,6 +172,21 @@ export function PipelineSection() {
       setError(err instanceof Error ? err.message : "Error al guardar max_jobs");
     } finally {
       setSavingMaxJobs(false);
+    }
+  }
+
+  async function handleSaveCpuBudget(newBudget: CpuBudget) {
+    if (!token) return;
+    setCpuBudget(newBudget);
+    setSavingCpuBudget(true);
+    try {
+      await updateCpuBudget(token, newBudget);
+      setCpuBudgetOk(true);
+      setTimeout(() => setCpuBudgetOk(false), 2500);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Error al guardar perfil de CPU");
+    } finally {
+      setSavingCpuBudget(false);
     }
   }
 
@@ -312,13 +343,37 @@ export function PipelineSection() {
         </Section>
       ) : null}
 
-      <Section title="Configuración de jobs" description="Máximo de discovery jobs procesados en cada ciclo del pipeline.">
-        <div className="space-y-3">
+      <Section title="Configuración de jobs" description="Concurrencia de discovery jobs que corren en paralelo en cada ciclo.">
+        <div className="space-y-5">
+          <div>
+            <label className="mb-2 block text-xs font-semibold uppercase tracking-wide text-slate-500">Perfil de consumo</label>
+            <div className="flex flex-wrap gap-2">
+              {CPU_BUDGET_OPTIONS.map((opt) => (
+                <button
+                  key={opt.value}
+                  onClick={() => void handleSaveCpuBudget(opt.value)}
+                  disabled={savingCpuBudget}
+                  className={cn(
+                    "rounded-xl border px-4 py-2.5 text-sm transition-colors disabled:opacity-50",
+                    cpuBudget === opt.value
+                      ? "border-sky-500 bg-sky-50 font-semibold text-sky-700"
+                      : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+                  )}
+                >
+                  <span className="block font-medium">{opt.label}</span>
+                  <span className="block text-xs text-slate-500">{opt.jobs} job{opt.jobs > 1 ? "s" : ""} en paralelo ≈ {opt.ramPct}% RAM</span>
+                </button>
+              ))}
+            </div>
+            {cpuBudgetOk ? <p className="mt-2 text-sm text-emerald-700">Perfil guardado</p> : null}
+          </div>
+
           <div>
             <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">
-              Max jobs por ciclo
+              Override manual de jobs en paralelo
               {maxJobs !== null ? <span className="ml-2 font-normal text-slate-400">Actual: {maxJobs}</span> : null}
             </label>
+            <p className="mb-2 text-xs text-slate-400">Deja vacío para usar el perfil de consumo. Si se especifica, tiene precedencia sobre el perfil.</p>
             <input
               type="number"
               min="1"
@@ -326,12 +381,12 @@ export function PipelineSection() {
               value={maxJobsInput}
               onChange={(e) => setMaxJobsInput(e.target.value)}
               className="w-48 rounded-xl border border-slate-300 px-3 py-2.5 text-sm"
-              placeholder="ej: 5"
+              placeholder="ej: 3"
             />
           </div>
           <div className="flex items-center gap-3">
             <button onClick={() => void handleSaveMaxJobs()} disabled={savingMaxJobs} className="rounded-lg bg-sky-600 px-4 py-2 text-sm font-medium text-white hover:bg-sky-700 disabled:opacity-50">
-              {savingMaxJobs ? "Guardando…" : "Guardar"}
+              {savingMaxJobs ? "Guardando…" : "Guardar override"}
             </button>
             {maxJobsOk ? <span className="text-sm text-emerald-700">Guardado</span> : null}
           </div>

@@ -1,8 +1,25 @@
 import { freemem } from "os";
+import type { CpuBudget } from "../modules/pipeline/types.js";
 
 export const CHROMIUM_MB_PER_INSTANCE = 200;
 export const MAX_INSTANCES_CONSERVATIVE = 8;
 export const MAX_INSTANCES_AUTO = 16;
+
+export const DISCOVERY_JOB_CONCURRENCY: Record<CpuBudget, number> = {
+  conservative: 1,
+  balanced: 2,
+  aggressive: 4,
+};
+
+export const DISCOVERY_JOB_RAM_PCT: Record<CpuBudget, number> = {
+  conservative: 15,
+  balanced: 35,
+  aggressive: 65,
+};
+
+export function discoveryJobConcurrencyFromCpuBudget(budget: CpuBudget): number {
+  return DISCOVERY_JOB_CONCURRENCY[budget];
+}
 
 export type RamMode = "conservative" | "auto" | "manual";
 
