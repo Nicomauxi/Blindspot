@@ -19,8 +19,11 @@ import { performanceRoutes } from "./routes/admin/performance.js";
 import { monitoringRoutes } from "./routes/admin/monitoring.js";
 import { servicePricingRoutes } from "./routes/service-pricing.js";
 import { backupsRoutes } from "./routes/admin/backups.js";
+import { variablesRoutes } from "./routes/admin/variables.js";
+import { operationsRoutes } from "./routes/admin/operations.js";
 import { trackingRoutes } from "./routes/tracking.js";
 import { getBackupScheduler } from "./modules/backups/runtime.js";
+import { startProcessMetricsRecorder, stopProcessMetricsRecorder } from "./modules/process-metrics/recorder.js";
 
 const PORT = Number(process.env["PORT"] ?? 3001);
 const CORS_ORIGIN = process.env["CORS_ORIGIN"] ?? "http://localhost:3000";
@@ -86,6 +89,8 @@ export async function buildServer() {
   await app.register(costsRoutes, { prefix: "/api/v1" });
   await app.register(performanceRoutes, { prefix: "/api/v1" });
   await app.register(monitoringRoutes, { prefix: "/api/v1" });
+  await app.register(variablesRoutes, { prefix: "/api/v1" });
+  await app.register(operationsRoutes, { prefix: "/api/v1" });
   await app.register(servicePricingRoutes, { prefix: "/api/v1" });
   await app.register(trackingRoutes, { prefix: "/api/v1" });
 
@@ -95,10 +100,12 @@ export async function buildServer() {
 if (process.argv[1] && process.argv[1].endsWith("server.ts")) {
   const backupScheduler = getBackupScheduler();
   await backupScheduler.start();
+  startProcessMetricsRecorder();
 
   const app = await buildServer();
   const shutdown = () => {
     backupScheduler.stop();
+    stopProcessMetricsRecorder();
   };
 
   process.on("SIGTERM", shutdown);

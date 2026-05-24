@@ -998,7 +998,26 @@ export type EnrichmentLeadFilterSelection = {
   source?: string;
   primary_offer?: string;
   q?: string;
+  missing_gps?: boolean;
+  missing_address?: boolean;
+  missing_phone?: boolean;
+  missing_whatsapp?: boolean;
+  missing_email?: boolean;
+  missing_website?: boolean;
 };
+
+function applyMissingFilters<Q extends { is: (col: string, val: null) => Q }>(
+  query: Q,
+  filters: EnrichmentLeadFilterSelection
+): Q {
+  if (filters.missing_gps) query = query.is("gps", null);
+  if (filters.missing_address) query = query.is("address", null);
+  if (filters.missing_phone) query = query.is("phone", null);
+  if (filters.missing_whatsapp) query = query.is("whatsapp", null);
+  if (filters.missing_email) query = query.is("contact_email", null);
+  if (filters.missing_website) query = query.is("website", null);
+  return query;
+}
 
 export async function countLeadsByFilterSelection(filters: EnrichmentLeadFilterSelection): Promise<number> {
   let query = getSupabase().from("lead_dashboard").select("id", { count: "exact", head: true });
@@ -1009,6 +1028,7 @@ export async function countLeadsByFilterSelection(filters: EnrichmentLeadFilterS
   if (filters.source) query = query.eq("source", filters.source);
   if (filters.primary_offer) query = query.eq("primary_offer", filters.primary_offer);
   if (filters.q) query = query.textSearch("search_vector", filters.q, { type: "plain", config: "spanish" });
+  query = applyMissingFilters(query, filters);
 
   const { count, error } = await query;
   if (error) throw new Error(`Failed to count leads for filters: ${error.message}`);
@@ -1027,6 +1047,7 @@ export async function loadLeadsByFilterSelection(
   if (filters.source) dashboardQuery = dashboardQuery.eq("source", filters.source);
   if (filters.primary_offer) dashboardQuery = dashboardQuery.eq("primary_offer", filters.primary_offer);
   if (filters.q) dashboardQuery = dashboardQuery.textSearch("search_vector", filters.q, { type: "plain", config: "spanish" });
+  dashboardQuery = applyMissingFilters(dashboardQuery, filters);
   if (opts.limit) dashboardQuery = dashboardQuery.limit(opts.limit);
 
   const { data: dashboardRows, error: dashboardError } = await dashboardQuery;
@@ -1150,4 +1171,73 @@ export async function upsertBuyerScores(
     .from("lead_buyer_scores")
     .upsert(rows, { onConflict: "lead_id,buyer_type" });
   if (error) throw new Error(`upsertBuyerScores failed: ${error.message}`);
+}
+
+export interface GooglePlacesRefreshInput {
+  displayName?: { text?: string | undefined; languageCode?: string | undefined } | undefined;
+  formattedAddress?: string | undefined;
+  rating?: number | undefined;
+  userRatingCount?: number | undefined;
+  websiteUri?: string | undefined;
+  internationalPhoneNumber?: string | undefined;
+  businessStatus?: string | undefined;
+  location?: { latitude?: number | undefined; longitude?: number | undefined } | undefined;
+}
+
+export interface GooglePlacesRefreshResult {
+  fields_updated: string[];
+}
+
+export async function applyGooglePlacesRefresh(
+  leadId: string,
+  summary: GooglePlacesRefreshInput
+): Promise<GooglePlacesRefreshResult> {
+  const patch: Record<string, unknown> = {};
+  const fields_updated: string[] = [];
+
+  if (summary.displayName?.text) {
+    patch.name = summary.displayName.text;
+    fields_updated.push("name");
+  }
+  if (summary.formattedAddress !== undefined) {
+    patch.address = summary.formattedAddress;
+    fields_updated.push("address");
+  }
+  if (summary.rating !== undefined) {
+    patch.rating = summary.rating;
+    fields_updated.push("rating");
+  }
+  if (summary.userRatingCount !== undefined) {
+    patch.review_count = summary.userRatingCount;
+    fields_updated.push("review_count");
+  }
+  if (summary.internationalPhoneNumber !== undefined) {
+    patch.phone = summary.internationalPhoneNumber;
+    fields_updated.push("phone");
+  }
+  if (summary.websiteUri !== undefined) {
+    patch.website = summary.websiteUri;
+    fields_updated.push("website");
+  }
+  if (summary.businessStatus !== undefined) {
+    patch.business_status = summary.businessStatus;
+    fields_updated.push("business_status");
+  }
+  const lat = summary.location?.latitude;
+  const lng = summary.location?.longitude;
+  if (lat != null && lng != null) {
+    patch.gps = `SRID=4326;POINT(${lng} ${lat})`;
+    fields_updated.push("gps");
+  }
+
+  if (fields_updated.length === 0) return { fields_updated: [] };
+
+  const { error } = await getSupabase()
+    .from("leads")
+    .update(patch)
+    .eq("id", leadId);
+
+  if (error) throw new Error(`applyGooglePlacesRefresh failed for lead ${leadId}: ${error.message}`);
+
+  return { fields_updated };
 }

@@ -5,6 +5,8 @@ import { CollapsibleSection } from "@/components/collapsible-section";
 import { PipelineSection } from "@/components/operations/pipeline-section";
 import { MonitoringSection } from "@/components/operations/monitoring-section";
 import { EnrichmentSection } from "@/components/operations/enrichment-section";
+import { VariablesSection } from "@/components/operations/variables-section";
+import { ProcessesSection } from "@/components/operations/processes-section";
 
 export default function OperationsPage() {
   return (
@@ -31,6 +33,26 @@ export default function OperationsPage() {
         defaultOpen={false}
       >
         <EnrichmentSection />
+      </CollapsibleSection>
+
+      <CollapsibleSection
+        title="Procesos"
+        description="Métricas en vivo de CPU y memoria por proceso. Actualización automática cada 3 s."
+        id="processes"
+        storageKey="ops-processes-open"
+        defaultOpen={false}
+      >
+        <ProcessesSection />
+      </CollapsibleSection>
+
+      <CollapsibleSection
+        title="Variables"
+        description="Variables runtime del pipeline: cron, budget, webhook y concurrencia."
+        id="variables"
+        storageKey="ops-variables-open"
+        defaultOpen={false}
+      >
+        <VariablesSection />
       </CollapsibleSection>
 
       <CollapsibleSection

@@ -24,6 +24,16 @@ export const TEXT_SEARCH_FIELDS = [
 ].join(",");
 
 export const DETAILS_FIELDS = "photos,regularOpeningHours,reviews";
+export const REFRESH_SUMMARY_FIELDS = [
+  "rating",
+  "userRatingCount",
+  "businessStatus",
+  "internationalPhoneNumber",
+  "websiteUri",
+  "formattedAddress",
+  "location",
+  "displayName",
+].join(",");
 
 // ---- Zod schemas -------------------------------------------------------
 
@@ -72,6 +82,19 @@ const PlaceDetailsSchema = z.object({
 });
 
 export type PlaceDetailsResult = z.infer<typeof PlaceDetailsSchema>;
+
+const PlaceSummarySchema = z.object({
+  displayName: DisplayNameSchema.optional(),
+  formattedAddress: z.string().optional(),
+  rating: z.number().optional(),
+  userRatingCount: z.number().int().optional(),
+  websiteUri: z.string().optional(),
+  internationalPhoneNumber: z.string().optional(),
+  businessStatus: z.string().optional(),
+  location: PlaceLocationSchema.optional(),
+});
+
+export type PlaceSummaryResult = z.infer<typeof PlaceSummarySchema>;
 
 // ---- HTTP helpers -------------------------------------------------------
 
@@ -234,6 +257,24 @@ export async function fetchPlaceDetails(
   } catch (err) {
     const duration_ms = Date.now() - startTs;
     log.error({ placeId, duration_ms, err }, "Place Details request failed, lead will persist without enrichment");
+    return null;
+  }
+}
+
+export async function fetchPlaceSummaryForRefresh(placeId: string): Promise<PlaceSummaryResult | null> {
+  const log = getLogger();
+  try {
+    const raw = await withRetry(() =>
+      placesGet<unknown>(`places/${placeId}`, REFRESH_SUMMARY_FIELDS)
+    );
+    const parsed = PlaceSummarySchema.safeParse(raw);
+    if (!parsed.success) {
+      log.error({ placeId, error: parsed.error.flatten() }, "Failed to parse PlaceSummary response");
+      return null;
+    }
+    return parsed.data;
+  } catch (err) {
+    log.error({ placeId, err }, "fetchPlaceSummaryForRefresh failed");
     return null;
   }
 }
