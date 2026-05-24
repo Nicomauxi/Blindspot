@@ -13,6 +13,7 @@ import {
   type CompletedRunInsightRow,
 } from "./discovery-insights.js";
 import { bulkInsertDiscoveryJobs } from "../../../src/storage/discovery-jobs.js";
+import { getGooglePlacesBudgetStatus } from "../../../src/storage/pipeline-config.js";
 
 const permissiveUuid = z
   .string()
@@ -394,6 +395,22 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
     }, 0);
     const costCapUsd = body.google_places?.cost_cap_usd ?? null;
 
+    if (uniqueSources.includes("google_places") && estimatedCostUsd > 0) {
+      const budget = await getGooglePlacesBudgetStatus();
+      if (budget != null && estimatedCostUsd > budget.budget_remaining) {
+        return reply.status(400).send({
+          error: `Estimated cost USD ${estimatedCostUsd.toFixed(2)} exceeds remaining monthly GP budget USD ${budget.budget_remaining.toFixed(2)}`,
+          error_code: "budget_exceeded",
+          details: {
+            estimated_cost_usd: estimatedCostUsd,
+            budget_remaining: budget.budget_remaining,
+            budget_total: budget.budget_total,
+            budget_spent: budget.budget_spent,
+          },
+        });
+      }
+    }
+
     const { data: batch, error: batchError } = await db
       .from("discovery_job_batches")
       .insert({
@@ -745,6 +762,23 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
       cost_cap_usd: j.cost_cap_usd ?? null,
       estimated_cost_usd: j.source === "google_places" ? estimateGooglePlacesBatchCost(j.max_results) : null,
     }));
+
+    const totalGpCostUsd = jobDefs.reduce((sum, j) => sum + (j.estimated_cost_usd ?? 0), 0);
+    if (totalGpCostUsd > 0) {
+      const budget = await getGooglePlacesBudgetStatus();
+      if (budget != null && totalGpCostUsd > budget.budget_remaining) {
+        return reply.status(400).send({
+          error: `Total estimated GP cost USD ${totalGpCostUsd.toFixed(2)} exceeds remaining monthly budget USD ${budget.budget_remaining.toFixed(2)}`,
+          error_code: "budget_exceeded",
+          details: {
+            total_estimated_cost_usd: totalGpCostUsd,
+            budget_remaining: budget.budget_remaining,
+            budget_total: budget.budget_total,
+            budget_spent: budget.budget_spent,
+          },
+        });
+      }
+    }
 
     let rows;
     try {

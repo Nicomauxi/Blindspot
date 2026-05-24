@@ -456,6 +456,7 @@ export default function DiscoveryPage() {
     if (!composer.location.trim()) warnings.push("La ubicación es obligatoria.");
     if (includesGoogle && !composer.google_cost_cap_usd.trim()) warnings.push("Google Places requiere cost cap USD antes de crear el lote.");
     if (includesGoogle && remainingBudget != null && remainingBudget <= 0) warnings.push("El presupuesto mensual de Google Places está agotado.");
+    if (includesGoogle && remainingBudget != null && remainingBudget > 0 && estimatedGoogleCost > remainingBudget) warnings.push(`La estimación conservadora USD ${estimatedGoogleCost.toFixed(2)} supera el presupuesto restante USD ${remainingBudget.toFixed(2)}.`);
     if (includesGoogle && configuredCap > 0 && estimatedGoogleCost > configuredCap) warnings.push("La estimación conservadora supera el cap configurado para Google Places.");
     return warnings;
   }, [composer.google_cost_cap_usd, composer.location, composer.sources.length, configuredCap, estimatedGoogleCost, includesGoogle, remainingBudget]);
