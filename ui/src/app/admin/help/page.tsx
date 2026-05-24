@@ -4,7 +4,7 @@ import { AdminPageLayout, HelpTip, SectionCard } from "@/components/admin-shell"
 const modules = [
   {
     title: "Inicio",
-    text: "Resume prioridades del día: volumen visible, hot leads, campañas activas y alertas que afectan la operación.",
+    text: "Resume prioridades del día: volumen visible, hot leads y alertas que afectan la operación.",
   },
   {
     title: "Leads",
@@ -12,7 +12,7 @@ const modules = [
   },
   {
     title: "Acciones",
-    text: "Concentra el seguimiento comercial: outreach, respuestas, outcomes y contexto de campañas.",
+    text: "Concentra el seguimiento comercial: outreach, respuestas y outcomes por lead.",
   },
   {
     title: "Captación",

@@ -43,7 +43,7 @@ export default function LoginPage() {
             </p>
             <div className="mt-10 space-y-4 text-sm text-slate-300">
               <div className="rounded-2xl border border-slate-800 bg-slate-900/70 px-4 py-4">
-                Inicio nuevo: prioridades comerciales, campañas activas y alertas relevantes.
+                Inicio nuevo: prioridades comerciales, hot leads y alertas técnicas relevantes.
               </div>
               <div className="rounded-2xl border border-slate-800 bg-slate-900/70 px-4 py-4">
                 Lead Explorer mejorado: filtros, contexto operativo y próximas acciones más claras.

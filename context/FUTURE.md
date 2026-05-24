@@ -59,11 +59,11 @@
 - `MAP-2` — pending
 - `MAP-3` — pending
 - `MAP-4` — pending
-- `UI-3` — pending
-- `UI-4` — pending
-- `UI-5` — pending
-- `UI-6` — pending
-- `UI-7` — pending
+- `UI-3` — done
+- `UI-4` — done
+- `UI-5` — done
+- `UI-6` — pending (depends on MAP-4)
+- `UI-7` — done
 - `ALERT-1` — pending
 - `ALERT-2` — pending
 - `CRM-6` — pending
@@ -1656,7 +1656,7 @@
 
 ## UI-4 — Quitar alerta "Presupuesto Google Places" del home
 
-**Status:** `pending`
+**Status:** `done`
 
 **Resultado esperado**
 - En `ui/src/app/admin/page.tsx`, la AlertRow "Presupuesto Google Places" en el bloque "Alertas" desaparece, junto con la card "Discovery en cola" cuya hint mostraba el budget.
@@ -1673,7 +1673,7 @@
 
 ## UI-5 — Quitar apartado "Colas de trabajo" del home
 
-**Status:** `pending`
+**Status:** `done`
 
 **Resultado esperado**
 - El SectionCard "Colas de trabajo" (`ui/src/app/admin/page.tsx:104`) desaparece.
@@ -1710,7 +1710,7 @@
 
 ## UI-7 — Limpiar bloques deprecated de la ficha de Lead
 
-**Status:** `pending`
+**Status:** `done`
 
 **Resultado esperado**
 - En `ui/src/app/admin/leads/[id]/page.tsx`:
