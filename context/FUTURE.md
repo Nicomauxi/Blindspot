@@ -46,7 +46,7 @@
 - `BUG-1` — done (2026-05-24)
 - `BUG-2` — done (2026-05-24, resuelto por BUG-1)
 - `OPS-2` — done (2026-05-24)
-- `OPS-3` — pending
+- `OPS-3` — done (2026-05-24)
 - `OPS-4` — pending
 - `OPS-5` — pending
 - `DISC-7` — pending
@@ -1270,7 +1270,7 @@
 
 ## OPS-3 — Mover "Enrichment de colección" a Operaciones
 
-**Status:** `pending`
+**Status:** `done` (2026-05-24)
 
 **Resultado esperado**
 - El bloque `Enrichment de colección` que hoy vive embebido en Lead Explorer (`ui/src/components/lead-explorer.tsx:672-708`) deja de mostrarse desde el dashboard home.

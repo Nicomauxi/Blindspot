@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { EmptyPanel, HelpTip, SectionCard } from "@/components/admin-shell";
-import { createFilteredEnrichmentJob, listLeads, type LeadDashboard } from "@/lib/api";
+import { listLeads, type LeadDashboard } from "@/lib/api";
 import { useAuthStore } from "@/lib/auth-store";
 import { cn } from "@/lib/utils";
 
@@ -34,8 +34,6 @@ type LeadExplorerProps = {
 const FULL_PAGE_SIZE = 50;
 const EMBEDDED_PAGE_SIZE = 6;
 const DEFAULT_SORT = "created_at:desc";
-const FILTER_ENRICH_LIMIT = 250;
-
 const SOURCE_OPTIONS = [
   { value: "", label: "Todas las fuentes" },
   { value: "yelu", label: "Yelu" },
@@ -246,12 +244,6 @@ export function LeadExplorer({ mode, initialFilters, pageSize }: LeadExplorerPro
   const [sortValue, setSortValue] = useState(initialSortValue || DEFAULT_SORT);
   const [pageCursors, setPageCursors] = useState<Array<string | null>>([isFull ? searchParams.get("cursor") : null]);
   const [pageIndex, setPageIndex] = useState(0);
-  const [enrichWithHeuristic, setEnrichWithHeuristic] = useState(true);
-  const [enrichConcurrency, setEnrichConcurrency] = useState("4");
-  const [enrichingCollection, setEnrichingCollection] = useState(false);
-  const [enrichNotice, setEnrichNotice] = useState<string | null>(null);
-  const [enrichError, setEnrichError] = useState<string | null>(null);
-
   const debouncedQ = useDebounce(q, 350);
   const hasLoadedOnceRef = useRef(false);
   const previousFilterKey = useRef<string | null>(null);
@@ -401,24 +393,6 @@ export function LeadExplorer({ mode, initialFilters, pageSize }: LeadExplorerPro
     sortValue !== DEFAULT_SORT ? { key: "sort", label: "Orden", value: SORT_OPTIONS.find((option) => option.value === sortValue)?.label ?? sortValue, clear: () => setSortValue(DEFAULT_SORT) } : null,
   ].filter((value): value is ActiveFilter => value !== null);
 
-  const enrichFilters = useMemo(() => ({
-    ...(tier ? { contact_tier: tier } : {}),
-    ...(minScore.trim() ? { prospect_score_gte: Number(minScore.trim()) } : {}),
-    ...(niche.trim() ? { niche: niche.trim() } : {}),
-    ...(source ? { source } : {}),
-    ...(primaryOffer.trim() ? { primary_offer: primaryOffer.trim() } : {}),
-    ...(q.trim() ? { q: q.trim() } : {}),
-  }), [minScore, niche, primaryOffer, q, source, tier]);
-
-  const enrichFilterCount = useMemo(() => Object.keys(enrichFilters).length, [enrichFilters]);
-  const enrichGuardrail = useMemo(() => {
-    if (!isFull) return "";
-    if (enrichFilterCount === 0) return "Definí al menos un filtro relevante antes de encolar enrichment.";
-    if (total === 0) return "No hay leads para la colección actual.";
-    if (total > FILTER_ENRICH_LIMIT) return `La colección actual supera el límite operativo de ${FILTER_ENRICH_LIMIT} leads. Afiná filtros antes de continuar.`;
-    return "";
-  }, [enrichFilterCount, isFull, total]);
-
   function clearAllFilters() {
     setQ("");
     setNiche("");
@@ -439,25 +413,6 @@ export function LeadExplorer({ mode, initialFilters, pageSize }: LeadExplorerPro
     if (values.source !== undefined) setSource(values.source);
     if (values.sortValue !== undefined) setSortValue(values.sortValue);
     resetToFirstPage();
-  }
-
-  async function handleEnrichCollection() {
-    if (!token || enrichGuardrail) return;
-    setEnrichingCollection(true);
-    setEnrichError(null);
-    setEnrichNotice(null);
-    try {
-      const response = await createFilteredEnrichmentJob(token, {
-        ...enrichFilters,
-        with_heuristic: enrichWithHeuristic,
-        concurrency: Number(enrichConcurrency) || 4,
-      });
-      setEnrichNotice(`Enrichment encolado para ${response.data.lead_count} leads. Run ${response.data.run_id}.`);
-    } catch (err) {
-      setEnrichError(err instanceof Error ? err.message : "No se pudo encolar el enrichment filtrado.");
-    } finally {
-      setEnrichingCollection(false);
-    }
   }
 
   function goToPreviousPage() {
@@ -667,44 +622,6 @@ export function LeadExplorer({ mode, initialFilters, pageSize }: LeadExplorerPro
 
       <SectionCard title="Filtros" description="Afiná la búsqueda según valor comercial, origen y preparación del contacto.">
         {filtersContent}
-      </SectionCard>
-
-      <SectionCard title="Enrichment de colección" description="Tomá la colección actual de leads filtrados y lanzá enrichment solo sobre ese subconjunto, con guardrails de volumen y trazabilidad por run.">
-        <div className="space-y-4">
-          <div className="grid gap-3 xl:grid-cols-[1.2fr,0.8fr,0.8fr,auto] xl:items-end">
-            <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
-              <div className="font-semibold text-slate-900">Colección activa</div>
-              <div className="mt-1">{total.toLocaleString("es-UY")} leads · {enrichFilterCount} filtros relevantes</div>
-              <div className="mt-2 text-xs text-slate-500">Requiere al menos un filtro activo y rechaza colecciones de más de {FILTER_ENRICH_LIMIT} leads.</div>
-            </div>
-            <label className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700">
-              <span className="mb-2 block text-[11px] font-semibold uppercase tracking-wide text-slate-500">Concurrencia</span>
-              <select value={enrichConcurrency} onChange={(event) => setEnrichConcurrency(event.target.value)} className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500">
-                <option value="2">2</option>
-                <option value="4">4</option>
-                <option value="6">6</option>
-              </select>
-            </label>
-            <label className="flex items-start gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700">
-              <input type="checkbox" checked={enrichWithHeuristic} onChange={(event) => setEnrichWithHeuristic(event.target.checked)} className="mt-1 h-4 w-4 rounded border-slate-300 text-sky-600 focus:ring-sky-500" />
-              <div>
-                <div className="font-semibold text-slate-900">With heuristic</div>
-                <div className="mt-1 text-xs text-slate-500">Incluye website/social/WhatsApp discovery antes del enrich normal.</div>
-              </div>
-            </label>
-            <button
-              type="button"
-              onClick={() => void handleEnrichCollection()}
-              disabled={enrichingCollection || Boolean(enrichGuardrail)}
-              className="rounded-lg bg-sky-600 px-4 py-2 text-sm font-medium text-white hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {enrichingCollection ? "Encolando…" : "Enriquecer colección"}
-            </button>
-          </div>
-          {enrichGuardrail ? <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">{enrichGuardrail}</div> : null}
-          {enrichError ? <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{enrichError}</div> : null}
-          {enrichNotice ? <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{enrichNotice}</div> : null}
-        </div>
       </SectionCard>
 
       {showLargeDatasetHint ? (

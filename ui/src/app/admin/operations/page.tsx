@@ -4,6 +4,7 @@ import { AdminPageLayout } from "@/components/admin-shell";
 import { CollapsibleSection } from "@/components/collapsible-section";
 import { PipelineSection } from "@/components/operations/pipeline-section";
 import { MonitoringSection } from "@/components/operations/monitoring-section";
+import { EnrichmentSection } from "@/components/operations/enrichment-section";
 
 export default function OperationsPage() {
   return (
@@ -20,6 +21,16 @@ export default function OperationsPage() {
         defaultOpen
       >
         <PipelineSection />
+      </CollapsibleSection>
+
+      <CollapsibleSection
+        title="Enrichment de colección"
+        description="Lanzá enrichment sobre un subconjunto de leads filtrado. Sin límite de búsqueda forzado por la vista de Leads."
+        id="enrichment"
+        storageKey="ops-enrichment-open"
+        defaultOpen={false}
+      >
+        <EnrichmentSection />
       </CollapsibleSection>
 
       <CollapsibleSection
