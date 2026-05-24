@@ -12,6 +12,7 @@ vi.mock("../../src/storage/leads.js", () => ({
   loadLeadsByRunId: vi.fn(),
   loadLeadsBySource: vi.fn(),
   loadAllPassedLeads: vi.fn(),
+  loadLeadsByFilterSelection: vi.fn(),
   updateLeadEnrichment: vi.fn(),
 }));
 
@@ -40,7 +41,7 @@ vi.mock("../../src/storage/owner-group.js", () => ({
 
 import { enrichCommand } from "../../src/cli/commands/enrich.js";
 import { getRunById, createEnrichmentRun, completeRun } from "../../src/storage/runs.js";
-import { loadLeadsByRunId, loadLeadsBySource, loadAllPassedLeads, updateLeadEnrichment } from "../../src/storage/leads.js";
+import { loadLeadsByRunId, loadLeadsBySource, loadAllPassedLeads, loadLeadsByFilterSelection, updateLeadEnrichment } from "../../src/storage/leads.js";
 import { recordPipelineError } from "../../src/storage/pipeline-errors.js";
 import { loadFilterWordsForNiche } from "../../src/storage/vocabulary.js";
 import { detectAndSeedEmailProviders, loadAllRuntime, retroactiveEmailCleanup, detectAndSeedHeuristicDomains } from "../../src/storage/system-lists.js";
@@ -149,6 +150,7 @@ beforeEach(() => {
   vi.mocked(retroactiveEmailCleanup).mockResolvedValue(0);
   vi.mocked(detectAndSeedHeuristicDomains).mockResolvedValue(0);
   vi.mocked(loadLeadsBySource).mockResolvedValue([]);
+  vi.mocked(loadLeadsByFilterSelection).mockResolvedValue([]);
   vi.mocked(loadAllPassedLeads).mockResolvedValue([]);
 });
 
@@ -300,6 +302,31 @@ describe("enrichCommand — vocabulary loading", () => {
     ).resolves.not.toThrow();
 
     expect(enrichLead).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("enrichCommand — filter mode", () => {
+  it("loads passed leads by approved filter selection", async () => {
+    vi.mocked(loadLeadsByFilterSelection).mockResolvedValue([makeLead({ id: "filtered-1", niche: "hairdresser" })]);
+
+    await enrichCommand({
+      filters: { source: "google_places", prospect_score_gte: 70 },
+      forceRefresh: false,
+      withHeuristic: true,
+      concurrency: 4,
+      all: false,
+    });
+
+    expect(createEnrichmentRun).toHaveBeenCalledWith(expect.objectContaining({
+      mode: "filter",
+      filters: { source: "google_places", prospect_score_gte: 70 },
+      withHeuristic: true,
+      concurrency: 4,
+    }));
+    expect(loadLeadsByFilterSelection).toHaveBeenCalledWith(
+      { source: "google_places", prospect_score_gte: 70 },
+      { passedOnly: true, limit: 250 }
+    );
   });
 });
 

@@ -497,6 +497,10 @@ export interface PlaceCandidate {
   businessStatus: string | null;
   primaryType: string | null;
   raw: Record<string, unknown>;
+  lat: number | null;
+  lng: number | null;
+  geo_suspect: boolean;
+  departamento: string | null;
 }
 
 export interface DiscoverOptions {

@@ -4,6 +4,7 @@ import {
   isBlank,
   parsePhone,
   shouldDiscard,
+  inferNiche,
   mapRecord,
   MINTURProvider,
 } from "../../src/modules/discovery/providers/mintur.js";
@@ -44,6 +45,7 @@ function makeRecord(overrides: Partial<MINTURRecord> = {}): MINTURRecord {
     Web: "https://hotel-ejemplo.com.uy",
     Telefono: "29001234",
     EMail: "info@hotel-ejemplo.com.uy",
+    TipoOperador: "Alojamientos Turísticos",
     ...overrides,
   };
 }
@@ -166,6 +168,24 @@ describe("shouldDiscard", () => {
 
 // ─── mapRecord ─────────────────────────────────────────────────────────────────
 
+describe("inferNiche", () => {
+  it("maps TipoOperador alojamiento to accommodation", () => {
+    expect(inferNiche(makeRecord({ TipoOperador: "Alojamientos Turísticos" }))).toBe("accommodation");
+  });
+
+  it("maps Rentadora de autos to the closest supported canonical niche", () => {
+    expect(inferNiche(makeRecord({ TipoOperador: "Rentadora de autos" }))).toBe("car_dealer");
+  });
+
+  it("falls back to operator name keywords when TipoOperador is absent", () => {
+    expect(inferNiche(makeRecord({ TipoOperador: undefined, Operador: "Parrilla del Puerto" }))).toBe("restaurant");
+  });
+
+  it("keeps other when no supported signal is present", () => {
+    expect(inferNiche(makeRecord({ TipoOperador: "Cetáceos", Operador: "Avistajes del Sur" }))).toBe("other");
+  });
+});
+
 describe("mapRecord", () => {
   it("mapea todos los campos correctamente", () => {
     const record = makeRecord({
@@ -177,6 +197,7 @@ describe("mapRecord", () => {
       Web: "https://restaurant.uy",
       Telefono: "42000000",
       EMail:"test@restaurant.uy",
+      TipoOperador: "Restaurante",
     });
     const candidate = mapRecord(record);
 
@@ -190,8 +211,13 @@ describe("mapRecord", () => {
     expect(candidate.email).toBe("test@restaurant.uy");
     expect(candidate.latitude).toBeNull();
     expect(candidate.longitude).toBeNull();
-    expect(candidate.niche).toBe("other");
+    expect(candidate.niche).toBe("restaurant");
     expect(candidate.raw).toBe(record);
+  });
+
+  it("uses the inferred canonical niche when TipoOperador is present", () => {
+    const candidate = mapRecord(makeRecord({ TipoOperador: "Rentadora de autos" }));
+    expect(candidate.niche).toBe("car_dealer");
   });
 
   it("address omite campos vacíos", () => {

@@ -21,7 +21,10 @@ export async function executeRun(run: PipelineRun): Promise<RunResult> {
 
   logger.info({ runId: run.id, isDryRun, enabledPhases }, "Executing pipeline run");
 
-  await supabase
+  // The scheduler does an atomic claim (pending → running) before calling
+  // executeRun, so this UPDATE is a no-op for the scheduler path. We keep it
+  // (idempotent) for the CLI / manual paths that pass a pending run directly.
+  const { error: startError } = await supabase
     .from("pipeline_runs")
     .update({
       status: "running",
@@ -29,6 +32,9 @@ export async function executeRun(run: PipelineRun): Promise<RunResult> {
       config_snapshot: run.config_snapshot ?? null,
     })
     .eq("id", run.id);
+  if (startError) {
+    throw new Error(`Failed to mark run as running: ${startError.message}`);
+  }
 
   await appendRunLog(run.id, `Run started (dry_run=${isDryRun})`, "info");
 

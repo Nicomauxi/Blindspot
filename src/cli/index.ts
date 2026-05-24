@@ -248,7 +248,7 @@ program
   .command("discover-mintur")
   .description("Fetch leads from MINTUR dataset and persist to DB")
   .requiredOption("--location <string>", "Location filter (e.g. 'Montevideo', 'Colonia')")
-  .option("--niche <string>", "Niche hint (MINTUR ignores this, all leads are other)", "other")
+  .option("--niche <string>", "Niche hint (MINTUR ignores este hint y ahora intenta mapear niches canónicos desde TipoOperador/Operador)", "other")
   .option("--limit <number>", "Max candidates to process (useful for smoke tests)")
   .option("--dry-run", "Simulate without writing to DB", false)
   .action(async (opts: {

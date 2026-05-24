@@ -8,16 +8,24 @@ export interface BudgetStatus {
   over_alert: boolean;
 }
 
-export async function incrementGooglePlacesBudgetSpent(costUsd: number): Promise<void> {
-  if (costUsd <= 0) return;
+export interface BudgetIncrementResult {
+  budget_spent: number;
+  budget_total: number;
+  over_budget: boolean;
+}
+
+export async function incrementGooglePlacesBudgetSpent(costUsd: number): Promise<BudgetIncrementResult | null> {
+  if (costUsd <= 0) return null;
   const db = getSupabase();
-  const { error } = await db.rpc("increment_gp_budget_spent", { amount: costUsd });
-  if (error) {
-    // Fallback: manual read + update
-    const { data } = await db.from("pipeline_config").select("google_places_budget_spent").limit(1).single();
-    const current = (data as { google_places_budget_spent: number } | null)?.google_places_budget_spent ?? 0;
-    await db.from("pipeline_config").update({ google_places_budget_spent: current + costUsd });
-  }
+  const { data, error } = await db.rpc("increment_gp_budget_spent", { amount: costUsd });
+  if (error) throw new Error(`incrementGooglePlacesBudgetSpent: ${error.message}`);
+  if (!data || !Array.isArray(data) || data.length === 0) return null;
+  const row = data[0] as { google_places_budget_spent: number; google_places_budget_total: number; over_budget: boolean };
+  return {
+    budget_spent: row.google_places_budget_spent,
+    budget_total: row.google_places_budget_total,
+    over_budget: row.over_budget,
+  };
 }
 
 export async function getGooglePlacesBudgetStatus(): Promise<BudgetStatus | null> {
@@ -28,7 +36,10 @@ export async function getGooglePlacesBudgetStatus(): Promise<BudgetStatus | null
     .limit(1)
     .single();
 
-  if (error || !data) return null;
+  if (error) {
+    throw new Error(`getGooglePlacesBudgetStatus failed: ${error.message}`);
+  }
+  if (!data) return null;
 
   const row = data as {
     google_places_budget_total: number;
@@ -48,24 +59,39 @@ export async function getGooglePlacesBudgetStatus(): Promise<BudgetStatus | null
 
 export async function backfillGooglePlacesBudget(): Promise<{ total_runs: number; total_cost_usd: number }> {
   const db = getSupabase();
-
-  // Sum estimated_cost_usd from all completed runs
-  const { data, error } = await db
-    .from("runs")
-    .select("stats")
-    .eq("status", "completed");
-
-  if (error) throw new Error(`backfillGooglePlacesBudget: ${error.message}`);
+  const pageSize = 1000;
 
   let total = 0;
   let count = 0;
-  for (const row of data ?? []) {
-    const stats = row.stats as Record<string, unknown> | null;
-    const cost = typeof stats?.["estimated_cost_usd"] === "number" ? stats["estimated_cost_usd"] : 0;
-    total += cost;
-    count++;
+
+  for (let from = 0; ; from += pageSize) {
+    const to = from + pageSize - 1;
+    const { data, error } = await db
+      .from("runs")
+      .select("stats")
+      .eq("status", "completed")
+      .range(from, to);
+
+    if (error) throw new Error(`backfillGooglePlacesBudget: ${error.message}`);
+
+    const batch = data ?? [];
+    for (const row of batch) {
+      const stats = row.stats as Record<string, unknown> | null;
+      const cost = typeof stats?.["estimated_cost_usd"] === "number" ? stats["estimated_cost_usd"] : 0;
+      total += cost;
+      count++;
+    }
+
+    if (batch.length < pageSize) break;
   }
 
-  await db.from("pipeline_config").update({ google_places_budget_spent: total });
+  const { error: updateError } = await db
+    .from("pipeline_config")
+    .update({ google_places_budget_spent: total })
+    .eq("id", "singleton");
+  if (updateError) {
+    throw new Error(`backfillGooglePlacesBudget update failed: ${updateError.message}`);
+  }
+
   return { total_runs: count, total_cost_usd: total };
 }

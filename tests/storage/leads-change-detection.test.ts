@@ -139,7 +139,15 @@ describe("updateLeadEnrichment change detection", () => {
   });
 
   it("persists last_change_diff and rescoring when a critical change appears", async () => {
+    // After B5 consolidation, updateLeadEnrichment now performs:
+    //   1) SELECT * on leads
+    //   2) in-memory scoreLead(simulatedLead) when critical (no UPDATE yet)
+    //   3) ONE consolidated UPDATE on leads with everything (footprint with
+    //      last_change_diff, tags with state-changed-significant, etc.)
+    //   4) updateLeadScore (separate UPDATE with prospect_score)
+    //   5) upsertBuyerScores (lead_buyer_scores table)
     const currentLeadRow = {
+      ...makeUpdatedLead(),
       digital_footprint: {
         skipped: true,
         reason: "no-website",
@@ -153,33 +161,10 @@ describe("updateLeadEnrichment change detection", () => {
       score_breakdown: { contact_tier: "C" },
     };
 
-    const firstLeadUpdateEq = vi.fn();
-    const diffPersistEq = vi.fn().mockResolvedValue({ error: null });
+    const consolidatedUpdateEq = vi.fn().mockResolvedValue({ error: null });
     const scoreUpdateEq = vi.fn().mockResolvedValue({ error: null });
     const buyerScoreUpsert = vi.fn().mockResolvedValue({ error: null });
-    let diffPersistPayload: Record<string, unknown> | undefined;
-
-    firstLeadUpdateEq.mockResolvedValue({
-      data: {
-        ...makeUpdatedLead(),
-        digital_footprint: {
-          fetched_at: "2026-05-18T00:00:00Z",
-          final_url: "https://cafe.example.com",
-          contact_emails: ["hola@cafe.example.com"],
-          inferred_state: {
-            has_reservations: { value: false, confidence: 0.2, via: [] },
-            has_delivery: { value: true, confidence: 0.95, via: ["pedidosya"] },
-            has_online_catalog: { value: false, confidence: 0.2, via: [] },
-            has_ecommerce: { value: false, confidence: 0.2, via: [] },
-            has_pos: { value: false, confidence: 0.2, via: [] },
-            has_chat_support: { value: false, confidence: 0.2, via: [] },
-            digitalization_level: "basic",
-            computed_at: "2026-05-18T00:00:00Z",
-          },
-        },
-      },
-      error: null,
-    });
+    let consolidatedUpdatePayload: Record<string, unknown> | undefined;
 
     mockFrom.mockImplementation((table: string) => {
       if (table === "leads") {
@@ -190,20 +175,13 @@ describe("updateLeadEnrichment change detection", () => {
             }),
           }),
           update: (payload: Record<string, unknown>) => {
-            if ("contact_reliability_score" in payload) {
-              return {
-                eq: () => ({
-                  select: () => ({
-                    single: firstLeadUpdateEq,
-                  }),
-                }),
-              };
-            }
             if ("prospect_score" in payload) {
+              // updateLeadScore call
               return { eq: scoreUpdateEq };
             }
-            diffPersistPayload = payload;
-            return { eq: diffPersistEq };
+            // Consolidated UPDATE (footprint + tags + reliability + ...)
+            consolidatedUpdatePayload = payload;
+            return { eq: consolidatedUpdateEq };
           },
         };
       }
@@ -241,10 +219,10 @@ describe("updateLeadEnrichment change detection", () => {
     expect(mockScoreLead).toHaveBeenCalled();
     expect(scoreUpdateEq).toHaveBeenCalledWith("id", "lead-1");
     expect(buyerScoreUpsert).toHaveBeenCalled();
-    expect(diffPersistEq).toHaveBeenCalledWith("id", "lead-1");
+    expect(consolidatedUpdateEq).toHaveBeenCalledWith("id", "lead-1");
 
-    expect((diffPersistPayload?.tags as string[] | undefined) ?? []).toContain("state-changed-significant");
-    expect((diffPersistPayload?.digital_footprint as Record<string, unknown>).last_change_diff).toEqual(
+    expect((consolidatedUpdatePayload?.tags as string[] | undefined) ?? []).toContain("state-changed-significant");
+    expect((consolidatedUpdatePayload?.digital_footprint as Record<string, unknown>).last_change_diff).toEqual(
       expect.objectContaining({
         lead_id: "lead-1",
         changes: expect.arrayContaining([

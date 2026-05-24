@@ -1,8 +1,11 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { getDb } from "../db/client.js";
-import { requireAuth, getAuthUser } from "../auth/middleware.js";
+import { requireAuth, requireAdmin, getAuthUser, type AuthUser } from "../auth/middleware.js";
 import { createLLMProvider } from "../llm/factory.js";
+import { countLeadsByFilterSelection, type EnrichmentLeadFilterSelection } from "../../../src/storage/leads.js";
+import { startFilterEnrichmentJob } from "../../../src/cli/commands/enrich.js";
+import { summarizeFeedbackRows, computeFeedbackAdjustedConfidence } from "../../../src/modules/feedback/summary.js";
 
 const permissiveUuid = z
   .string()
@@ -13,6 +16,106 @@ const permissiveUuid = z
 
 const CONTACT_TIERS = ["A", "B", "C", "D", "X"] as const;
 type ContactTier = (typeof CONTACT_TIERS)[number];
+
+const FILTER_ENRICH_LIMIT = 250;
+
+const enrichCollectionSchema = z.object({
+  contact_tier: z.enum(CONTACT_TIERS).optional(),
+  prospect_score_gte: z.number().int().min(0).max(100).optional(),
+  niche: z.string().trim().min(1).optional(),
+  source: z.string().trim().min(1).optional(),
+  primary_offer: z.string().trim().min(1).optional(),
+  q: z.string().trim().min(1).optional(),
+  with_heuristic: z.boolean().default(true),
+  concurrency: z.number().int().min(1).max(8).default(4),
+});
+
+const leadFeedbackCreateSchema = z.object({
+  field_key: z.string().trim().min(1).max(80),
+  field_value: z.unknown().optional(),
+  verdict: z.enum(["good", "bad"]),
+  comment: z.string().trim().min(1).max(1000).optional(),
+});
+
+const leadFeedbackListQuerySchema = z.object({
+  field_key: z.string().trim().min(1).max(80).optional(),
+  include_rejected: z.enum(["true", "false"]).optional(),
+  limit: z
+    .string()
+    .optional()
+    .transform((v) => Math.min(Number(v ?? "50"), 200))
+    .pipe(z.number().int().min(1).max(200)),
+});
+
+const leadFeedbackSummaryQuerySchema = z.object({
+  include_rejected: z.enum(["true", "false"]).optional(),
+});
+
+function hasRelevantEnrichmentFilter(filters: EnrichmentLeadFilterSelection): boolean {
+  return Boolean(
+    filters.contact_tier ||
+    filters.prospect_score_gte != null ||
+    filters.niche ||
+    filters.source ||
+    filters.primary_offer ||
+    filters.q
+  );
+}
+
+async function loadAccessibleLeadForFeedback(
+  authUser: AuthUser,
+  leadId: string,
+  includeRejected: boolean
+): Promise<JsonRecord | null> {
+  const db = getDb();
+
+  let lead: Record<string, unknown> | null = null;
+  if (includeRejected && authUser.role === "admin") {
+    const { data, error } = await db.from("leads").select("*").eq("id", leadId).single();
+    if (!error && data) lead = data as Record<string, unknown>;
+  } else {
+    const { data, error } = await db.from("lead_dashboard").select("*").eq("id", leadId).single();
+    if (!error && data) lead = data as Record<string, unknown>;
+  }
+
+  if (!lead) return null;
+
+  const normalizedLead = normalizeLeadRow(lead as JsonRecord);
+  if (authUser.role === "cm") {
+    if (!authUser.lead_filter || !passesLeadFilter(normalizedLead, authUser.lead_filter)) {
+      return null;
+    }
+  }
+
+  return normalizedLead;
+}
+
+async function writeLeadFeedbackAuditLog(
+  request: FastifyRequest,
+  leadId: string,
+  feedbackId: string,
+  payload: { field_key: string; verdict: "good" | "bad"; comment: string | null; field_value: unknown }
+): Promise<void> {
+  const db = getDb();
+  const actor = getAuthUser(request);
+  await db.from("audit_log").insert({
+    actor_user_id: actor.id,
+    actor_role: actor.role,
+    action: "lead.feedback.create",
+    target_type: "lead",
+    target_id: leadId,
+    diff: {
+      feedback_id: feedbackId,
+      field_key: payload.field_key,
+      verdict: payload.verdict,
+      comment: payload.comment,
+      field_value: payload.field_value ?? null,
+      created_at: new Date().toISOString(),
+    },
+    ip_address: request.ip ?? null,
+    user_agent: request.headers["user-agent"] ?? null,
+  });
+}
 
 const listQuerySchema = z.object({
   contact_tier: z
@@ -661,6 +764,12 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
         : null;
 
       if (resolvedCursor) {
+        if (
+          !/^[0-9a-f-]{36}$/i.test(resolvedCursor.id) ||
+          !/^\d{4}-\d{2}-\d{2}T/.test(resolvedCursor.created_at)
+        ) {
+          return reply.code(400).send({ error: "Invalid cursor" });
+        }
         if (sort_by === "prospect_score") {
           const score = resolvedCursor.prospect_score ?? -1;
           const comparator = sort_direction === "asc" ? "gt" : "lt";
@@ -732,6 +841,256 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
         next_cursor: nextCursor,
         total: maxVisible === null ? count ?? page.length : Math.min(count ?? page.length, maxVisible),
       });
+    }
+  );
+
+  app.post(
+    "/admin/enrichment/filter-jobs",
+    { preHandler: requireAdmin },
+    async (request, reply) => {
+      const parseResult = enrichCollectionSchema.safeParse(request.body);
+      if (!parseResult.success) {
+        return reply.status(400).send({
+          error: "Validation error",
+          error_code: "validation_error",
+          details: parseResult.error.flatten().fieldErrors,
+        });
+      }
+
+      const { contact_tier, prospect_score_gte, niche, source, primary_offer, q } = parseResult.data;
+      const filters: EnrichmentLeadFilterSelection = {
+        ...(contact_tier !== undefined && { contact_tier }),
+        ...(prospect_score_gte !== undefined && { prospect_score_gte }),
+        ...(niche !== undefined && { niche }),
+        ...(source !== undefined && { source }),
+        ...(primary_offer !== undefined && { primary_offer }),
+        ...(q !== undefined && { q }),
+      };
+
+      if (!hasRelevantEnrichmentFilter(filters)) {
+        return reply.status(400).send({
+          error: "At least one approved filter is required",
+          error_code: "filters_required",
+        });
+      }
+
+      const leadCount = await countLeadsByFilterSelection(filters);
+      if (leadCount === 0) {
+        return reply.status(400).send({
+          error: "No leads match the selected filters",
+          error_code: "empty_collection",
+        });
+      }
+
+      if (leadCount > FILTER_ENRICH_LIMIT) {
+        return reply.status(400).send({
+          error: `Filtered collection exceeds ${FILTER_ENRICH_LIMIT} leads`,
+          error_code: "lead_limit_exceeded",
+          details: { lead_count: leadCount, limit: FILTER_ENRICH_LIMIT },
+        });
+      }
+
+      const job = await startFilterEnrichmentJob({
+        filters,
+        withHeuristic: parseResult.data.with_heuristic,
+        concurrency: parseResult.data.concurrency,
+      });
+
+      return reply.status(202).send({
+        data: {
+          run_id: job.runId,
+          lead_count: leadCount,
+          filters,
+          with_heuristic: parseResult.data.with_heuristic,
+          concurrency: parseResult.data.concurrency,
+        },
+      });
+    }
+  );
+
+  app.get(
+    "/leads/:id/feedback",
+    { preHandler: requireAuth },
+    async (request, reply) => {
+      const authUser = getAuthUser(request);
+      const { id } = request.params as { id: string };
+
+      if (!permissiveUuid.safeParse(id).success) {
+        return reply.status(404).send({ error: "Lead not found", error_code: "not_found" });
+      }
+
+      const parseResult = leadFeedbackListQuerySchema.safeParse(request.query);
+      if (!parseResult.success) {
+        return reply.status(400).send({
+          error: "Invalid query",
+          error_code: "invalid_query",
+          details: parseResult.error.flatten().fieldErrors,
+        });
+      }
+
+      const includeRejected = authUser.role === "admin" && parseResult.data.include_rejected === "true";
+      const lead = await loadAccessibleLeadForFeedback(authUser, id, includeRejected);
+      if (!lead) {
+        return reply.status(404).send({ error: "Lead not found", error_code: "not_found" });
+      }
+
+      let query = getDb()
+        .from("lead_feedback")
+        .select("*", { count: "exact" })
+        .eq("lead_id", id);
+
+      if (parseResult.data.field_key) {
+        query = query.eq("field_key", parseResult.data.field_key);
+      }
+
+      const { data, error, count } = await query
+        .order("created_at", { ascending: false })
+        .limit(parseResult.data.limit);
+      if (error) {
+        request.log.error({ error, leadId: id }, "lead feedback query error");
+        return reply.status(500).send({ error: "Database error", error_code: "db_error" });
+      }
+
+      return reply.status(200).send({ data: data ?? [], total: count ?? 0, lead_id: lead["id"] });
+    }
+  );
+
+  app.get(
+    "/leads/:id/feedback-summary",
+    { preHandler: requireAuth },
+    async (request, reply) => {
+      const authUser = getAuthUser(request);
+      const { id } = request.params as { id: string };
+
+      if (!permissiveUuid.safeParse(id).success) {
+        return reply.status(404).send({ error: "Lead not found", error_code: "not_found" });
+      }
+
+      const parseResult = leadFeedbackSummaryQuerySchema.safeParse(request.query);
+      if (!parseResult.success) {
+        return reply.status(400).send({
+          error: "Invalid query",
+          error_code: "invalid_query",
+          details: parseResult.error.flatten().fieldErrors,
+        });
+      }
+
+      const includeRejected = authUser.role === "admin" && parseResult.data.include_rejected === "true";
+      const lead = await loadAccessibleLeadForFeedback(authUser, id, includeRejected);
+      if (!lead) {
+        return reply.status(404).send({ error: "Lead not found", error_code: "not_found" });
+      }
+
+      const { data, error } = await getDb()
+        .from("lead_feedback")
+        .select("*")
+        .eq("lead_id", id)
+        .order("created_at", { ascending: false })
+        .limit(1000);
+
+      if (error) {
+        request.log.error({ error, leadId: id }, "lead feedback summary query error");
+        return reply.status(500).send({ error: "Database error", error_code: "db_error" });
+      }
+
+      return reply.status(200).send({
+        data: summarizeFeedbackRows((data ?? []) as Array<Record<string, unknown>>),
+        lead_id: lead["id"],
+      });
+    }
+  );
+
+  // GET /api/v1/leads/:id/feedback-adjusted-confidence
+  app.get(
+    "/leads/:id/feedback-adjusted-confidence",
+    { preHandler: requireAuth },
+    async (request, reply) => {
+      const authUser = getAuthUser(request);
+      const { id } = request.params as { id: string };
+
+      if (!permissiveUuid.safeParse(id).success) {
+        return reply.status(404).send({ error: "Lead not found", error_code: "not_found" });
+      }
+
+      const includeRejected = authUser.role === "admin" && (request.query as { include_rejected?: string }).include_rejected === "true";
+      const lead = await loadAccessibleLeadForFeedback(authUser, id, includeRejected);
+      if (!lead) {
+        return reply.status(404).send({ error: "Lead not found", error_code: "not_found" });
+      }
+
+      const { data, error } = await getDb()
+        .from("lead_feedback")
+        .select("*")
+        .eq("lead_id", id)
+        .order("created_at", { ascending: false })
+        .limit(1000);
+
+      if (error) {
+        request.log.error({ error, leadId: id }, "lead feedback adjusted confidence query error");
+        return reply.status(500).send({ error: "Database error", error_code: "db_error" });
+      }
+
+      const summary = summarizeFeedbackRows((data ?? []) as Array<Record<string, unknown>>);
+      const adjusted = computeFeedbackAdjustedConfidence({
+        contactReliabilityScore: asNullableNumber(lead["contact_reliability_score"]),
+        dataConfidenceScore: asNullableNumber(lead["data_confidence_score"]),
+        summary,
+      });
+
+      return reply.status(200).send({ data: adjusted, lead_id: lead["id"] });
+    }
+  );
+
+  app.post(
+    "/leads/:id/feedback",
+    { preHandler: requireAuth },
+    async (request, reply) => {
+      const authUser = getAuthUser(request);
+      const { id } = request.params as { id: string };
+
+      if (!permissiveUuid.safeParse(id).success) {
+        return reply.status(404).send({ error: "Lead not found", error_code: "not_found" });
+      }
+
+      const parseResult = leadFeedbackCreateSchema.safeParse(request.body);
+      if (!parseResult.success) {
+        return reply.status(400).send({
+          error: "Validation error",
+          error_code: "validation_error",
+          details: parseResult.error.flatten().fieldErrors,
+        });
+      }
+
+      const includeRejected = authUser.role === "admin" && (request.query as { include_rejected?: string }).include_rejected === "true";
+      const lead = await loadAccessibleLeadForFeedback(authUser, id, includeRejected);
+      if (!lead) {
+        return reply.status(404).send({ error: "Lead not found", error_code: "not_found" });
+      }
+
+      const payload = {
+        lead_id: id,
+        field_key: parseResult.data.field_key,
+        field_value: parseResult.data.field_value ?? null,
+        verdict: parseResult.data.verdict,
+        comment: parseResult.data.comment ?? null,
+        actor_user_id: authUser.id,
+        actor_role: authUser.role,
+      };
+
+      const { data, error } = await getDb().from("lead_feedback").insert(payload).select("*").single();
+      if (error || !data) {
+        request.log.error({ error, leadId: id }, "lead feedback insert error");
+        return reply.status(500).send({ error: "Database error", error_code: "db_error" });
+      }
+
+      await writeLeadFeedbackAuditLog(request, id, String((data as Record<string, unknown>)["id"]), {
+        field_key: parseResult.data.field_key,
+        verdict: parseResult.data.verdict,
+        comment: parseResult.data.comment ?? null,
+        field_value: parseResult.data.field_value,
+      });
+
+      return reply.status(201).send({ data, lead_id: lead["id"] });
     }
   );
 
@@ -949,22 +1308,26 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
             fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
           errorMessage = `primary:${primaryError}; fallback:${fallbackMessage}`;
           request.log.error({ fallbackErr }, "Template lead brief fallback error");
-          db.from("llm_usage_log").insert({
-            provider: provider.name,
-            model: provider.model,
-            operation: "lead_brief",
-            lead_id: id,
-            user_id: authUser.id,
-            prompt_tokens: 0,
-            completion_tokens: 0,
-            total_tokens: 0,
-            cost_usd: 0,
-            duration_ms: Date.now() - startedAt,
-            success,
-            error: errorMessage,
-          }).then(({ error: logErr }) => {
-            if (logErr) request.log.warn({ logErr }, "llm_usage_log insert failed");
-          });
+          Promise.resolve(
+            db.from("llm_usage_log").insert({
+              provider: provider.name,
+              model: provider.model,
+              operation: "lead_brief",
+              lead_id: id,
+              user_id: authUser.id,
+              prompt_tokens: 0,
+              completion_tokens: 0,
+              total_tokens: 0,
+              cost_usd: 0,
+              duration_ms: Date.now() - startedAt,
+              success,
+              error: errorMessage,
+            })
+          )
+            .then(({ error: logErr }) => {
+              if (logErr) request.log.warn({ logErr }, "llm_usage_log insert failed");
+            })
+            .catch((err: unknown) => request.log.warn({ err }, "audit log insert threw"));
           return reply.status(502).send({
             error: "Assistant brief unavailable",
             error_code: "assistant_unavailable",
@@ -972,22 +1335,26 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
         }
       }
 
-      db.from("llm_usage_log").insert({
-        provider: result.provider ?? provider.name,
-        model: result.model ?? provider.model,
-        operation: "lead_brief",
-        lead_id: id,
-        user_id: authUser.id,
-        prompt_tokens: result.tokens_in ?? 0,
-        completion_tokens: result.tokens_out ?? 0,
-        total_tokens: (result.tokens_in ?? 0) + (result.tokens_out ?? 0),
-        cost_usd: result.cost_usd_estimated ?? 0,
-        duration_ms: Date.now() - startedAt,
-        success,
-        error: errorMessage,
-      }).then(({ error: logErr }) => {
-        if (logErr) request.log.warn({ logErr }, "llm_usage_log insert failed");
-      });
+      Promise.resolve(
+        db.from("llm_usage_log").insert({
+          provider: result.provider ?? provider.name,
+          model: result.model ?? provider.model,
+          operation: "lead_brief",
+          lead_id: id,
+          user_id: authUser.id,
+          prompt_tokens: result.tokens_in ?? 0,
+          completion_tokens: result.tokens_out ?? 0,
+          total_tokens: (result.tokens_in ?? 0) + (result.tokens_out ?? 0),
+          cost_usd: result.cost_usd_estimated ?? 0,
+          duration_ms: Date.now() - startedAt,
+          success,
+          error: errorMessage,
+        })
+      )
+        .then(({ error: logErr }) => {
+          if (logErr) request.log.warn({ logErr }, "llm_usage_log insert failed");
+        })
+        .catch((err: unknown) => request.log.warn({ err }, "audit log insert threw"));
 
       return reply.status(200).send({ data: result });
     }

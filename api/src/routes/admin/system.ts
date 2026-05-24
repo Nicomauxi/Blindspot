@@ -1,5 +1,8 @@
 import { execFile } from "node:child_process";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import type { FastifyInstance, FastifyRequest } from "fastify";
+import { z } from "zod";
 import { getDb } from "../../db/client.js";
 import { getAuthUser, requireAdmin } from "../../auth/middleware.js";
 import { buildBackupOverview, getDefaultBackupSchedulerSnapshot } from "../../modules/backups/service.js";
@@ -88,7 +91,7 @@ function normalizePm2Process(entry: Pm2Process | null | undefined): ProcessSnaps
   };
 }
 
-function detectProcess(processes: Pm2Process[], name: "core" | "api") {
+function detectProcess(processes: Pm2Process[], name: string) {
   return processes.find((entry) => entry.name === name) ?? null;
 }
 
@@ -277,8 +280,8 @@ export async function systemRoutes(app: FastifyInstance): Promise<void> {
     if (process.env["NODE_ENV"] === "production") {
       try {
         const processes = await listPm2Processes();
-        coreProcess = normalizePm2Process(detectProcess(processes, "core"));
-        apiProcess = normalizePm2Process(detectProcess(processes, "api"));
+        coreProcess = normalizePm2Process(detectProcess(processes, "blindspot-core"));
+        apiProcess = normalizePm2Process(detectProcess(processes, "blindspot-api"));
       } catch {
         coreProcess = {
           running: false,
@@ -360,7 +363,6 @@ export async function systemRoutes(app: FastifyInstance): Promise<void> {
           webhook: {
             configured: Boolean(config?.notify_webhook_url),
             events: config?.notify_webhook_events ?? [],
-            url: config?.notify_webhook_url ?? null,
           },
         },
         backups: backupOverview
@@ -447,4 +449,43 @@ export async function systemRoutes(app: FastifyInstance): Promise<void> {
 
   app.post("/admin/system/restart-core", { preHandler: requireAdmin }, restartProcess("core"));
   app.post("/admin/system/restart-api", { preHandler: requireAdmin }, restartProcess("api"));
+
+  app.post("/admin/system/restart", { preHandler: requireAdmin }, async (request, reply) => {
+    const schema = z.object({ target: z.enum(["all", "core", "api"]).default("all") });
+    const parsed = schema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ error: "Invalid body", issues: parsed.error.flatten() });
+    }
+    const { target } = parsed.data;
+    if (target === "all") {
+      const coreHandler = restartProcess("core");
+      const apiHandler = restartProcess("api");
+      await coreHandler(request, reply);
+      await apiHandler(request, reply);
+      return;
+    }
+    return restartProcess(target)(request, reply);
+  });
+
+  app.post("/admin/system/reset-db", { preHandler: requireAdmin }, async (request, reply) => {
+    const schema = z.object({ confirm: z.literal(true) });
+    const parsed = schema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.status(400).send({ error: "Must send { confirm: true } to execute reset." });
+    }
+
+    const currentDir = typeof __dirname !== "undefined" ? __dirname : path.dirname(fileURLToPath(import.meta.url));
+    const scriptPath = path.resolve(currentDir, "../../../../reset-db.sh");
+
+    return new Promise<void>((resolve) => {
+      execFile("bash", [scriptPath], { timeout: 120_000 }, (error, stdout, stderr) => {
+        if (error) {
+          void reply.status(500).send({ error: "reset-db failed", details: stderr || error.message });
+        } else {
+          void reply.status(200).send({ ok: true, output: stdout.slice(-500) });
+        }
+        resolve();
+      });
+    });
+  });
 }

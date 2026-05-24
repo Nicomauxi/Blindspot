@@ -68,7 +68,7 @@ export async function statsRoutes(app: FastifyInstance): Promise<void> {
   app.get("/stats/segments", { preHandler: requireAuth }, async (request, reply) => {
     const authUser = getAuthUser(request);
     const db = getDb();
-    const view = authUser.role === "cm" ? "lead_dashboard" : "lead_dashboard";
+    const view = authUser.role === "cm" ? "lead_dashboard" : "leads";
 
     const [nicheRes, tierRes, sourceRes] = await Promise.all([
       db.from(view).select("niche, prospect_score, contact_tier"),

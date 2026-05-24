@@ -1,0 +1,135 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - complementary [ref=e3]:
+      - generic [ref=e4]:
+        - link "Blindspot Panel operativo" [ref=e5] [cursor=pointer]:
+          - /url: /admin
+          - generic [ref=e6]: Blindspot
+          - paragraph [ref=e7]: Panel operativo
+        - paragraph [ref=e8]: admin@blindspot.local
+        - paragraph [ref=e9]: Administrador
+      - generic [ref=e11]:
+        - generic [ref=e12]: Buscar sección
+        - generic [ref=e13]:
+          - img [ref=e14]
+          - textbox "Buscar sección" [ref=e17]:
+            - /placeholder: Buscar sección o acción
+      - navigation [ref=e18]:
+        - generic [ref=e19]:
+          - button "Operación 4 opciónes" [ref=e20] [cursor=pointer]:
+            - generic [ref=e21]:
+              - img [ref=e23]
+              - generic [ref=e28]:
+                - paragraph [ref=e29]: Operación
+                - paragraph [ref=e30]: 4 opciónes
+            - img [ref=e31]
+          - generic [ref=e33]:
+            - link "Inicio Prioridades, métricas y colas de trabajo" [ref=e34] [cursor=pointer]:
+              - /url: /admin
+              - generic [ref=e35]:
+                - img [ref=e37]
+                - generic [ref=e42]:
+                  - generic [ref=e43]: Inicio
+                  - paragraph [ref=e44]: Prioridades, métricas y colas de trabajo
+            - link "Leads Explorar, priorizar y entender oportunidades" [ref=e45] [cursor=pointer]:
+              - /url: /admin/leads
+              - generic [ref=e46]:
+                - img [ref=e48]
+                - generic [ref=e50]:
+                  - generic [ref=e51]: Leads
+                  - paragraph [ref=e52]: Explorar, priorizar y entender oportunidades
+            - link "Discovery Jobs de discovery y entrada de nuevos leads" [ref=e53] [cursor=pointer]:
+              - /url: /admin/discovery
+              - generic [ref=e54]:
+                - img [ref=e56]
+                - generic [ref=e59]:
+                  - generic [ref=e60]: Discovery
+                  - paragraph [ref=e61]: Jobs de discovery y entrada de nuevos leads
+            - link "Pipeline Runs, cron y webhooks del pipeline" [ref=e62] [cursor=pointer]:
+              - /url: /admin/pipeline
+              - generic [ref=e63]:
+                - img [ref=e65]
+                - generic [ref=e69]:
+                  - generic [ref=e70]: Pipeline
+                  - paragraph [ref=e71]: Runs, cron y webhooks del pipeline
+        - button "Comercial 2 opciónes" [ref=e73] [cursor=pointer]:
+          - generic [ref=e74]:
+            - img [ref=e76]
+            - generic [ref=e79]:
+              - paragraph [ref=e80]: Comercial
+              - paragraph [ref=e81]: 2 opciónes
+          - img [ref=e82]
+        - button "Plataforma 6 opciónes" [ref=e85] [cursor=pointer]:
+          - generic [ref=e86]:
+            - img [ref=e88]
+            - generic [ref=e89]:
+              - paragraph [ref=e90]: Plataforma
+              - paragraph [ref=e91]: 6 opciónes
+          - img [ref=e92]
+        - button "Ayuda 1 opción" [ref=e95] [cursor=pointer]:
+          - generic [ref=e96]:
+            - img [ref=e98]
+            - generic [ref=e101]:
+              - paragraph [ref=e102]: Ayuda
+              - paragraph [ref=e103]: 1 opción
+          - img [ref=e104]
+      - button "Cerrar sesión" [ref=e107] [cursor=pointer]
+    - main [ref=e108]:
+      - generic [ref=e109]:
+        - generic [ref=e110]:
+          - heading "Pipeline Manager" [level=1] [ref=e111]
+          - paragraph [ref=e112]: Configura la corrida diaria, dispara runs manuales y seguí el estado real de la última ejecución lanzada.
+        - generic [ref=e113]:
+          - generic [ref=e114]:
+            - heading "Configuración" [level=2] [ref=e115]
+            - paragraph [ref=e116]: "La agenda se simplifica a una hora fija diaria. Al guardar, siempre se normaliza a cron diario `0 HH * * *`."
+          - generic [ref=e117]:
+            - generic [ref=e118]:
+              - checkbox "Pipeline habilitado" [ref=e119]
+              - text: Pipeline habilitado
+            - generic [ref=e120]:
+              - generic [ref=e121]:
+                - generic [ref=e122]: Hora diaria
+                - textbox [ref=e123]: 03:00
+              - generic [ref=e124]: Corre todos los días a las 03:00 (hora del servidor).
+            - button "Guardar configuración" [ref=e126] [cursor=pointer]
+        - generic [ref=e127]:
+          - generic [ref=e128]:
+            - heading "Ejecución manual" [level=2] [ref=e129]
+            - paragraph [ref=e130]: "Dispara el pipeline completo ahora: refresh, discovery, enriquecimiento y scoring sobre todos los leads activos."
+          - button "Run completo Persiste cambios, actualiza resultados y deja el dashboard operativo." [ref=e132] [cursor=pointer]:
+            - generic [ref=e133]: Run completo
+            - paragraph [ref=e134]: Persiste cambios, actualiza resultados y deja el dashboard operativo.
+        - generic [ref=e135]:
+          - generic [ref=e136]:
+            - heading "Configuración de jobs" [level=2] [ref=e137]
+            - paragraph [ref=e138]: Máximo de discovery jobs procesados en cada ciclo del pipeline.
+          - generic [ref=e139]:
+            - generic [ref=e140]:
+              - generic [ref=e141]: Max jobs por ciclo
+              - spinbutton [ref=e142]
+            - button "Guardar" [ref=e144] [cursor=pointer]
+        - generic [ref=e145]:
+          - generic [ref=e146]:
+            - heading "Webhook de notificaciones" [level=2] [ref=e147]
+            - paragraph [ref=e148]: Configuración aparte del control de runs para no mezclar agenda, ejecución y entrega de eventos.
+          - generic [ref=e149]:
+            - generic [ref=e150]:
+              - generic [ref=e151]: URL del webhook
+              - textbox "https://hooks.slack.com/services/..." [ref=e152]
+            - generic [ref=e153]:
+              - generic [ref=e154]: Secreto HMAC
+              - textbox [ref=e155]
+            - generic [ref=e156]:
+              - generic [ref=e157]: Eventos
+              - generic [ref=e158]:
+                - generic [ref=e159]:
+                  - checkbox "run_completed" [ref=e160]
+                  - text: run_completed
+                - generic [ref=e161]:
+                  - checkbox "new_hot_leads" [ref=e162]
+                  - text: new_hot_leads
+            - button "Guardar webhook" [ref=e164] [cursor=pointer]
+    - button "Cambiar a modo claro" [ref=e165] [cursor=pointer]:
+      - img [ref=e166]
+  - alert [ref=e169]

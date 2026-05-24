@@ -167,13 +167,46 @@ function extractSources(source: string | null, corroboratingSources: unknown): s
   return [...values];
 }
 
+function parseEwkbHexPoint(hex: string): { lat: number; lng: number } | null {
+  if (hex.length < 50) return null;
+  // EWKB Point with SRID (little-endian):
+  // byte 0      = endianness (1 = LE, PostGIS default)
+  // bytes 1-4   = geometry type (with SRID flag)
+  // bytes 5-8   = SRID
+  // bytes 9-16  = X (longitude) as double
+  // bytes 17-24 = Y (latitude) as double
+  try {
+    const buf = Buffer.from(hex, "hex");
+    if (buf.length < 25) return null;
+    const byteOrder = buf.readUInt8(0);
+    if (byteOrder !== 1) return null;
+    const lng = buf.readDoubleLE(9);
+    const lat = buf.readDoubleLE(17);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+    return { lat, lng };
+  } catch {
+    return null;
+  }
+}
+
 function extractGpsPoints(gps: unknown): Array<{ lat: number; lng: number }> {
-  if (!gps || typeof gps !== "object") return [];
-  const maybe = gps as { lat?: unknown; lng?: unknown; latitude?: unknown; longitude?: unknown };
-  const lat = asNumber(maybe.lat ?? maybe.latitude);
-  const lng = asNumber(maybe.lng ?? maybe.longitude);
-  if (!Number.isFinite(lat) || !Number.isFinite(lng) || lat === 0 || lng === 0) return [];
-  return [{ lat, lng }];
+  // PostGIS geography column comes as EWKB hex string via PostgREST.
+  if (typeof gps === "string") {
+    const point = parseEwkbHexPoint(gps);
+    if (point && Number.isFinite(point.lat) && Number.isFinite(point.lng) && point.lat !== 0 && point.lng !== 0) {
+      return [point];
+    }
+    return [];
+  }
+  // Fallback for JSON-shape objects (legacy callers / tests).
+  if (gps && typeof gps === "object") {
+    const maybe = gps as { lat?: unknown; lng?: unknown; latitude?: unknown; longitude?: unknown };
+    const lat = asNumber(maybe.lat ?? maybe.latitude);
+    const lng = asNumber(maybe.lng ?? maybe.longitude);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng) || lat === 0 || lng === 0) return [];
+    return [{ lat, lng }];
+  }
+  return [];
 }
 
 function percentile(value: number, sortedValues: number[]): number {

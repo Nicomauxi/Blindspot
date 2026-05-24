@@ -7,7 +7,12 @@ import {
   buildLeadDensityRows,
   estimateGooglePlacesBatchCost,
   supportedDiscoverySources,
+  type LeadInsightRow,
+  type DiscoveryJobInsightRow,
+  type GooglePlacesBudgetRow,
+  type CompletedRunInsightRow,
 } from "./discovery-insights.js";
+import { bulkInsertDiscoveryJobs } from "../../../src/storage/discovery-jobs.js";
 
 const permissiveUuid = z
   .string()
@@ -61,6 +66,7 @@ const createBatchSchema = z
         key: z.string().optional(),
       })
       .optional(),
+    enrich_after_discovery: z.boolean().default(true),
   })
   .superRefine((value, ctx) => {
     const includesGoogle = value.sources.includes("google_places");
@@ -108,6 +114,8 @@ const recommendationsQuerySchema = z.object({
 const batchActionSchema = z.object({
   action: z.enum(["pause", "resume", "cancel"]),
 });
+
+const VALID_JOB_STATUSES = ["queued", "running", "completed", "failed", "cancelled", "paused"];
 
 const JOB_STATUS_TRANSITIONS: Record<string, string> = {
   pause: "paused",
@@ -230,7 +238,10 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
     }
 
     if (status) {
-      query = query.in("status", status.split(",").map((entry) => entry.trim()));
+      const filtered = status.split(",").map((s) => s.trim()).filter((s) => VALID_JOB_STATUSES.includes(s));
+      if (filtered.length > 0) {
+        query = query.in("status", filtered);
+      }
     }
 
     if (cursor) {
@@ -308,8 +319,21 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
     return reply.status(201).send({ data: job });
   });
 
-  app.patch("/discovery/jobs/:id", { preHandler: requireAdmin }, async (request, reply) => {
+  app.patch("/discovery/jobs/:id", {
+    preHandler: requireAdmin,
+    schema: {
+      params: {
+        type: "object",
+        properties: { id: { type: "string", minLength: 1 } },
+        required: ["id"],
+        additionalProperties: false,
+      },
+    },
+  }, async (request, reply) => {
     const { id } = request.params as { id: string };
+    if (!permissiveUuid.safeParse(id).success) {
+      return reply.status(404).send({ error: "Not found", error_code: "not_found" });
+    }
     const parseResult = patchJobSchema.safeParse(request.body);
     if (!parseResult.success) {
       return reply.status(400).send({
@@ -382,6 +406,7 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
         cpu_budget: body.cpu_budget,
         google_places: body.google_places ?? null,
         recommendation_origin: body.recommendation_origin ?? { type: "manual" },
+        enrich_after_discovery: body.enrich_after_discovery,
         estimated_cost_usd: Number(estimatedCostUsd.toFixed(2)),
         actual_cost_usd: 0,
         cost_cap_usd: costCapUsd,
@@ -407,6 +432,8 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
       status: "queued",
       triggered_by: body.recommendation_origin?.type === "manual" || !body.recommendation_origin ? "manual" : "gap_analysis",
       user_id: authUser.id,
+      enrich_after_discovery: body.enrich_after_discovery,
+      enrich_status: body.enrich_after_discovery ? "queued" : "skipped",
       estimated_cost_usd: source === "google_places" ? Number(estimateGooglePlacesBatchCost(body.max_results).toFixed(2)) : 0,
       actual_cost_usd: 0,
       cost_cap_usd: source === "google_places" ? body.google_places?.cost_cap_usd ?? null : null,
@@ -448,7 +475,10 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
       .limit(limit + 1);
 
     if (status) {
-      query = query.in("status", status.split(",").map((entry) => entry.trim()));
+      const filtered = status.split(",").map((s) => s.trim()).filter((s) => VALID_JOB_STATUSES.includes(s));
+      if (filtered.length > 0) {
+        query = query.in("status", filtered);
+      }
     }
 
     if (cursor) {
@@ -521,8 +551,21 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
     });
   });
 
-  app.patch("/discovery/job-batches/:id", { preHandler: requireAdmin }, async (request, reply) => {
+  app.patch("/discovery/job-batches/:id", {
+    preHandler: requireAdmin,
+    schema: {
+      params: {
+        type: "object",
+        properties: { id: { type: "string", minLength: 1 } },
+        required: ["id"],
+        additionalProperties: false,
+      },
+    },
+  }, async (request, reply) => {
     const { id } = request.params as { id: string };
+    if (!permissiveUuid.safeParse(id).success) {
+      return reply.status(404).send({ error: "Not found", error_code: "not_found" });
+    }
     const parseResult = batchActionSchema.safeParse(request.body);
     if (!parseResult.success) {
       return reply.status(400).send({
@@ -556,7 +599,12 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
       return reply.status(500).send({ error: "Database error", error_code: "db_error" });
     }
 
-    await recomputeBatchAggregate(db, id);
+    try {
+      await recomputeBatchAggregate(db, id);
+    } catch (aggErr) {
+      request.log.error({ error: aggErr }, "discovery batch aggregate recompute failed");
+      return reply.status(500).send({ error: "Database error", error_code: "db_error" });
+    }
 
     const { data: updated } = await db
       .from("discovery_job_batches")
@@ -609,10 +657,10 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
     }
 
     const data = buildDiscoveryRecommendations({
-      leads: (leadsRes.data ?? []) as never,
-      discoveryJobs: (jobsRes.data ?? []) as never,
-      budget: (configRes.data as never) ?? null,
-      completedRuns: (runsRes.data ?? []) as never,
+      leads: (leadsRes.data ?? []) as unknown as LeadInsightRow[],
+      discoveryJobs: (jobsRes.data ?? []) as unknown as DiscoveryJobInsightRow[],
+      budget: (configRes.data as unknown as GooglePlacesBudgetRow | null) ?? null,
+      completedRuns: (runsRes.data ?? []) as unknown as CompletedRunInsightRow[],
       ...(sources ? { selectedSources: sources } : {}),
       ...(parsedQuery.data.location ? { location: parsedQuery.data.location } : {}),
       ...(parsedQuery.data.niche ? { niche: parsedQuery.data.niche } : {}),
@@ -644,7 +692,7 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
       return reply.status(500).send({ error: "Database error", error_code: "db_error" });
     }
 
-    const density = buildLeadDensityRows((leadsRes.data ?? []) as never, parsedQuery.data.location ?? null);
+    const density = buildLeadDensityRows((leadsRes.data ?? []) as unknown as LeadInsightRow[], parsedQuery.data.location ?? null);
     return reply.status(200).send({ data: { locations: density, exact_points: density.flatMap((row) => row.gps_points) } });
   });
 
@@ -656,6 +704,64 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
       headers: request.headers,
     });
     return reply.status(recommendations.statusCode).send(recommendations.json());
+  });
+
+  app.post("/discovery/jobs/bulk", { preHandler: requireAdmin }, async (request, reply) => {
+    const bulkJobSchema = z
+      .object({
+        source: sourceSchema,
+        location: z.string().min(1),
+        niche: z.string().min(1),
+        max_results: z.number().int().min(1).max(1000).default(200),
+        cost_cap_usd: z.number().positive().optional(),
+      })
+      .superRefine((value, ctx) => {
+        if (value.source === "google_places" && value.cost_cap_usd == null) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["cost_cap_usd"],
+            message: "Google Places jobs require cost_cap_usd",
+          });
+        }
+      });
+    const bulkSchema = z.object({
+      jobs: z.array(bulkJobSchema).min(1).max(200),
+    });
+
+    const parsed = bulkSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({
+        error: "Validation error",
+        error_code: "validation_error",
+        details: parsed.error.flatten().fieldErrors,
+      });
+    }
+
+    const jobDefs = parsed.data.jobs.map((j) => ({
+      source: j.source,
+      location: j.location,
+      niche: j.niche,
+      max_results: j.max_results,
+      cost_cap_usd: j.cost_cap_usd ?? null,
+      estimated_cost_usd: j.source === "google_places" ? estimateGooglePlacesBatchCost(j.max_results) : null,
+    }));
+
+    let rows;
+    try {
+      rows = await bulkInsertDiscoveryJobs(jobDefs, "manual");
+    } catch (err) {
+      request.log.error({ err }, "bulk discovery job insert failed");
+      return reply.status(500).send({ error: "Database error", error_code: "db_error" });
+    }
+
+    const total_estimated_cost_usd = jobDefs.reduce(
+      (sum, j) => sum + (j.estimated_cost_usd ?? 0),
+      0
+    );
+
+    return reply.status(201).send({
+      data: { ids: rows.map((r) => r.id), count: rows.length, total_estimated_cost_usd },
+    });
   });
 
   app.get("/discovery/coverage", { preHandler: requireAdmin }, async (request, reply) => {

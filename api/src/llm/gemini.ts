@@ -1,3 +1,4 @@
+import { z } from "zod";
 import type {
   LeadAssistantBrief,
   LeadAssistantRequest,
@@ -12,6 +13,26 @@ import {
 
 const GEMINI_COST_PER_1K_IN = 0.000125;
 const GEMINI_COST_PER_1K_OUT = 0.000375;
+
+const geminiResponseSchema = z.object({
+  candidates: z
+    .array(
+      z.object({
+        content: z
+          .object({
+            parts: z.array(z.object({ text: z.string().optional() })).optional(),
+          })
+          .optional(),
+      }),
+    )
+    .optional(),
+  usageMetadata: z
+    .object({
+      promptTokenCount: z.number().optional(),
+      candidatesTokenCount: z.number().optional(),
+    })
+    .optional(),
+});
 
 function buildOfferPrompt(req: LLMRequest): string {
   return [
@@ -50,10 +71,12 @@ export class GeminiProvider implements LLMProvider {
       throw new Error(`Gemini API error: ${response.status}`);
     }
 
-    const data = (await response.json()) as {
-      candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
-      usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number };
-    };
+    const raw = await response.json();
+    const parsed = geminiResponseSchema.safeParse(raw);
+    if (!parsed.success) {
+      throw new Error(`Gemini API returned unexpected payload: ${parsed.error.message}`);
+    }
+    const data = parsed.data;
 
     const text = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ?? "";
     const tokensIn = data.usageMetadata?.promptTokenCount ?? 0;

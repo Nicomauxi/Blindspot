@@ -18,9 +18,16 @@ const BACKUP_SCHEDULER_STALE_MS = 5 * 60 * 1000;
 const BACKUP_SYNC_LIMIT = 500;
 const TIMESTAMP_PATTERN = /(\d{8}_\d{6})\.sql\.gz$/;
 
-function runScript(scriptPath: string, env: NodeJS.ProcessEnv): Promise<{ stdout: string; stderr: string }> {
+const BACKUP_TIMEOUT_MS  = 20 * 60 * 1000; // 20 min — generous for large DBs
+const RESTORE_TIMEOUT_MS = 30 * 60 * 1000; // 30 min
+
+function runScript(
+  scriptPath: string,
+  env: NodeJS.ProcessEnv,
+  timeoutMs = BACKUP_TIMEOUT_MS,
+): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
-    execFile("bash", [scriptPath], { env }, (error, stdout, stderr) => {
+    execFile("bash", [scriptPath], { env, timeout: timeoutMs, killSignal: "SIGTERM" }, (error, stdout, stderr) => {
       if (error) {
         reject(Object.assign(error, { stdout, stderr }));
         return;
@@ -125,6 +132,12 @@ export type BackupOverview = {
     retention: {
       manual: { count: number; max: number };
       scheduled: { count: number; max: number };
+    };
+    database_size_bytes: number | null;
+    stored_backup_size_bytes: number;
+    stored_backup_size_by_trigger: {
+      manual: number;
+      scheduled: number;
     };
     last_restore: BackupRestoreRow | null;
   };
@@ -354,7 +367,7 @@ export async function validateBackupDirectory(directory: string): Promise<Direct
 
 function parseBackupScriptOutput(stdout: string): { path: string; sizeBytes: number } {
   const match = stdout.match(/Backup OK:\s(.+)\s\((\d+) bytes\)/);
-  if (!match) {
+  if (!match || match[1] === undefined || match[2] === undefined) {
     throw new BackupOperationError("backup_failed", "Backup completed without parseable output", 500);
   }
 
@@ -366,7 +379,7 @@ function parseBackupScriptOutput(stdout: string): { path: string; sizeBytes: num
 
 function parseRestoreScriptOutput(stdout: string): { path: string } {
   const match = stdout.match(/Restore OK:\s(.+)/);
-  if (!match) {
+  if (!match || match[1] === undefined) {
     throw new BackupOperationError("restore_failed", "Restore completed without parseable output", 500);
   }
 
@@ -388,7 +401,7 @@ function inferPurposeFromFilename(filename: string): BackupPurpose {
 
 function inferTimestampFromFilename(filename: string, statsMtimeIso: string): string {
   const match = filename.match(TIMESTAMP_PATTERN);
-  if (!match) return statsMtimeIso;
+  if (!match || match[1] === undefined) return statsMtimeIso;
   const value = match[1];
   const normalized = `${value.slice(0, 4)}-${value.slice(4, 6)}-${value.slice(6, 8)}T${value.slice(9, 11)}:${value.slice(11, 13)}:${value.slice(13, 15)}Z`;
   return Number.isNaN(new Date(normalized).getTime()) ? statsMtimeIso : normalized;
@@ -404,8 +417,16 @@ function getRetentionSummary(config: Pick<BackupConfigRow, "max_backups" | "max_
   };
 }
 
-function getLegacyMaxBackups(retention: Pick<RetentionSummary, "manual" | "scheduled">): number {
-  return retention.manual.max + retention.scheduled.max;
+async function fetchDatabaseSizeBytes(): Promise<number | null> {
+  const db = getDb();
+  const { data, error } = await db.rpc("get_database_size_bytes");
+  if (error) return null;
+  if (typeof data === "number") return Number.isFinite(data) ? data : null;
+  if (typeof data === "string") {
+    const parsed = Number(data);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
 }
 
 export async function fetchBackupConfig(): Promise<BackupConfigRow> {
@@ -433,15 +454,16 @@ export async function patchBackupConfig(update: UpdateBackupConfigInput): Promis
     if (value !== undefined) payload[key] = value;
   }
 
+  const explicitLegacyMax = payload.max_backups;
   const nextManual = Number(payload.max_manual_backups ?? payload.max_backups);
   const nextScheduled = Number(payload.max_scheduled_backups ?? payload.max_backups);
-  if (Number.isFinite(nextManual) || Number.isFinite(nextScheduled)) {
+  if (Number.isFinite(nextManual) || Number.isFinite(nextScheduled) || explicitLegacyMax !== undefined) {
     const current = await fetchBackupConfig();
     const manual = Number.isFinite(nextManual) ? nextManual : current.max_manual_backups;
     const scheduled = Number.isFinite(nextScheduled) ? nextScheduled : current.max_scheduled_backups;
     payload.max_manual_backups = manual;
     payload.max_scheduled_backups = scheduled;
-    payload.max_backups = manual + scheduled;
+    payload.max_backups = explicitLegacyMax !== undefined ? Number(explicitLegacyMax) : Math.max(manual, scheduled);
   }
 
   const { data, error } = await db
@@ -819,7 +841,7 @@ async function finalizeRestoreFailure(input: {
   maintenanceStartedAt: string;
   triggeredByUserId: string;
   message: string;
-}) {
+}): Promise<never> {
   const completedAt = new Date().toISOString();
   try {
     await patchBackupConfig({
@@ -956,7 +978,7 @@ async function runRestoreInternal(id: string, triggeredByUserId: string): Promis
       BLINDSPOT_RESTORE_FILE: sourceBackup.path,
       BLINDSPOT_DB_CONTAINER: process.env["BLINDSPOT_DB_CONTAINER"] ?? "supabase_db_gap-radar",
       BLINDSPOT_REPO_ROOT: REPO_ROOT,
-    });
+    }, RESTORE_TIMEOUT_MS);
     parseRestoreScriptOutput(`${stdout}\n${stderr}`);
     return await finalizeRestoreSuccess({
       sourceBackup,
@@ -1066,6 +1088,12 @@ export async function buildBackupOverview(scheduler: BackupSchedulerSnapshot): P
   const manualBackups = recent.filter((row) => row.trigger === "manual");
   const scheduledBackups = recent.filter((row) => row.trigger === "scheduled");
   const restoreCheckpoints = manualBackups.filter((row) => row.purpose === "restore_checkpoint");
+  const databaseSizeBytes = await fetchDatabaseSizeBytes();
+  const storedBackupSizeByTrigger = {
+    manual: manualBackups.reduce((sum, row) => sum + (row.size_bytes ?? 0), 0),
+    scheduled: scheduledBackups.reduce((sum, row) => sum + (row.size_bytes ?? 0), 0),
+  };
+  const storedBackupSizeBytes = storedBackupSizeByTrigger.manual + storedBackupSizeByTrigger.scheduled;
 
   if (!validation.ok) alerts.push("backup_directory_invalid");
   if (config.last_error_at && (!config.last_successful_at || config.last_error_at >= config.last_successful_at)) {
@@ -1096,7 +1124,7 @@ export async function buildBackupOverview(scheduler: BackupSchedulerSnapshot): P
       last_backup: lastBackup,
       next_backup_at: config.scheduled_for,
       backup_count: recent.filter((row) => !row.deleted_at).length,
-      max_backups: getLegacyMaxBackups(retention),
+      max_backups: config.max_backups,
       manual_backup_count: manualBackups.length,
       scheduled_backup_count: scheduledBackups.length,
       restore_checkpoint_count: restoreCheckpoints.length,
@@ -1104,6 +1132,9 @@ export async function buildBackupOverview(scheduler: BackupSchedulerSnapshot): P
         manual: { count: manualBackups.length, max: retention.manual.max },
         scheduled: { count: scheduledBackups.length, max: retention.scheduled.max },
       },
+      database_size_bytes: databaseSizeBytes,
+      stored_backup_size_bytes: storedBackupSizeBytes,
+      stored_backup_size_by_trigger: storedBackupSizeByTrigger,
       last_restore: lastRestore,
     },
     restore: {

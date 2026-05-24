@@ -5,6 +5,8 @@ import type {
   DiscoveryQuery,
   DiscoveryCandidate,
 } from "../../../shared/types.js";
+import { normalizeNiche } from "../filters.js";
+import { parseTipoOperador } from "../../enrichment/parsers/mintur-tipo-operador.js";
 
 const SOURCE: DiscoverySource = "mintur";
 const SOURCE_CONFIDENCE = 0.8;
@@ -21,6 +23,7 @@ export interface MINTURRecord {
   Web: string;
   Telefono: string;
   EMail: string;
+  TipoOperador?: string;
 }
 
 interface CKANResponse {
@@ -55,6 +58,17 @@ export function shouldDiscard(record: MINTURRecord): boolean {
   return !hasContact;
 }
 
+export function inferNiche(record: MINTURRecord): string {
+  const parsed = parseTipoOperador({ TipoOperador: record.TipoOperador });
+  if (parsed && parsed.tipo_operador_sub_niche !== "otro_mintur") {
+    const normalizedSubNiche = normalizeNiche(parsed.tipo_operador_sub_niche.replace(/_/g, " "));
+    if (normalizedSubNiche !== "other") return normalizedSubNiche;
+  }
+
+  const normalizedRaw = normalizeNiche([record.TipoOperador, record.Operador].filter((value) => !isBlank(value)).join(" "));
+  return normalizedRaw;
+}
+
 export function mapRecord(record: MINTURRecord): DiscoveryCandidate {
   const address = [record.Direccion, record.Localidad, record.Departamento]
     .filter((v) => !isBlank(v))
@@ -70,7 +84,7 @@ export function mapRecord(record: MINTURRecord): DiscoveryCandidate {
     email: isBlank(record.EMail) ? null : record.EMail,
     latitude: null,
     longitude: null,
-    niche: "other",
+    niche: inferNiche(record),
     raw: record as unknown as Record<string, unknown>,
   };
 }

@@ -1,3 +1,4 @@
+import { z } from "zod";
 import type {
   LeadAssistantBrief,
   LeadAssistantRequest,
@@ -12,6 +13,22 @@ import {
 
 const DEFAULT_COST_PER_1K_IN = 0.0005;
 const DEFAULT_COST_PER_1K_OUT = 0.0015;
+
+const openAiCompatResponseSchema = z.object({
+  choices: z
+    .array(
+      z.object({
+        message: z.object({ content: z.string().optional() }).optional(),
+      }),
+    )
+    .optional(),
+  usage: z
+    .object({
+      prompt_tokens: z.number().optional(),
+      completion_tokens: z.number().optional(),
+    })
+    .optional(),
+});
 
 function buildOfferMessages(req: LLMRequest): Array<{ role: string; content: string }> {
   const system =
@@ -63,10 +80,12 @@ export class OpenAICompatibleProvider implements LLMProvider {
       throw new Error(`OpenAI-compatible API error: ${response.status}`);
     }
 
-    const data = (await response.json()) as {
-      choices?: Array<{ message?: { content?: string } }>;
-      usage?: { prompt_tokens?: number; completion_tokens?: number };
-    };
+    const raw = await response.json();
+    const parsed = openAiCompatResponseSchema.safeParse(raw);
+    if (!parsed.success) {
+      throw new Error(`OpenAI-compatible API returned unexpected payload: ${parsed.error.message}`);
+    }
+    const data = parsed.data;
 
     const text = (data.choices?.[0]?.message?.content ?? "").trim();
     const tokensIn = data.usage?.prompt_tokens ?? 0;

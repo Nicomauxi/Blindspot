@@ -67,7 +67,7 @@ export default function HelpPage() {
           <div className="space-y-3 text-sm text-slate-600">
             <ShortcutRow href="/admin/leads?prospect_score_gte=70" label="Hot leads" text="Priorizar oportunidades con score alto." />
             <ShortcutRow href="/admin/leads?contact_tier=A" label="Tier A" text="Trabajar contactos más fuertes primero." />
-            <ShortcutRow href="/admin/outreach" label="Acciones" text="Seguir respuestas, outcomes y ventas." />
+            <ShortcutRow href="/admin/crm" label="Acciones" text="Seguir respuestas, outcomes y ventas." />
             <ShortcutRow href="/admin/discovery" label="Captación" text="Ver si están entrando leads nuevos o si hay jobs fallidos." />
           </div>
         </SectionCard>

@@ -10,6 +10,16 @@ const upsertSchema = z.object({
   notes: z.string().nullable().optional(),
 });
 
+// Constrain :service_type to safe slug-like values (alphanumeric, dash, underscore).
+const serviceTypeParamsSchema = {
+  type: "object" as const,
+  properties: {
+    service_type: { type: "string", minLength: 1, maxLength: 80, pattern: "^[a-zA-Z0-9_-]+$" },
+  },
+  required: ["service_type"],
+  additionalProperties: false,
+};
+
 export async function servicePricingRoutes(app: FastifyInstance): Promise<void> {
   // GET /service-pricing — returns pricing for the authenticated user
   app.get("/service-pricing", { preHandler: requireAuth }, async (request, reply) => {
@@ -31,7 +41,10 @@ export async function servicePricingRoutes(app: FastifyInstance): Promise<void> 
   });
 
   // GET /service-pricing/:service_type — single entry for the authenticated user
-  app.get("/service-pricing/:service_type", { preHandler: requireAuth }, async (request, reply) => {
+  app.get("/service-pricing/:service_type", {
+    preHandler: requireAuth,
+    schema: { params: serviceTypeParamsSchema },
+  }, async (request, reply) => {
     const { service_type } = request.params as { service_type: string };
     const db = getDb();
     const authUser = getAuthUser(request);
@@ -57,7 +70,10 @@ export async function servicePricingRoutes(app: FastifyInstance): Promise<void> 
   // PUT /service-pricing/:service_type — upsert a pricing entry (admin only)
   app.put(
     "/service-pricing/:service_type",
-    { preHandler: requireAdmin },
+    {
+      preHandler: requireAdmin,
+      schema: { params: serviceTypeParamsSchema },
+    },
     async (request, reply) => {
       const { service_type } = request.params as { service_type: string };
       const parseResult = upsertSchema.safeParse(
@@ -100,7 +116,10 @@ export async function servicePricingRoutes(app: FastifyInstance): Promise<void> 
   // DELETE /service-pricing/:service_type — admin only
   app.delete(
     "/service-pricing/:service_type",
-    { preHandler: requireAdmin },
+    {
+      preHandler: requireAdmin,
+      schema: { params: serviceTypeParamsSchema },
+    },
     async (request, reply) => {
       const { service_type } = request.params as { service_type: string };
       const db = getDb();

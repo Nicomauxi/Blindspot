@@ -1,5 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
+const startFilterEnrichmentJob = vi.fn();
+const countLeadsByFilterSelection = vi.fn();
+
+vi.mock("../../src/cli/commands/enrich.js", () => ({
+  startFilterEnrichmentJob,
+}));
+
+vi.mock("../../src/storage/leads.js", () => ({
+  countLeadsByFilterSelection,
+}));
+
 let _activePipelineRun: Record<string, unknown> | null = null;
 
 let _mockUser: Record<string, unknown> = {
@@ -138,6 +149,8 @@ vi.mock("../../api/src/db/client.js", () => ({
                     location: "Montevideo",
                     niche: "restaurant",
                     status: "queued",
+                    enrich_after_discovery: false,
+                    enrich_status: "skipped",
                     created_at: "2026-05-20T10:00:00Z",
                   },
                 ],
@@ -159,6 +172,8 @@ vi.mock("../../api/src/db/client.js", () => ({
                     location: "Montevideo",
                     niche: "restaurant",
                     status: "queued",
+                    enrich_after_discovery: true,
+                    enrich_status: "queued",
                     created_at: "2026-05-20T10:00:00Z",
                   },
                 ],
@@ -172,14 +187,19 @@ vi.mock("../../api/src/db/client.js", () => ({
               error: null,
             }),
           }),
-          insert: () => ({
+          insert: (payload: unknown) => ({
             select: () => ({
               single: async () => ({
                 data: { id: "new-job-id", status: "queued", batch_id: null },
                 error: null,
               }),
+              then: (cb: (value: unknown) => void) => cb({
+                data: Array.isArray(payload)
+                  ? payload.map((entry, index) => ({ id: `child-job-${index + 1}`, ...(entry as object) }))
+                  : [],
+                error: null,
+              }),
             }),
-            then: (cb: (value: unknown) => void) => cb({ data: [], error: null }),
           }),
           update: () => ({
             eq: () => ({
@@ -208,6 +228,7 @@ vi.mock("../../api/src/db/client.js", () => ({
                     sources: ["yelu", "osm"],
                     estimated_cost_usd: 0,
                     actual_cost_usd: 0,
+                    enrich_after_discovery: true,
                     status: "queued",
                     created_at: "2026-05-20T10:00:00Z",
                   },
@@ -220,10 +241,10 @@ vi.mock("../../api/src/db/client.js", () => ({
               single: async () => ({ data: { id: "batch-1" }, error: null }),
             }),
           }),
-          insert: () => ({
+          insert: (payload: unknown) => ({
             select: () => ({
               single: async () => ({
-                data: { id: "batch-1", location: "Montevideo", location_key: "montevideo", niche: "restaurant", sources: ["yelu", "osm"], status: "queued", created_at: "2026-05-20T10:00:00Z" },
+                data: { id: "batch-1", status: "queued", created_at: "2026-05-20T10:00:00Z", ...(payload as object) },
                 error: null,
               }),
             }),
@@ -313,6 +334,10 @@ vi.mock("../../api/src/db/client.js", () => ({
 
 describe("Pipeline routes — admin only", () => {
   beforeEach(() => {
+    startFilterEnrichmentJob.mockReset();
+    startFilterEnrichmentJob.mockResolvedValue({ runId: "filter-run-1" });
+    countLeadsByFilterSelection.mockReset();
+    countLeadsByFilterSelection.mockResolvedValue(2);
     process.env["API_JWT_SECRET"] = "test-secret-at-least-32-chars-long-1234";
     _activePipelineRun = null;
     _mockUser = {
@@ -467,6 +492,78 @@ describe("Discovery routes", () => {
       body: JSON.stringify({ source: "yelu", location: "Montevideo", niche: "restaurant" }),
     });
     expect(res.statusCode).toBe(201);
+    await app.close();
+  });
+
+  it("POST /discovery/job-batches defaults enrich_after_discovery to true", async () => {
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/discovery/job-batches",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ sources: ["yelu", "osm"], location: "Montevideo", niche: "restaurant" }),
+    });
+    expect(res.statusCode).toBe(201);
+    const body = res.json();
+    expect(body.data.enrich_after_discovery).toBe(true);
+    expect(body.data.jobs.every((job: { enrich_after_discovery?: boolean; enrich_status?: string }) => job.enrich_after_discovery === true && job.enrich_status === "queued")).toBe(true);
+    await app.close();
+  });
+
+  it("POST /discovery/job-batches supports discovery-only mode", async () => {
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/discovery/job-batches",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ sources: ["yelu"], location: "Montevideo", niche: "restaurant", enrich_after_discovery: false }),
+    });
+    expect(res.statusCode).toBe(201);
+    const body = res.json();
+    expect(body.data.enrich_after_discovery).toBe(false);
+    expect(body.data.jobs[0]?.enrich_status).toBe("skipped");
+    await app.close();
+  });
+
+  it("POST /admin/enrichment/filter-jobs returns 202 with run id when collection is valid", async () => {
+    startFilterEnrichmentJob.mockResolvedValue({ runId: "filter-run-1" });
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/admin/enrichment/filter-jobs",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ source: "google_places", prospect_score_gte: 70, with_heuristic: true, concurrency: 4 }),
+    });
+    expect(res.statusCode).toBe(202);
+    const body = res.json();
+    expect(body.data.run_id).toBe("filter-run-1");
+    expect(body.data.lead_count).toBe(2);
+    expect(startFilterEnrichmentJob).toHaveBeenCalledWith({
+      filters: { source: "google_places", prospect_score_gte: 70, contact_tier: undefined, niche: undefined, primary_offer: undefined, q: undefined },
+      withHeuristic: true,
+      concurrency: 4,
+    });
+    await app.close();
+  });
+
+  it("POST /admin/enrichment/filter-jobs rejects requests without relevant filters", async () => {
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/admin/enrichment/filter-jobs",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ with_heuristic: true, concurrency: 4 }),
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error_code).toBe("filters_required");
     await app.close();
   });
 

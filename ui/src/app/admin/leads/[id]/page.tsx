@@ -5,16 +5,22 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import {
   ApiError,
+  createLeadFeedback,
   createCampaign,
   createOutreach,
+  createTracking,
   generateLeadBrief,
   generateOffer,
   getLead,
+  getLeadFeedbackSummary,
   getOwnerGroup,
+  listLeadFeedback,
   listCampaigns,
   listOutreach,
   type Campaign,
   type CommercialEvidenceNode,
+  type LeadFeedbackEntry,
+  type LeadFeedbackSummaryEntry,
   type LeadAssistantBrief,
   type LeadDetail,
   type LeadFieldSource,
@@ -23,6 +29,11 @@ import {
   type OwnerGroupMember,
 } from "@/lib/api";
 import { useAuthStore } from "@/lib/auth-store";
+import {
+  buildLeadFeedbackFieldOptions,
+  mergeLeadFeedbackSummary,
+  resolveLeadFeedbackFieldValue,
+} from "@/lib/lead-feedback";
 import { cn, formatRelative } from "@/lib/utils";
 import { AdminPageLayout, EmptyPanel, HelpTip, SectionCard, StatCard } from "@/components/admin-shell";
 
@@ -74,6 +85,12 @@ type ContactPoint = {
   note: string | null;
 };
 
+type LeadFeedbackDraft = {
+  fieldKey: string;
+  verdict: "good" | "bad";
+  comment: string;
+};
+
 function formatSectionError(error: unknown, fallbackMessage: string) {
   if (error instanceof ApiError) {
     if (error.error_code === "assistant_unavailable") {
@@ -96,6 +113,8 @@ export default function LeadDetailPage() {
   const [outreach, setOutreach] = useState<OutreachEntry[]>([]);
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [ownerGroup, setOwnerGroup] = useState<OwnerGroupMember[]>([]);
+  const [feedbackEntries, setFeedbackEntries] = useState<LeadFeedbackEntry[]>([]);
+  const [feedbackSummary, setFeedbackSummary] = useState<LeadFeedbackSummaryEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [offer, setOffer] = useState<OfferPackage | null>(null);
@@ -107,7 +126,18 @@ export default function LeadDetailPage() {
   const [assistantError, setAssistantError] = useState<string | null>(null);
   const [showCampaignModal, setShowCampaignModal] = useState(false);
   const [startingCampaign, setStartingCampaign] = useState(false);
+  const [startingTracking, setStartingTracking] = useState(false);
+  const [trackingNotice, setTrackingNotice] = useState<string | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const [feedbackLoading, setFeedbackLoading] = useState(true);
+  const [feedbackError, setFeedbackError] = useState<string | null>(null);
+  const [creatingFeedback, setCreatingFeedback] = useState(false);
+  const [feedbackNotice, setFeedbackNotice] = useState<string | null>(null);
+  const [feedbackDraft, setFeedbackDraft] = useState<LeadFeedbackDraft>({
+    fieldKey: "",
+    verdict: "good",
+    comment: "",
+  });
   const [campaignForm, setCampaignForm] = useState<CampaignStartForm>({
     mode: "existing",
     campaignId: "",
@@ -136,6 +166,19 @@ export default function LeadDetailPage() {
       })
       .catch((err) => setError(err instanceof Error ? err.message : "Error al cargar lead"))
       .finally(() => setLoading(false));
+  }, [token, id]);
+
+  useEffect(() => {
+    if (!token || !id) return;
+    setFeedbackLoading(true);
+    Promise.all([listLeadFeedback(token, id, { limit: 20 }), getLeadFeedbackSummary(token, id)])
+      .then(([feedbackRes, summaryRes]) => {
+        setFeedbackEntries(feedbackRes.data);
+        setFeedbackSummary(summaryRes.data);
+        setFeedbackError(null);
+      })
+      .catch((err) => setFeedbackError(err instanceof Error ? err.message : "No se pudo cargar el feedback humano."))
+      .finally(() => setFeedbackLoading(false));
   }, [token, id]);
 
   const recentCampaign = useMemo(() => {
@@ -197,6 +240,20 @@ export default function LeadDetailPage() {
   }, [assistant?.personalized_pitch, lead, outreach.length, ownerGroup.length]);
 
   const contactPoints = useMemo(() => buildContactPoints(lead), [lead]);
+  const feedbackFieldOptions = useMemo(() => buildLeadFeedbackFieldOptions(lead), [lead]);
+  const feedbackFieldValue = useMemo(
+    () => resolveLeadFeedbackFieldValue(lead, feedbackDraft.fieldKey),
+    [feedbackDraft.fieldKey, lead]
+  );
+
+  useEffect(() => {
+    if (feedbackFieldOptions.length === 0) return;
+    setFeedbackDraft((current) =>
+      current.fieldKey && feedbackFieldOptions.some((option) => option.key === current.fieldKey)
+        ? current
+        : { ...current, fieldKey: feedbackFieldOptions[0]!.key }
+    );
+  }, [feedbackFieldOptions]);
 
   async function handleGenerateOffer() {
     if (!token || !lead) return;
@@ -252,16 +309,35 @@ export default function LeadDetailPage() {
         });
         setOutreach((prev) => [outreachRes.data, ...prev]);
       } else {
-        router.push(`/admin/outreach?campaign_id=${campaignId}`);
+        router.push(`/admin/crm?campaign_id=${campaignId}`);
         return;
       }
 
       setShowCampaignModal(false);
-      router.push(`/admin/outreach?campaign_id=${campaignId}`);
+      router.push(`/admin/crm?campaign_id=${campaignId}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "No se pudo iniciar la campaña");
     } finally {
       setStartingCampaign(false);
+    }
+  }
+
+  async function handleStartTracking() {
+    if (!token || !lead) return;
+    setStartingTracking(true);
+    setTrackingNotice(null);
+    try {
+      await createTracking(token, { lead_id: lead.id });
+      setTrackingNotice("Seguimiento iniciado.");
+      router.push("/admin/crm");
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 409) {
+        setTrackingNotice("Ya existe un seguimiento activo para este lead. Buscalo en el board de CRM.");
+      } else {
+        setTrackingNotice("No se pudo iniciar el seguimiento. Intentá de nuevo.");
+      }
+    } finally {
+      setStartingTracking(false);
     }
   }
 
@@ -270,6 +346,29 @@ export default function LeadDetailPage() {
     navigator.clipboard.writeText(value);
     setCopiedKey(key);
     window.setTimeout(() => setCopiedKey((current) => (current === key ? null : current)), 1800);
+  }
+
+  async function handleCreateFeedback() {
+    if (!token || !lead || !feedbackDraft.fieldKey) return;
+    setCreatingFeedback(true);
+    setFeedbackError(null);
+    setFeedbackNotice(null);
+    try {
+      const response = await createLeadFeedback(token, lead.id, {
+        field_key: feedbackDraft.fieldKey,
+        field_value: feedbackFieldValue || undefined,
+        verdict: feedbackDraft.verdict,
+        comment: feedbackDraft.comment.trim() || undefined,
+      });
+      setFeedbackEntries((current) => [response.data, ...current]);
+      setFeedbackSummary((current) => mergeLeadFeedbackSummary(current, response.data));
+      setFeedbackDraft((current) => ({ ...current, verdict: "good", comment: "" }));
+      setFeedbackNotice(`Feedback guardado para ${feedbackDraft.fieldKey}.`);
+    } catch (err) {
+      setFeedbackError(err instanceof Error ? err.message : "No se pudo guardar el feedback humano.");
+    } finally {
+      setCreatingFeedback(false);
+    }
   }
 
   if (loading) return <div className="py-8 text-center text-sm text-slate-400">Cargando ficha…</div>;
@@ -288,10 +387,17 @@ export default function LeadDetailPage() {
           <button onClick={() => router.back()} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50">
             Volver
           </button>
+          <button
+            onClick={handleStartTracking}
+            disabled={startingTracking}
+            className="rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-60"
+          >
+            {startingTracking ? "Iniciando…" : "Iniciar seguimiento"}
+          </button>
           <button onClick={() => setShowCampaignModal(true)} className="rounded-lg bg-sky-600 px-3 py-2 text-sm font-medium text-white hover:bg-sky-700">
             Iniciar campaña
           </button>
-          <Link href={recentCampaign ? `/admin/outreach?campaign_id=${recentCampaign.id}` : `/admin/outreach?lead_id=${lead.id}`} className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-sm font-medium text-sky-700 transition-colors hover:bg-sky-100">
+          <Link href={recentCampaign ? `/admin/crm?campaign_id=${recentCampaign.id}` : `/admin/crm?lead_id=${lead.id}`} className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-sm font-medium text-sky-700 transition-colors hover:bg-sky-100">
             Ver acciones
           </Link>
         </>
@@ -304,7 +410,7 @@ export default function LeadDetailPage() {
               <div className="font-semibold">Campaña asociada más reciente</div>
               <div className="mt-1">{recentCampaign.name} · {recentCampaign.status}</div>
             </div>
-            <Link href={`/admin/outreach?campaign_id=${recentCampaign.id}`} className="rounded-lg border border-sky-200 bg-white px-3 py-2 font-medium text-sky-700 hover:bg-sky-100">
+            <Link href={`/admin/crm?campaign_id=${recentCampaign.id}`} className="rounded-lg border border-sky-200 bg-white px-3 py-2 font-medium text-sky-700 hover:bg-sky-100">
               Abrir acciones de esta campaña
             </Link>
           </div>
@@ -458,6 +564,122 @@ export default function LeadDetailPage() {
           </div>
         </SectionCard>
       </div>
+
+      <SectionCard title="Feedback humano" description="Validación manual por campo para dejar trazabilidad operativa sin perder el dato original del lead.">
+        <div className="grid gap-4 xl:grid-cols-[1.1fr,0.9fr]">
+          <div className="space-y-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+            <div>
+              <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Registrar validación</div>
+              <p className="mt-2 text-sm text-slate-600">Marcá si un dato está bien o mal, dejá contexto y guardalo con el usuario autenticado.</p>
+            </div>
+            <label className="block text-sm text-slate-700">
+              <span className="mb-2 block text-xs font-semibold uppercase tracking-wide text-slate-500">Campo</span>
+              <select
+                value={feedbackDraft.fieldKey}
+                onChange={(event) => setFeedbackDraft((current) => ({ ...current, fieldKey: event.target.value }))}
+                className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm"
+              >
+                {feedbackFieldOptions.map((option) => (
+                  <option key={option.key} value={option.key}>{option.label}</option>
+                ))}
+              </select>
+            </label>
+            <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
+              <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Valor actual</div>
+              <div className="mt-2 text-sm text-slate-800">{feedbackFieldValue || "Sin valor visible para este campo."}</div>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => setFeedbackDraft((current) => ({ ...current, verdict: "good" }))}
+                className={cn("rounded-lg px-3 py-2 text-sm font-medium", feedbackDraft.verdict === "good" ? "bg-emerald-600 text-white" : "border border-slate-300 bg-white text-slate-700")}
+              >
+                Dato correcto
+              </button>
+              <button
+                type="button"
+                onClick={() => setFeedbackDraft((current) => ({ ...current, verdict: "bad" }))}
+                className={cn("rounded-lg px-3 py-2 text-sm font-medium", feedbackDraft.verdict === "bad" ? "bg-rose-600 text-white" : "border border-slate-300 bg-white text-slate-700")}
+              >
+                Dato incorrecto
+              </button>
+            </div>
+            <label className="block text-sm text-slate-700">
+              <span className="mb-2 block text-xs font-semibold uppercase tracking-wide text-slate-500">Comentario</span>
+              <textarea
+                value={feedbackDraft.comment}
+                onChange={(event) => setFeedbackDraft((current) => ({ ...current, comment: event.target.value }))}
+                rows={4}
+                className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm"
+                placeholder="Ej: el teléfono responde pero corresponde a otra sucursal"
+              />
+            </label>
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                onClick={() => void handleCreateFeedback()}
+                disabled={creatingFeedback || !feedbackDraft.fieldKey}
+                className="rounded-lg bg-sky-600 px-4 py-2 text-sm font-medium text-white hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {creatingFeedback ? "Guardando…" : "Guardar feedback"}
+              </button>
+              {feedbackNotice ? <span className="text-sm text-emerald-700">{feedbackNotice}</span> : null}
+            </div>
+            {feedbackError ? <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{feedbackError}</div> : null}
+          </div>
+
+          <div className="space-y-4">
+            <div className="rounded-2xl border border-slate-200 bg-white p-4">
+              <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Resumen por campo</div>
+              {feedbackLoading ? (
+                <div className="mt-3 text-sm text-slate-500">Cargando feedback…</div>
+              ) : feedbackSummary.length === 0 ? (
+                <div className="mt-3 text-sm text-slate-500">Todavía no hay validaciones humanas para este lead.</div>
+              ) : (
+                <div className="mt-3 space-y-3">
+                  {feedbackSummary.map((entry) => (
+                    <div key={entry.field_key} className="rounded-xl border border-slate-200 px-3 py-3 text-sm">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="font-medium text-slate-900">{entry.field_key}</div>
+                        <span className={cn("rounded-full px-2 py-0.5 text-xs font-semibold", entry.latest_verdict === "good" ? "bg-emerald-100 text-emerald-700" : "bg-rose-100 text-rose-700")}>{entry.latest_verdict === "good" ? "Último: correcto" : "Último: incorrecto"}</span>
+                      </div>
+                      <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-500">
+                        <span className="rounded-full bg-slate-100 px-2 py-1">Total: {entry.total}</span>
+                        <span className="rounded-full bg-emerald-50 px-2 py-1 text-emerald-700">Good: {entry.good_count}</span>
+                        <span className="rounded-full bg-rose-50 px-2 py-1 text-rose-700">Bad: {entry.bad_count}</span>
+                      </div>
+                      {entry.latest_comment ? <p className="mt-2 text-xs text-slate-600">{entry.latest_comment}</p> : null}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 bg-white p-4">
+              <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Actividad reciente</div>
+              {feedbackLoading ? (
+                <div className="mt-3 text-sm text-slate-500">Cargando actividad…</div>
+              ) : feedbackEntries.length === 0 ? (
+                <div className="mt-3 text-sm text-slate-500">Sin eventos de feedback todavía.</div>
+              ) : (
+                <div className="mt-3 space-y-3">
+                  {feedbackEntries.map((entry) => (
+                    <div key={entry.id} className="rounded-xl border border-slate-200 px-3 py-3 text-sm">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="font-medium text-slate-900">{entry.field_key}</div>
+                        <span className={cn("rounded-full px-2 py-0.5 text-xs font-semibold", entry.verdict === "good" ? "bg-emerald-100 text-emerald-700" : "bg-rose-100 text-rose-700")}>{entry.verdict === "good" ? "Correcto" : "Incorrecto"}</span>
+                      </div>
+                      {entry.field_value != null ? <div className="mt-2 text-xs text-slate-500">Valor: {String(entry.field_value)}</div> : null}
+                      {entry.comment ? <p className="mt-2 text-xs text-slate-600">{entry.comment}</p> : null}
+                      <div className="mt-2 text-[11px] text-slate-400">{entry.actor_role} · {formatRelative(entry.created_at)}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </SectionCard>
 
       <SectionCard title="Traza de evidencia comercial" description="Por qué el sistema sugiere este pitch, este timing y este nivel de readiness.">
         {evidenceTree.length === 0 ? (

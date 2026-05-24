@@ -93,7 +93,7 @@ export async function backupsRoutes(app: FastifyInstance): Promise<void> {
         enabled: nextEnabled,
         cron_expression: nextCron,
         directory: effectiveDirectory,
-        max_backups: nextManualBackups + nextScheduledBackups,
+        max_backups: parsed.data.max_backups ?? Math.max(nextManualBackups, nextScheduledBackups),
         max_manual_backups: nextManualBackups,
         max_scheduled_backups: nextScheduledBackups,
         scheduled_for: getNextBackupScheduledFor(nextEnabled, nextCron),

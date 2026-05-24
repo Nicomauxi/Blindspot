@@ -9,16 +9,17 @@ import type { PipelineRun, PipelineConfig } from "./types.js";
 const logger = getLogger();
 
 const PIPELINE_POLL_INTERVAL_MS = 60_000;
-const DISCOVERY_POLL_INTERVAL_MS = 30_000;
 const CONFIG_WATCH_INTERVAL_MS = 60_000;
+const DISCOVERY_POLL_INTERVAL_MS = 30_000;
 
 export class PipelineScheduler {
   private cronTask: ReturnType<typeof cron.schedule> | null = null;
   private pipelinePollTimer: ReturnType<typeof setInterval> | null = null;
-  private discoveryPollTimer: ReturnType<typeof setInterval> | null = null;
   private configWatchTimer: ReturnType<typeof setInterval> | null = null;
+  private discoveryPollTimer: ReturnType<typeof setInterval> | null = null;
   private activeRunId: string | null = null;
   private lastConfigUpdatedAt: string | null = null;
+  private polling = false;
 
   async start(): Promise<void> {
     logger.info("Pipeline scheduler starting");
@@ -31,17 +32,17 @@ export class PipelineScheduler {
       );
     }, PIPELINE_POLL_INTERVAL_MS);
 
-    this.discoveryPollTimer = setInterval(() => {
-      this.pollDiscoveryJobs().catch((err) =>
-        logger.error({ err }, "Discovery poll error")
-      );
-    }, DISCOVERY_POLL_INTERVAL_MS);
-
     this.configWatchTimer = setInterval(() => {
       this.watchConfig().catch((err) =>
         logger.error({ err }, "Config watch error")
       );
     }, CONFIG_WATCH_INTERVAL_MS);
+
+    this.discoveryPollTimer = setInterval(() => {
+      this.pollDiscoveryJobs().catch((err) =>
+        logger.error({ err }, "Discovery poll error")
+      );
+    }, DISCOVERY_POLL_INTERVAL_MS);
 
     // Initial checks on startup
     await this.pollPendingRuns();
@@ -52,8 +53,8 @@ export class PipelineScheduler {
   stop(): void {
     this.cronTask?.stop();
     if (this.pipelinePollTimer) clearInterval(this.pipelinePollTimer);
-    if (this.discoveryPollTimer) clearInterval(this.discoveryPollTimer);
     if (this.configWatchTimer) clearInterval(this.configWatchTimer);
+    if (this.discoveryPollTimer) clearInterval(this.discoveryPollTimer);
     logger.info("Pipeline scheduler stopped");
   }
 
@@ -94,7 +95,10 @@ export class PipelineScheduler {
       logger.info("Cron tick: queuing scheduled run");
       try {
         const runId = await transitionToPending("cron");
-        await this.executePendingRun(runId);
+        // Route through pollPendingRuns to reuse the single-instance polling
+        // guard and the atomic DB claim, avoiding double-execution when both
+        // the cron tick and the regular poll race.
+        await this.pollPendingRuns(runId);
         await this.updateScheduledFor(expression);
       } catch (err) {
         logger.error({ err }, "Cron-triggered run failed");
@@ -123,13 +127,26 @@ export class PipelineScheduler {
   }
 
   private async pollPendingRuns(specificRunId?: string): Promise<void> {
+    if (this.polling) {
+      logger.debug("Poll already in progress — skipping concurrent poll");
+      return;
+    }
+    this.polling = true;
+    try {
+      await this._pollPendingRunsImpl(specificRunId);
+    } finally {
+      this.polling = false;
+    }
+  }
+
+  private async _pollPendingRunsImpl(specificRunId?: string): Promise<void> {
     if (await this.isRestoreMaintenanceMode()) {
       logger.info("Backup restore maintenance mode active — pending run poll skipped");
       return;
     }
 
     if (this.activeRunId) {
-      logger.debug({ activeRunId: this.activeRunId }, "Run already active — skipping poll");
+      logger.debug({ activeRunId: this.activeRunId }, "Run already active locally — skipping poll");
       return;
     }
 
@@ -163,46 +180,57 @@ export class PipelineScheduler {
     await this.executePendingRun(run.id);
   }
 
+  private async pollDiscoveryJobs(): Promise<void> {
+    try {
+      const summary = await processQueuedDiscoveryJobs(1);
+      if (summary.jobs_processed > 0) {
+        logger.info(summary, "Discovery jobs processed");
+      }
+    } catch (err) {
+      logger.error({ err }, "Discovery jobs poll error");
+    }
+  }
+
   private async executePendingRun(runId: string): Promise<void> {
-    if (this.activeRunId) return;
+    const supabase = getSupabase();
+
+    // Atomic claim via UPDATE-RETURNING: only one worker can transition
+    // pending → running. Prevents two scheduler instances from executing the
+    // same run when running multi-instance.
+    const { data: claimed, error: claimError } = await supabase
+      .from("pipeline_runs")
+      .update({ status: "running", started_at: new Date().toISOString() })
+      .eq("id", runId)
+      .eq("status", "pending")
+      .select("*")
+      .single();
+
+    if (claimError) {
+      // PGRST116 = no rows returned (another worker took it, or it's not pending).
+      if (claimError.code === "PGRST116") {
+        logger.debug({ runId }, "Run already claimed by another worker — skipping");
+        return;
+      }
+      logger.error({ runId, error: claimError }, "Failed to claim pending run");
+      return;
+    }
+
+    if (!claimed) {
+      logger.debug({ runId }, "Run already claimed by another worker — skipping");
+      return;
+    }
+
+    // Tracking only — no longer used as a gate (the DB CAS is the real lock).
     this.activeRunId = runId;
 
     try {
-      const supabase = getSupabase();
-      const { data: runData } = await supabase
-        .from("pipeline_runs")
-        .select("*")
-        .eq("id", runId)
-        .single();
-
-      if (!runData) {
-        logger.warn({ runId }, "Run not found");
-        return;
-      }
-
-      const run = runData as PipelineRun;
+      const run = claimed as PipelineRun;
       const config = await this.fetchConfig();
       const runWithConfig: PipelineRun = { ...run, config_snapshot: config };
 
       await executeRun(runWithConfig);
     } finally {
       this.activeRunId = null;
-    }
-  }
-
-  private async pollDiscoveryJobs(): Promise<void> {
-    if (await this.isRestoreMaintenanceMode()) {
-      logger.info("Backup restore maintenance mode active — discovery poll skipped");
-      return;
-    }
-
-    try {
-      const result = await processQueuedDiscoveryJobs(1);
-      if (result.jobs_processed > 0) {
-        logger.info(result, "Processed queued discovery jobs");
-      }
-    } catch (error) {
-      logger.error({ error }, "Failed to poll discovery jobs");
     }
   }
 

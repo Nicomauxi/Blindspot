@@ -22,7 +22,8 @@ export default function BackupsAdminPage() {
   const [enabled, setEnabled] = useState(false);
   const [cronExpression, setCronExpression] = useState("0 3 * * *");
   const [directory, setDirectory] = useState("");
-  const [maxBackups, setMaxBackups] = useState("7");
+  const [maxManualBackups, setMaxManualBackups] = useState("7");
+  const [maxScheduledBackups, setMaxScheduledBackups] = useState("7");
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [running, setRunning] = useState(false);
@@ -43,7 +44,8 @@ export default function BackupsAdminPage() {
       setEnabled(res.data.config.enabled);
       setCronExpression(res.data.config.cron_expression);
       setDirectory(res.data.config.directory ?? "");
-      setMaxBackups(String(res.data.config.max_backups));
+      setMaxManualBackups(String(res.data.config.max_manual_backups));
+      setMaxScheduledBackups(String(res.data.config.max_scheduled_backups));
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Error al cargar backups");
@@ -67,7 +69,8 @@ export default function BackupsAdminPage() {
         enabled,
         cron_expression: cronExpression,
         directory: directory.trim().length > 0 ? directory.trim() : null,
-        max_backups: Number(maxBackups),
+        max_manual_backups: Number(maxManualBackups),
+        max_scheduled_backups: Number(maxScheduledBackups),
       });
       setMessage("Configuracion guardada.");
       await loadOverview("refresh");
@@ -164,25 +167,30 @@ export default function BackupsAdminPage() {
             <StatCard label="Proximo backup" value={formatDate(overview.summary.next_backup_at)} hint={overview.config.enabled ? "Cron activo" : "Scheduler deshabilitado"} tone={overview.config.enabled ? "good" : "default"} />
             <StatCard label="Scheduler" value={overview.scheduler.status} hint={overview.scheduler.last_tick_at ? `Ultimo tick ${formatRelative(overview.scheduler.last_tick_at)}` : "Sin ejecuciones programadas"} tone={overview.scheduler.cron_active ? "good" : overview.scheduler.status === "maintenance" ? "warn" : "default"} />
             <StatCard label="Directorio" value={overview.config.effective_directory} hint={overview.config.directory_valid ? "Listo para escribir" : overview.config.directory_error ?? "Invalido"} tone={overview.config.directory_valid ? "good" : "warn"} />
-            <StatCard label="Backups presentes" value={overview.summary.backup_count} hint="Registros activos" tone="info" />
+            <StatCard label="Peso DB" value={formatBackupSize(overview.summary.database_size_bytes)} hint="Tamaño actual estimado de la base activa" tone="info" />
+            <StatCard label="Backups presentes" value={overview.summary.backup_count} hint={`Manual ${overview.summary.retention.manual.count}/${overview.summary.retention.manual.max} · Programados ${overview.summary.retention.scheduled.count}/${overview.summary.retention.scheduled.max}`} tone="info" />
             <StatCard label="Ultimo restore" value={overview.summary.last_restore ? formatDate(overview.summary.last_restore.completed_at ?? overview.summary.last_restore.started_at) : "Nunca"} hint={overview.summary.last_restore ? overview.summary.last_restore.status : "Sin restores registrados"} tone={overview.summary.last_restore?.status === "failed" ? "warn" : "default"} />
           </div>
 
-          <SectionCard title="Configuracion" description="El scheduler usa cron standard. Si dejas el directorio vacio, se usa el path efectivo por entorno.">
-            <div className="grid gap-4 lg:grid-cols-2">
+          <SectionCard title="Configuracion" description="La retencion ahora se define por trigger. Los checkpoints de restore usan la banda manual.">
+            <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-4">
               <label className="space-y-2 text-sm text-slate-700">
                 <span className="font-medium">Cron</span>
                 <input value={cronExpression} onChange={(event) => setCronExpression(event.target.value)} className="w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-sm" placeholder="0 3 * * *" disabled={maintenanceMode} />
               </label>
-              <label className="space-y-2 text-sm text-slate-700">
+              <label className="space-y-2 text-sm text-slate-700 xl:col-span-2">
                 <span className="font-medium">Directorio destino</span>
                 <input value={directory} onChange={(event) => setDirectory(event.target.value)} className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" placeholder={overview.config.effective_directory} disabled={maintenanceMode} />
               </label>
               <label className="space-y-2 text-sm text-slate-700">
-                <span className="font-medium">Maximo de backups</span>
-                <input value={maxBackups} onChange={(event) => setMaxBackups(event.target.value)} type="number" min={1} max={365} className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" disabled={maintenanceMode} />
+                <span className="font-medium">Maximo manual</span>
+                <input value={maxManualBackups} onChange={(event) => setMaxManualBackups(event.target.value)} type="number" min={1} max={365} className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" disabled={maintenanceMode} />
               </label>
-              <label className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+              <label className="space-y-2 text-sm text-slate-700">
+                <span className="font-medium">Maximo programado</span>
+                <input value={maxScheduledBackups} onChange={(event) => setMaxScheduledBackups(event.target.value)} type="number" min={1} max={365} className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" disabled={maintenanceMode} />
+              </label>
+              <label className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700 xl:col-span-2">
                 <input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} className="h-4 w-4 rounded border-slate-300" disabled={maintenanceMode} />
                 <span>
                   <span className="block font-medium text-slate-900">Activar programacion</span>
@@ -194,6 +202,22 @@ export default function BackupsAdminPage() {
               <button onClick={() => void handleSave()} disabled={saving || maintenanceMode} className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50">
                 {saving ? "Guardando..." : "Guardar configuracion"}
               </button>
+            </div>
+          </SectionCard>
+
+          <SectionCard title="Retencion" description="Manual y programado se podan por separado para que los restores no consuman la cuota del scheduler.">
+            <div className="grid gap-4 md:grid-cols-3">
+              <StatCard label="Retencion manual" value={overview.summary.retention.manual.count} hint={`Limite ${overview.summary.retention.manual.max}`} tone="info" />
+              <StatCard label="Retencion programada" value={overview.summary.retention.scheduled.count} hint={`Limite ${overview.summary.retention.scheduled.max}`} tone="info" />
+              <StatCard label="Checkpoints restore" value={overview.summary.restore_checkpoint_count} hint="Contados dentro de manual" tone="default" />
+            </div>
+          </SectionCard>
+
+          <SectionCard title="Capacidad" description="Se expone tamaño actual de DB y huella agregada de backups retenidos para operar sin entrar al filesystem.">
+            <div className="grid gap-4 md:grid-cols-3">
+              <StatCard label="Peso DB" value={formatBackupSize(overview.summary.database_size_bytes)} hint="Base activa local" tone="info" />
+              <StatCard label="Backups retenidos" value={formatBackupSize(overview.summary.stored_backup_size_bytes)} hint="Suma de archivos activos" tone="info" />
+              <StatCard label="Programados almacenados" value={formatBackupSize(overview.summary.stored_backup_size_by_trigger.scheduled)} hint={`Manuales ${formatBackupSize(overview.summary.stored_backup_size_by_trigger.manual)}`} tone="default" />
             </div>
           </SectionCard>
 
@@ -258,7 +282,7 @@ export default function BackupsAdminPage() {
               <p className="text-xs font-semibold uppercase tracking-[0.2em] text-rose-700">Confirmar restore</p>
               <h2 className="mt-2 text-lg font-semibold text-slate-950">Restaurar {restoreCandidate.filename ?? restoreCandidate.id}</h2>
               <p className="mt-2 text-sm text-slate-600">
-                Esta accion reemplaza la base activa local. Antes de restaurar se generara un checkpoint automatico del estado actual, que luego entra en la retencion normal de backups.
+                Esta accion reemplaza la base activa local. Antes de restaurar se generara un checkpoint automatico del estado actual, que luego entra en la retencion manual normal de backups.
               </p>
               <div className="mt-4 flex flex-wrap gap-3">
                 <button onClick={() => setRestoreCandidate(null)} className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50" disabled={Boolean(restoring)}>
