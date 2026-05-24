@@ -45,7 +45,7 @@
 
 - `BUG-1` — done (2026-05-24)
 - `BUG-2` — done (2026-05-24, resuelto por BUG-1)
-- `OPS-2` — pending
+- `OPS-2` — done (2026-05-24)
 - `OPS-3` — pending
 - `OPS-4` — pending
 - `OPS-5` — pending
@@ -1238,7 +1238,7 @@
 
 ## OPS-2 — Pantalla unificada `/admin/operations` (Pipeline + Monitoreo)
 
-**Status:** `pending`
+**Status:** `done` (2026-05-24)
 
 **Resultado esperado**
 - Existe `/admin/operations` con secciones colapsables `Pipeline` y `Monitoreo`. Cada sección reusa el contenido funcional actual de `/admin/pipeline` y `/admin/monitoring` sin perder features.
