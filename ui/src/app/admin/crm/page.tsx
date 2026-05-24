@@ -17,10 +17,10 @@ import {
   type CrmStatus,
   type LeadTracking,
   type LeadTrackingDetail,
-  type LeadTrackingEvent,
 } from "@/lib/api";
 import { useAuthStore } from "@/lib/auth-store";
 import { AdminPageLayout, HelpTip } from "@/components/admin-shell";
+import { CrmTimeline } from "@/components/crm-timeline";
 import { cn, formatRelative } from "@/lib/utils";
 import { CRM_COLUMNS, VALID_TRANSITIONS, groupTrackingsByStatus, isRegressionTransition, isTerminalStatus } from "@/lib/crm-tracking";
 
@@ -460,30 +460,12 @@ export default function CrmBoardPage() {
                 </div>
 
                 {/* Events timeline */}
-                {detail.detail.events.length === 0 ? (
-                  <p className="text-sm theme-text-muted mb-4">Sin eventos registrados aún.</p>
-                ) : (
-                  <div className="space-y-3 mb-4">
-                    {detail.detail.events.map((ev: LeadTrackingEvent) => (
-                      <div key={ev.id} className="border-l-2 pl-3 py-1" style={{ borderColor: "var(--sidebar-border)" }}>
-                        <div className="flex items-center gap-2 text-xs">
-                          {ev.from_status === ev.to_status ? (
-                            <span className="theme-text-muted italic">nota</span>
-                          ) : (
-                            <span className="theme-text-muted">
-                              {ev.from_status ?? "—"} → <strong className="theme-text-strong capitalize">{ev.to_status}</strong>
-                            </span>
-                          )}
-                          <span className="theme-text-muted">· {formatRelative(ev.created_at)}</span>
-                          <span className="theme-text-muted">· {ev.actor_role}</span>
-                        </div>
-                        {ev.channel && <p className="text-xs theme-text-muted">Canal: {ev.channel}</p>}
-                        {ev.reminder_at && <p className="text-xs theme-text-muted">Recordatorio: {new Date(ev.reminder_at).toLocaleString("es-UY")}</p>}
-                        {ev.notes && <p className="text-xs theme-text-strong mt-0.5">{ev.notes}</p>}
-                      </div>
-                    ))}
-                  </div>
-                )}
+                <div className="mb-4">
+                  <p className="text-xs font-semibold uppercase tracking-wide theme-text-muted mb-3">
+                    Historial ({detail.detail.events.length})
+                  </p>
+                  <CrmTimeline events={detail.detail.events} />
+                </div>
 
                 {/* Transition controls */}
                 {VALID_TRANSITIONS[detail.detail.status].length > 0 && (
