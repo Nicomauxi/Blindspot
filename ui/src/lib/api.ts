@@ -728,6 +728,45 @@ export async function updateCpuBudget(token: string, cpu_budget: "conservative" 
   return request<{ data: { cpu_budget: string } }>("/api/v1/pipeline/config/cpu-budget", { method: "PUT", body: JSON.stringify({ cpu_budget }) }, token);
 }
 
+export type SystemAlertSeverity = "info" | "warn" | "critical";
+export type SystemAlertStatus = "pending" | "read" | "archived";
+
+export type SystemAlert = {
+  id: string;
+  kind: string;
+  severity: SystemAlertSeverity;
+  title: string;
+  description: string;
+  payload: Record<string, unknown> | null;
+  target_user_id: string | null;
+  status: SystemAlertStatus;
+  created_at: string;
+  read_at: string | null;
+  read_by: string | null;
+  dedup_key: string | null;
+};
+
+export async function listAlerts(token: string, params: { status?: SystemAlertStatus; limit?: number; offset?: number } = {}) {
+  const qs = new URLSearchParams();
+  if (params.status) qs.set("status", params.status);
+  if (params.limit) qs.set("limit", String(params.limit));
+  if (params.offset) qs.set("offset", String(params.offset));
+  const query = qs.toString() ? `?${qs.toString()}` : "";
+  return request<{ data: SystemAlert[] }>(`/api/v1/alerts${query}`, {}, token);
+}
+
+export async function getAlertsUnreadCount(token: string) {
+  return request<{ data: { count: number } }>("/api/v1/alerts/unread-count", {}, token);
+}
+
+export async function markAlertRead(token: string, alertId: string) {
+  return request<{ data: { id: string; status: string } }>(`/api/v1/alerts/${alertId}/read`, { method: "POST" }, token);
+}
+
+export async function archiveAlert(token: string, alertId: string) {
+  return request<{ data: { id: string; status: string } }>(`/api/v1/alerts/${alertId}/archive`, { method: "POST" }, token);
+}
+
 export async function patchPipelineConfig(
   token: string,
   data: Partial<{
