@@ -7,7 +7,8 @@ export type RejectionReason =
   | "rating-too-low"
   | "reviews-below-min"
   | "reviews-above-max"
-  | "has-real-website";
+  | "has-real-website"
+  | "geo-out-of-bounds";
 
 export interface ProfileConfig {
   description?: string | undefined;

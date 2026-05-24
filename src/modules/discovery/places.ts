@@ -164,7 +164,8 @@ export interface TextSearchRequestLog {
 
 export async function textSearch(
   query: string,
-  maxResultCount: number
+  maxResultCount: number,
+  opts: { earlyStopDiscardRatio?: number; quickDiscardFn?: (place: PlaceItem) => boolean } = {}
 ): Promise<{ places: PlaceItem[]; requestCount: number; requestLog: TextSearchRequestLog[] }> {
   const log = getLogger();
   const allPlaces: PlaceItem[] = [];
@@ -198,22 +199,42 @@ export async function textSearch(
       break;
     }
 
+    const pagePlaces = parsed.data.places;
+
     log.debug({
       event: "places.text_search.response",
-      count: parsed.data.places.length,
+      count: pagePlaces.length,
       next_page_token: parsed.data.nextPageToken ?? null,
       duration_ms,
     }, "Received Text Search response");
 
     requestLog.push({
       request: { query, field_mask: TEXT_SEARCH_FIELDS, page_size: pageSize, page_token: pageToken ?? null },
-      response: { place_count: parsed.data.places.length, next_page_token: parsed.data.nextPageToken ?? null, duration_ms },
+      response: { place_count: pagePlaces.length, next_page_token: parsed.data.nextPageToken ?? null, duration_ms },
     });
 
-    allPlaces.push(...parsed.data.places);
+    allPlaces.push(...pagePlaces);
     pageToken = parsed.data.nextPageToken;
 
     if (allPlaces.length >= maxResultCount) break;
+
+    // Early stop: if a quickDiscardFn is provided and the page discard rate exceeds
+    // earlyStopDiscardRatio, stop requesting additional pages for this query.
+    if (opts.earlyStopDiscardRatio != null && opts.quickDiscardFn && pagePlaces.length > 0) {
+      const discarded = pagePlaces.filter(opts.quickDiscardFn).length;
+      const ratio = discarded / pagePlaces.length;
+      if (ratio >= opts.earlyStopDiscardRatio) {
+        log.debug({
+          event: "places.text_search.early_stop",
+          query,
+          discard_ratio: ratio,
+          threshold: opts.earlyStopDiscardRatio,
+          page_count: pagePlaces.length,
+          discarded,
+        }, "Early stop: page discard rate exceeds threshold");
+        break;
+      }
+    }
   } while (pageToken);
 
   return { places: allPlaces.slice(0, maxResultCount), requestCount, requestLog };
@@ -312,18 +333,35 @@ function placesToCandidates(places: PlaceItem[], jobLocation: string): PlaceCand
     });
 }
 
+const EARLY_STOP_DISCARD_RATIO = 0.9;
+
+function makeQuickDiscardFn(minRating: number, minReviews: number): (place: PlaceItem) => boolean {
+  return (place) => {
+    const rating = place.rating ?? 0;
+    const reviews = place.userRatingCount ?? 0;
+    return rating < minRating || reviews < minReviews;
+  };
+}
+
 export async function fetchPlaceCandidates(
   niche: string,
   location: string,
-  maxResults: number
+  maxResults: number,
+  opts: { minRating?: number; minReviews?: number; earlyStop?: boolean } = {}
 ): Promise<{ candidates: PlaceCandidate[]; textSearchRequestCount: number; requestLog: TextSearchRequestLog[] }> {
   const log = getLogger();
   const subAreas = getSubAreas(location);
+  const searchOpts = opts.earlyStop !== false && (opts.minRating != null || opts.minReviews != null)
+    ? {
+        earlyStopDiscardRatio: EARLY_STOP_DISCARD_RATIO,
+        quickDiscardFn: makeQuickDiscardFn(opts.minRating ?? 0, opts.minReviews ?? 0),
+      }
+    : {};
 
   if (subAreas.length === 0) {
     const query = `${niche} en ${location}`;
     log.info({ query, maxResults }, "Starting Places text search (single area)");
-    const { places, requestCount, requestLog } = await textSearch(query, maxResults);
+    const { places, requestCount, requestLog } = await textSearch(query, maxResults, searchOpts);
     log.info({ count: places.length, requestCount }, "Text search returned places");
     return { candidates: placesToCandidates(places, location), textSearchRequestCount: requestCount, requestLog };
   }
@@ -335,7 +373,7 @@ export async function fetchPlaceCandidates(
 
   const results = await Promise.all(
     subAreas.map((subArea) =>
-      limit(() => textSearch(`${niche} en ${subArea}`, perSubArea))
+      limit(() => textSearch(`${niche} en ${subArea}`, perSubArea, searchOpts))
     )
   );
 

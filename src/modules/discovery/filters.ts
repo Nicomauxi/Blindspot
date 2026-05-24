@@ -132,6 +132,10 @@ export function applyProfileFilter(
     const rating = candidate.rating ?? 0;
     const reviews = candidate.userRatingCount ?? 0;
 
+    if (candidate.geo_suspect === true) {
+      reasons.push("geo-out-of-bounds");
+    }
+
     if (rating < profileConfig.min_rating) {
       reasons.push("rating-too-low");
     }
