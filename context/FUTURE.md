@@ -67,7 +67,7 @@
 - `ALERT-1` — done
 - `ALERT-2` — done
 - `CRM-6` — done
-- `CRM-7` — pending
+- `CRM-7` — done
 - `CRM-8` — pending
 - `RBAC-1` — pending
 - `CRM-9` — pending
@@ -1812,7 +1812,7 @@
 
 ## CRM-7 — Historial completo en popup de cualquier etapa
 
-**Status:** `pending`
+**Status:** `done`
 
 **Resultado esperado**
 - El popup/modal de cualquier card del CRM muestra en su parte inferior un timeline cronológico de TODAS las transiciones del tracking, con:
