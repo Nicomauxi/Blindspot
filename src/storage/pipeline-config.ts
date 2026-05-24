@@ -57,9 +57,22 @@ export async function getGooglePlacesBudgetStatus(): Promise<BudgetStatus | null
   };
 }
 
+function startOfCurrentMonth(): string {
+  const d = new Date();
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1)).toISOString();
+}
+
+/**
+ * Recalcula google_places_budget_spent sumando estimated_cost_usd de todos los runs
+ * completados del mes en curso que tengan ese campo en sus stats.
+ *
+ * Cuándo correr: tras aplicar la migración del RPC increment_gp_budget_spent por
+ * primera vez, o tras detectar que budget_spent quedó en 0 con runs completados.
+ */
 export async function backfillGooglePlacesBudget(): Promise<{ total_runs: number; total_cost_usd: number }> {
   const db = getSupabase();
   const pageSize = 1000;
+  const monthStart = startOfCurrentMonth();
 
   let total = 0;
   let count = 0;
@@ -70,6 +83,7 @@ export async function backfillGooglePlacesBudget(): Promise<{ total_runs: number
       .from("runs")
       .select("stats")
       .eq("status", "completed")
+      .gte("finished_at", monthStart)
       .range(from, to);
 
     if (error) throw new Error(`backfillGooglePlacesBudget: ${error.message}`);
@@ -79,7 +93,7 @@ export async function backfillGooglePlacesBudget(): Promise<{ total_runs: number
       const stats = row.stats as Record<string, unknown> | null;
       const cost = typeof stats?.["estimated_cost_usd"] === "number" ? stats["estimated_cost_usd"] : 0;
       total += cost;
-      count++;
+      if (cost > 0) count++;
     }
 
     if (batch.length < pageSize) break;

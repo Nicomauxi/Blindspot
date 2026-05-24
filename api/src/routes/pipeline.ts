@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { getDb } from "../db/client.js";
 import { requireAuth, requireAdmin, getAuthUser } from "../auth/middleware.js";
-import { getGooglePlacesBudgetStatus } from "../../../src/storage/pipeline-config.js";
+import { getGooglePlacesBudgetStatus, backfillGooglePlacesBudget } from "../../../src/storage/pipeline-config.js";
 
 const permissiveUuid = z
   .string()
@@ -535,5 +535,12 @@ export async function pipelineRoutes(app: FastifyInstance): Promise<void> {
     if (error) return reply.status(500).send({ error: "Reset failed" });
     const status = await getGooglePlacesBudgetStatus();
     return reply.status(200).send({ data: status });
+  });
+
+  // POST /pipeline/gp-budget/backfill — admin only
+  app.post("/pipeline/gp-budget/backfill", { preHandler: requireAdmin }, async (_request, reply) => {
+    const result = await backfillGooglePlacesBudget();
+    const status = await getGooglePlacesBudgetStatus();
+    return reply.status(200).send({ data: { ...result, status } });
   });
 }

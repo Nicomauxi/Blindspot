@@ -43,8 +43,8 @@
 
 ### Ciclo 3 — Mejoras operativas y comerciales (abierto 2026-05-24)
 
-- `BUG-1` — pending
-- `BUG-2` — pending
+- `BUG-1` — done (2026-05-24)
+- `BUG-2` — done (2026-05-24, resuelto por BUG-1)
 - `OPS-2` — pending
 - `OPS-3` — pending
 - `OPS-4` — pending
@@ -1192,7 +1192,7 @@
 
 ## BUG-1 — Budget Google Places muestra 0 gastado
 
-**Status:** `pending`
+**Status:** `done` (2026-05-24)
 
 **Resultado esperado**
 - `GET /api/v1/pipeline/gp-budget` devuelve un `budget_spent` real, calculado contra los runs `completed` de tipo `google_places` del mes en curso.
@@ -1220,7 +1220,7 @@
 
 ## BUG-2 — Card "Discovery en cola" muestra "Budget GP restante USD 200" siempre
 
-**Status:** `pending`
+**Status:** `done` (2026-05-24, resuelto por BUG-1 — UI ya leía dinámico, el problema era el backend)
 
 **Resultado esperado**
 - La hint de la StatCard "Discovery en cola" en `/admin` (`ui/src/app/admin/page.tsx:100`) muestra el `budget_remaining` real, no 200.

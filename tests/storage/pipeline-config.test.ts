@@ -9,7 +9,7 @@ vi.mock("../../src/shared/supabase.js", () => ({
   getSupabase: vi.fn(() => ({ rpc: mockRpc, from: mockFrom })),
 }));
 
-import { incrementGooglePlacesBudgetSpent } from "../../src/storage/pipeline-config.js";
+import { incrementGooglePlacesBudgetSpent, backfillGooglePlacesBudget } from "../../src/storage/pipeline-config.js";
 
 describe("incrementGooglePlacesBudgetSpent", () => {
   beforeEach(() => {
@@ -59,5 +59,110 @@ describe("incrementGooglePlacesBudgetSpent", () => {
 
     const result = await incrementGooglePlacesBudgetSpent(1);
     expect(result).toBeNull();
+  });
+});
+
+describe("backfillGooglePlacesBudget", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("sums only runs with estimated_cost_usd > 0 from current month", async () => {
+    const runs = [
+      { stats: { estimated_cost_usd: 5.0 } },
+      { stats: { estimated_cost_usd: 3.5 } },
+      { stats: { estimated_cost_usd: 0 } },
+      { stats: null },
+    ];
+    mockFrom.mockReturnValue({
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      gte: vi.fn().mockReturnThis(),
+      range: vi.fn().mockResolvedValue({ data: runs, error: null }),
+      update: vi.fn().mockReturnThis(),
+    });
+
+    const updateChain = { eq: vi.fn().mockResolvedValue({ error: null }) };
+    mockFrom
+      .mockReturnValueOnce({
+        select: vi.fn().mockReturnThis(),
+        eq: vi.fn().mockReturnThis(),
+        gte: vi.fn().mockReturnThis(),
+        range: vi.fn().mockResolvedValue({ data: runs, error: null }),
+      })
+      .mockReturnValueOnce({
+        update: vi.fn().mockReturnValue(updateChain),
+      });
+
+    const result = await backfillGooglePlacesBudget();
+
+    expect(result.total_cost_usd).toBeCloseTo(8.5);
+    expect(result.total_runs).toBe(2);
+  });
+
+  it("filters by finished_at >= start of current month", async () => {
+    const selectChain = {
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      gte: vi.fn().mockReturnThis(),
+      range: vi.fn().mockResolvedValue({ data: [], error: null }),
+    };
+    const updateChain = { eq: vi.fn().mockResolvedValue({ error: null }) };
+    mockFrom
+      .mockReturnValueOnce(selectChain)
+      .mockReturnValueOnce({ update: vi.fn().mockReturnValue(updateChain) });
+
+    await backfillGooglePlacesBudget();
+
+    expect(selectChain.gte).toHaveBeenCalledWith(
+      "finished_at",
+      expect.stringMatching(/^\d{4}-\d{2}-01T/)
+    );
+  });
+
+  it("updates pipeline_config.google_places_budget_spent with the total", async () => {
+    const runs = [{ stats: { estimated_cost_usd: 12.0 } }];
+    const selectChain = {
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      gte: vi.fn().mockReturnThis(),
+      range: vi.fn().mockResolvedValue({ data: runs, error: null }),
+    };
+    const eqSpy = vi.fn().mockResolvedValue({ error: null });
+    const updateSpy = vi.fn().mockReturnValue({ eq: eqSpy });
+    mockFrom
+      .mockReturnValueOnce(selectChain)
+      .mockReturnValueOnce({ update: updateSpy });
+
+    await backfillGooglePlacesBudget();
+
+    expect(updateSpy).toHaveBeenCalledWith({ google_places_budget_spent: 12.0 });
+    expect(eqSpy).toHaveBeenCalledWith("id", "singleton");
+  });
+
+  it("throws if runs query fails", async () => {
+    mockFrom.mockReturnValue({
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      gte: vi.fn().mockReturnThis(),
+      range: vi.fn().mockResolvedValue({ data: null, error: { message: "db error" } }),
+    });
+
+    await expect(backfillGooglePlacesBudget()).rejects.toThrow("backfillGooglePlacesBudget: db error");
+  });
+
+  it("throws if update fails", async () => {
+    const selectChain = {
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      gte: vi.fn().mockReturnThis(),
+      range: vi.fn().mockResolvedValue({ data: [], error: null }),
+    };
+    const updateChain = { eq: vi.fn().mockResolvedValue({ error: { message: "update failed" } }) };
+    mockFrom
+      .mockReturnValueOnce(selectChain)
+      .mockReturnValueOnce({ update: vi.fn().mockReturnValue(updateChain) });
+
+    await expect(backfillGooglePlacesBudget()).rejects.toThrow("backfillGooglePlacesBudget update failed: update failed");
   });
 });
