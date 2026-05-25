@@ -1242,6 +1242,43 @@ export type DiscoveryLocationDensity = {
   gps_points: Array<{ lat: number; lng: number }>;
 };
 
+export type DiscoveryMapDensityLocation = {
+  location_key: string;
+  location_label: string;
+  parent_location_key: string;
+  parent_location_label: string;
+  lead_count: number;
+  hot_leads_count: number;
+  avg_prospect_score: number;
+  commercial_density_score: number;
+  gps_points: Array<{ lat: number; lng: number }>;
+  raw_gps_lead_count: number;
+  geocoded_lead_count: number;
+  grid_center: { lat: number; lng: number };
+};
+
+export type DiscoveryLeadDensityGpsSource = "real" | "inferred" | "google";
+
+export type DiscoveryLeadDensityFilters = {
+  location?: string;
+  source?: string[];
+  niche?: string;
+  prospect_score_gte?: number;
+  contact_tier?: string[];
+  gps_source?: DiscoveryLeadDensityGpsSource[];
+  limit?: number;
+};
+
+export type DiscoveryLeadDensityMeta = {
+  raw_gps_leads: number;
+  geocoded_address_leads: number;
+  unresolved_address_leads: number;
+  deferred_geocode_leads: number;
+  filtered_leads: number;
+  positioned_leads: number;
+  grid_cell_size_km: number;
+};
+
 export type DiscoveryRecommendationData = {
   coverage_gaps_global: DiscoveryCoverageGap[];
   coverage_gaps_by_location: Array<{
@@ -1392,12 +1429,17 @@ export async function getDiscoveryRecommendations(
 
 export async function getLeadDensity(
   token: string,
-  params: { location?: string; limit?: number } = {}
+  params: DiscoveryLeadDensityFilters = {}
 ) {
   const qp = new URLSearchParams();
   if (params.location) qp.set("location", params.location);
+  if (params.source && params.source.length > 0) qp.set("source", params.source.join(","));
+  if (params.niche) qp.set("niche", params.niche);
+  if (params.prospect_score_gte != null) qp.set("prospect_score_gte", String(params.prospect_score_gte));
+  if (params.contact_tier && params.contact_tier.length > 0) qp.set("contact_tier", params.contact_tier.join(","));
+  if (params.gps_source && params.gps_source.length > 0) qp.set("gps_source", params.gps_source.join(","));
   if (params.limit) qp.set("limit", String(params.limit));
-  return request<{ data: { locations: DiscoveryLocationDensity[]; exact_points: Array<{ lat: number; lng: number }> } }>(`/api/v1/admin/geo/lead-density?${qp}`, {}, token);
+  return request<{ data: { locations: DiscoveryMapDensityLocation[]; exact_points: Array<{ lat: number; lng: number }>; geocoded_points: Array<{ lat: number; lng: number }>; meta: DiscoveryLeadDensityMeta } }>(`/api/v1/admin/geo/lead-density?${qp}`, {}, token);
 }
 
 // Costs

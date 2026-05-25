@@ -1,4 +1,4 @@
-import type { DiscoveryLocationDensity } from "@/lib/api";
+import type { DiscoveryMapDensityLocation } from "@/lib/api";
 
 export type LocationDensitySort = "density" | "leads" | "hot" | "prospect";
 
@@ -9,11 +9,12 @@ export type MapPoint = {
 
 const textCollator = new Intl.Collator("es", { sensitivity: "base", usage: "sort" });
 
-export function countLocationPoints(location: DiscoveryLocationDensity): number {
+export function countLocationPoints(location: DiscoveryMapDensityLocation): number {
   return location.gps_points.length;
 }
 
-export function computeLocationCentroid(location: DiscoveryLocationDensity): MapPoint | null {
+export function computeLocationCentroid(location: DiscoveryMapDensityLocation): MapPoint | null {
+  if (location.grid_center) return location.grid_center;
   if (location.gps_points.length === 0) return null;
   const totals = location.gps_points.reduce(
     (sum, point) => ({ lat: sum.lat + point.lat, lng: sum.lng + point.lng }),
@@ -26,13 +27,16 @@ export function computeLocationCentroid(location: DiscoveryLocationDensity): Map
 }
 
 export function filterAndSortLocations(
-  locations: DiscoveryLocationDensity[],
+  locations: DiscoveryMapDensityLocation[],
   search: string,
   sort: LocationDensitySort
-): DiscoveryLocationDensity[] {
+): DiscoveryMapDensityLocation[] {
   const normalizedSearch = search.trim().toLocaleLowerCase("es-UY");
   const filtered = normalizedSearch
-    ? locations.filter((location) => location.location_label.toLocaleLowerCase("es-UY").includes(normalizedSearch))
+    ? locations.filter((location) => {
+        const haystack = `${location.location_label} ${location.parent_location_label}`.toLocaleLowerCase("es-UY");
+        return haystack.includes(normalizedSearch);
+      })
     : locations;
 
   return [...filtered].sort((left, right) => {
