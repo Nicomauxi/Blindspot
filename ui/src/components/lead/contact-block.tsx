@@ -3,6 +3,14 @@
 import { useMemo, useState } from "react";
 import { cn } from "@/lib/utils";
 
+export type FeedbackHandler = (fieldKey: string, value: string, verdict: "good" | "bad", comment?: string) => Promise<void>;
+
+const BAD_REASONS = [
+  "Número incorrecto / fuera de servicio",
+  "No corresponde a este negocio",
+  "Dato desactualizado",
+] as const;
+
 export type ContactPointKind = "whatsapp" | "phone" | "email" | "address" | "website" | "instagram" | "facebook";
 
 export interface ContactPoint {
@@ -94,44 +102,133 @@ function FilterChip({ active, label, onClick }: { active: boolean; label: string
   );
 }
 
-function ContactPointRow({ point }: { point: ContactPoint }) {
+function ContactPointRow({ point, onFeedback }: { point: ContactPoint; onFeedback?: FeedbackHandler }) {
   const tier = classifyReliability(point.reliability);
+  const [feedbackState, setFeedbackState] = useState<"idle" | "bad_reason" | "saving" | "done">("idle");
+  const [customComment, setCustomComment] = useState("");
+  const isSaving = feedbackState === "saving";
+
+  async function submitFeedback(verdict: "good" | "bad", comment?: string) {
+    if (!onFeedback) return;
+    setFeedbackState("saving");
+    try {
+      await onFeedback(point.kind, point.value, verdict, comment);
+      setFeedbackState("done");
+    } catch {
+      setFeedbackState("idle");
+    }
+  }
+
+  async function handleGood() {
+    await submitFeedback("good");
+  }
+
+  async function handleBadWithReason(reason: string) {
+    const comment = reason === "Otro" && customComment.trim() ? customComment.trim() : reason;
+    await submitFeedback("bad", comment);
+  }
+
   return (
-    <div className="flex flex-col gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4 lg:flex-row lg:items-center lg:justify-between">
-      <div className="min-w-0 flex-1">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">{point.label}</span>
-          <span className={cn("rounded-full px-2 py-0.5 text-[11px] font-semibold", reliabilityClass(tier))}>
-            {point.reliability != null ? `${Math.round(point.reliability * 100)}%` : reliabilityLabel(tier)}
-          </span>
-          {point.source ? (
-            <span className="rounded-full bg-slate-200 px-2 py-0.5 text-[11px] text-slate-600">
-              {sourceLabel(point.source)}
+    <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">{point.label}</span>
+            <span className={cn("rounded-full px-2 py-0.5 text-[11px] font-semibold", reliabilityClass(tier))}>
+              {point.reliability != null ? `${Math.round(point.reliability * 100)}%` : reliabilityLabel(tier)}
             </span>
-          ) : null}
+            {point.source ? (
+              <span className="rounded-full bg-slate-200 px-2 py-0.5 text-[11px] text-slate-600">
+                {sourceLabel(point.source)}
+              </span>
+            ) : null}
+            {feedbackState === "done" ? (
+              <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-semibold text-emerald-700">Feedback guardado</span>
+            ) : null}
+          </div>
+          <div className="mt-2 break-all text-sm font-medium text-slate-900">{point.value}</div>
+          {point.note ? <div className="mt-1 text-xs text-slate-500">{point.note}</div> : null}
         </div>
-        <div className="mt-2 break-all text-sm font-medium text-slate-900">{point.value}</div>
-        {point.note ? <div className="mt-1 text-xs text-slate-500">{point.note}</div> : null}
+        <div className="flex shrink-0 items-center gap-2">
+          {onFeedback && feedbackState !== "done" ? (
+            <>
+              <button
+                type="button"
+                title="Dato correcto"
+                disabled={feedbackState === "saving"}
+                onClick={() => void handleGood()}
+                className="rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-base hover:border-emerald-300 hover:bg-emerald-50 disabled:opacity-40"
+              >
+                👍
+              </button>
+              <button
+                type="button"
+                title="Dato incorrecto"
+                disabled={feedbackState === "saving"}
+                onClick={() => setFeedbackState((current) => current === "bad_reason" ? "idle" : "bad_reason")}
+                className={cn(
+                  "rounded-lg border px-2.5 py-2 text-base hover:border-rose-300 hover:bg-rose-50 disabled:opacity-40",
+                  feedbackState === "bad_reason" ? "border-rose-300 bg-rose-50" : "border-slate-200 bg-white"
+                )}
+              >
+                👎
+              </button>
+            </>
+          ) : null}
+          <a
+            href={point.href}
+            target={point.kind === "phone" || point.kind === "email" ? undefined : "_blank"}
+            rel={point.kind === "phone" || point.kind === "email" ? undefined : "noreferrer"}
+            className="rounded-lg bg-sky-600 px-3 py-2 text-sm font-medium text-white hover:bg-sky-700"
+          >
+            {point.actionLabel}
+          </a>
+        </div>
       </div>
-      <div className="flex shrink-0 gap-2">
-        <a
-          href={point.href}
-          target={point.kind === "phone" || point.kind === "email" ? undefined : "_blank"}
-          rel={point.kind === "phone" || point.kind === "email" ? undefined : "noreferrer"}
-          className="rounded-lg bg-sky-600 px-3 py-2 text-sm font-medium text-white hover:bg-sky-700"
-        >
-          {point.actionLabel}
-        </a>
-      </div>
+
+      {feedbackState === "bad_reason" ? (
+        <div className="mt-3 space-y-2 rounded-xl border border-rose-200 bg-rose-50 p-3">
+          <p className="text-xs font-semibold text-rose-700">¿Por qué está incorrecto?</p>
+          <div className="flex flex-wrap gap-2">
+            {BAD_REASONS.map((reason) => (
+              <button
+                key={reason}
+                type="button"
+                onClick={() => void handleBadWithReason(reason)}
+                className="rounded-full border border-rose-200 bg-white px-3 py-1 text-xs text-rose-700 hover:bg-rose-100"
+              >
+                {reason}
+              </button>
+            ))}
+          </div>
+          <div className="flex gap-2">
+            <input
+              value={customComment}
+              onChange={(e) => setCustomComment(e.target.value)}
+              placeholder="Otro motivo (opcional)"
+              className="flex-1 rounded-lg border border-rose-200 bg-white px-3 py-1.5 text-xs outline-none focus:border-rose-400"
+            />
+            <button
+              type="button"
+              onClick={() => void handleBadWithReason(customComment || "Dato incorrecto")}
+              disabled={isSaving}
+              className="rounded-lg bg-rose-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-rose-700 disabled:opacity-50"
+            >
+              {isSaving ? "…" : "Enviar"}
+            </button>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
 
 interface ContactBlockProps {
   points: ContactPoint[];
+  onFeedback?: FeedbackHandler;
 }
 
-export function ContactBlock({ points }: ContactBlockProps) {
+export function ContactBlock({ points, onFeedback }: ContactBlockProps) {
   const [typeFilter, setTypeFilter] = useState<TypeFilter>("all");
   const [sourceFilter, setSourceFilter] = useState<string>("all");
   const [reliabilityFilter, setReliabilityFilter] = useState<ReliabilityFilter>("all");
@@ -232,7 +329,7 @@ export function ContactBlock({ points }: ContactBlockProps) {
             Ningún dato coincide con los filtros activos.
           </div>
         ) : (
-          filtered.map((point) => <ContactPointRow key={point.id} point={point} />)
+          filtered.map((point) => <ContactPointRow key={point.id} point={point} onFeedback={onFeedback} />)
         )}
       </div>
     </div>
