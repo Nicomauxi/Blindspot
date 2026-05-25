@@ -995,6 +995,7 @@ export type EnrichmentLeadFilterSelection = {
   contact_tier?: string;
   prospect_score_gte?: number;
   niche?: string;
+  niche_expanded?: string[];
   source?: string;
   primary_offer?: string;
   q?: string;
@@ -1024,7 +1025,11 @@ export async function countLeadsByFilterSelection(filters: EnrichmentLeadFilterS
 
   if (filters.contact_tier) query = query.eq("contact_tier", filters.contact_tier);
   if (filters.prospect_score_gte != null) query = query.gte("prospect_score", filters.prospect_score_gte);
-  if (filters.niche) query = query.eq("niche", filters.niche);
+  if (filters.niche_expanded && filters.niche_expanded.length > 0) {
+    query = query.in("niche", filters.niche_expanded);
+  } else if (filters.niche) {
+    query = query.eq("niche", filters.niche);
+  }
   if (filters.source) query = query.eq("source", filters.source);
   if (filters.primary_offer) query = query.eq("primary_offer", filters.primary_offer);
   if (filters.q) query = query.textSearch("search_vector", filters.q, { type: "plain", config: "spanish" });
@@ -1043,7 +1048,11 @@ export async function loadLeadsByFilterSelection(
 
   if (filters.contact_tier) dashboardQuery = dashboardQuery.eq("contact_tier", filters.contact_tier);
   if (filters.prospect_score_gte != null) dashboardQuery = dashboardQuery.gte("prospect_score", filters.prospect_score_gte);
-  if (filters.niche) dashboardQuery = dashboardQuery.eq("niche", filters.niche);
+  if (filters.niche_expanded && filters.niche_expanded.length > 0) {
+    dashboardQuery = dashboardQuery.in("niche", filters.niche_expanded);
+  } else if (filters.niche) {
+    dashboardQuery = dashboardQuery.eq("niche", filters.niche);
+  }
   if (filters.source) dashboardQuery = dashboardQuery.eq("source", filters.source);
   if (filters.primary_offer) dashboardQuery = dashboardQuery.eq("primary_offer", filters.primary_offer);
   if (filters.q) dashboardQuery = dashboardQuery.textSearch("search_vector", filters.q, { type: "plain", config: "spanish" });

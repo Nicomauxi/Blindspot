@@ -25,6 +25,7 @@ import { operationsRoutes } from "./routes/admin/operations.js";
 import { trackingRoutes } from "./routes/tracking.js";
 import { discoveryPlacesRoutes } from "./routes/admin/discovery-places.js";
 import { alertsRoutes } from "./routes/alerts.js";
+import { nichesRoutes } from "./routes/admin/niches.js";
 import { getBackupScheduler } from "./modules/backups/runtime.js";
 import { startProcessMetricsRecorder, stopProcessMetricsRecorder } from "./modules/process-metrics/recorder.js";
 
@@ -99,6 +100,7 @@ export async function buildServer() {
   await app.register(trackingRoutes, { prefix: "/api/v1" });
   await app.register(discoveryPlacesRoutes, { prefix: "/api/v1" });
   await app.register(alertsRoutes, { prefix: "/api/v1" });
+  await app.register(nichesRoutes, { prefix: "/api/v1" });
 
   return app;
 }
