@@ -1,5 +1,10 @@
-import { describe, expect, it } from "vitest";
-import { buildDiscoveryRecommendations, buildLeadDensityRows, estimateGooglePlacesBatchCost } from "../../api/src/routes/discovery-insights.js";
+import { describe, expect, it, vi } from "vitest";
+import {
+  buildDiscoveryRecommendations,
+  buildLeadDensityRows,
+  buildLeadDensitySnapshot,
+  estimateGooglePlacesBatchCost,
+} from "../../api/src/routes/discovery-insights.js";
 
 describe("discovery insights", () => {
   const leads = [
@@ -9,6 +14,7 @@ describe("discovery insights", () => {
       niche: "restaurant",
       address: "Montevideo, Uruguay",
       prospect_score: 72,
+      contact_tier: "A",
       gps: { lat: -34.9, lng: -56.2 },
       corroborating_sources: [{ source: "osm" }],
     },
@@ -18,6 +24,7 @@ describe("discovery insights", () => {
       niche: "hotel",
       address: "Punta del Este, Uruguay",
       prospect_score: 61,
+      contact_tier: "B",
       gps: { lat: -34.95, lng: -54.95 },
       corroborating_sources: [],
     },
@@ -27,6 +34,159 @@ describe("discovery insights", () => {
     const rows = buildLeadDensityRows(leads);
     expect(rows[0]?.location_key).toBe("montevideo");
     expect(rows[0]?.commercial_density_score).toBeGreaterThanOrEqual(0);
+  });
+
+  it("builds granular density cells and geocodes missing GPS addresses", async () => {
+    const geocodeAddress = vi.fn(async (address: string) => {
+      if (address.includes("Pocitos")) return { lat: -34.916, lng: -56.149 };
+      return null;
+    });
+
+    const snapshot = await buildLeadDensitySnapshot([
+      {
+        id: "gps-lead",
+        source: "yelu",
+        niche: "restaurant",
+        address: "Pocitos, Montevideo, Uruguay",
+        prospect_score: 80,
+        contact_tier: "A",
+        gps: { lat: -34.905, lng: -56.191 },
+        corroborating_sources: [],
+      },
+      {
+        id: "geocoded-lead",
+        source: "osm",
+        niche: "restaurant",
+        address: "Benito Blanco 1234, Pocitos, Montevideo",
+        prospect_score: 58,
+        contact_tier: "B",
+        gps: null,
+        corroborating_sources: [],
+      },
+      {
+        id: "unresolved-lead",
+        source: "mintur",
+        niche: "hotel",
+        address: "Dirección sin match, Montevideo",
+        prospect_score: 40,
+        contact_tier: "C",
+        gps: null,
+        corroborating_sources: [],
+      },
+    ], {
+      geocodeAddress,
+      maxGeocodes: 10,
+    });
+
+    expect(geocodeAddress).toHaveBeenCalledTimes(2);
+    expect(snapshot.meta.raw_gps_leads).toBe(1);
+    expect(snapshot.meta.geocoded_address_leads).toBe(1);
+    expect(snapshot.meta.unresolved_address_leads).toBe(1);
+    expect(snapshot.meta.filtered_leads).toBe(3);
+    expect(snapshot.meta.positioned_leads).toBe(2);
+    expect(snapshot.locations[0]?.parent_location_label).toBe("Montevideo");
+    expect(snapshot.locations.some((location) => location.geocoded_lead_count > 0)).toBe(true);
+    expect(snapshot.geocoded_points).toContainEqual({ lat: -34.916, lng: -56.149 });
+  });
+
+  it("tracks deferred geocodes separately from unresolved addresses", async () => {
+    const geocodeAddress = vi.fn(async () => null);
+
+    const snapshot = await buildLeadDensitySnapshot([
+      {
+        id: "lead-1",
+        source: "yelu",
+        niche: "restaurant",
+        address: "Calle 1, Montevideo",
+        prospect_score: 50,
+        contact_tier: "A",
+        gps: null,
+        corroborating_sources: [],
+      },
+      {
+        id: "lead-2",
+        source: "osm",
+        niche: "restaurant",
+        address: "Calle 2, Montevideo",
+        prospect_score: 55,
+        contact_tier: "B",
+        gps: null,
+        corroborating_sources: [],
+      },
+    ], {
+      geocodeAddress,
+      maxGeocodes: 1,
+    });
+
+    expect(snapshot.meta.unresolved_address_leads).toBe(1);
+    expect(snapshot.meta.deferred_geocode_leads).toBe(1);
+  });
+
+  it("applies source, niche, score, tier and gps-source filters before aggregating", async () => {
+    const geocodeAddress = vi.fn(async (address: string) => {
+      if (address.includes("Pocitos")) return { lat: -34.916, lng: -56.149 };
+      return null;
+    });
+
+    const snapshot = await buildLeadDensitySnapshot([
+      {
+        id: "google-lead",
+        source: "google_places",
+        niche: "restaurant",
+        address: "Pocitos, Montevideo",
+        prospect_score: 82,
+        contact_tier: "B",
+        gps: { lat: -34.905, lng: -56.191 },
+        corroborating_sources: [],
+      },
+      {
+        id: "real-gps-lead",
+        source: "yelu",
+        niche: "restaurant",
+        address: "Pocitos, Montevideo",
+        prospect_score: 88,
+        contact_tier: "B",
+        gps: { lat: -34.901, lng: -56.188 },
+        corroborating_sources: [],
+      },
+      {
+        id: "inferred-lead",
+        source: "osm",
+        niche: "restaurant",
+        address: "Benito Blanco 1234, Pocitos, Montevideo",
+        prospect_score: 76,
+        contact_tier: "B",
+        gps: null,
+        corroborating_sources: [],
+      },
+      {
+        id: "filtered-out-lead",
+        source: "google_places",
+        niche: "hotel",
+        address: "Carrasco, Montevideo",
+        prospect_score: 40,
+        contact_tier: "C",
+        gps: { lat: -34.89, lng: -56.05 },
+        corroborating_sources: [],
+      },
+    ], {
+      filters: {
+        sources: ["google_places", "osm"],
+        niche: "restau",
+        prospect_score_gte: 70,
+        contact_tiers: ["B"],
+        gps_sources: ["google", "inferred"],
+      },
+      geocodeAddress,
+      maxGeocodes: 10,
+    });
+
+    expect(snapshot.meta.filtered_leads).toBe(2);
+    expect(snapshot.meta.positioned_leads).toBe(2);
+    expect(snapshot.meta.raw_gps_leads).toBe(1);
+    expect(snapshot.meta.geocoded_address_leads).toBe(1);
+    expect(geocodeAddress).toHaveBeenCalledTimes(1);
+    expect(snapshot.locations).toHaveLength(2);
   });
 
   it("suggests only missing sources for coverage gaps", () => {

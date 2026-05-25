@@ -17,6 +17,8 @@ let _mockTemplateLeadBriefError: Error | null = null;
 let _mockLeadFeedbackRows: Array<Record<string, unknown>> = [];
 let _lastLeadFeedbackInsert: Record<string, unknown> | null = null;
 let _auditLogInserts: Array<Record<string, unknown>> = [];
+let _trackedLeadIds = new Set<string>();
+let _trackingStatuses = new Map<string, string>();
 
 const mockLeadBrief = {
   summary: "Resumen comercial",
@@ -57,13 +59,21 @@ const mockLeadViewRow = {
   sources_count: 1,
   phone: "+598 99 123456",
   whatsapp: "+598 99 123456",
+  email: "ventas@parrilla.example.com",
   website: "https://parrilla.example.com",
   rating: 4.7,
   review_count: 128,
   tags: ["whatsapp-confirmed", "no-website"],
   state: "discovered",
   owner_group_id: "11111111-2222-3333-4444-555555555555",
-  digital_footprint: { fetched_at: "2026-01-01T00:00:00Z" },
+  digital_footprint: {
+    fetched_at: "2026-01-01T00:00:00Z",
+    contact_emails: ["ventas@parrilla.example.com"],
+    owner_email: "dueno@parrilla.example.com",
+    phone_alternatives: ["+598 98 111 222"],
+    email_quality: [{ email: "ventas@parrilla.example.com", quality: "generic", mx_valid: true }],
+    nested: { contact_phone: "+598 99 123456", additional_phones: ["+598 97 333 444"] },
+  },
   inferred_state: {
     has_delivery: { value: true, confidence: 0.9 },
     digitalization_level: "low",
@@ -75,6 +85,15 @@ const mockLeadViewRow = {
     urgency_signal: "high",
   },
   notes: "Lead de prueba",
+  lead_company_data: {
+    sales_contact_email: "ventas@parrilla.example.com",
+    manager_phone: "+598 99 123456",
+  },
+  canonical_fields: {
+    phone: { value: "+598 99 123456", source: "google_places", confidence: 0.9 },
+    email: { value: "ventas@parrilla.example.com", source: "website", confidence: 0.8 },
+    website: { value: "https://parrilla.example.com", source: "google_places", confidence: 0.9 },
+  },
   business_status: "OPERATIONAL",
   source_confidence: 0.9,
   data_confidence_score: 0.85,
@@ -268,6 +287,49 @@ vi.mock("../../api/src/db/client.js", () => ({
           },
         };
       }
+      if (table === "lead_tracking") {
+        return {
+          select: () => {
+            let ownerId: string | null = null;
+            let leadId: string | null = null;
+            let leadIds: string[] | null = null;
+            let statuses: string[] | null = null;
+            const buildRows = () => {
+              if (!ownerId) return [] as Array<Record<string, unknown>>;
+              return [..._trackedLeadIds]
+                .filter((trackedLeadId) => !leadId || trackedLeadId === leadId)
+                .filter((trackedLeadId) => !leadIds || leadIds.includes(trackedLeadId))
+                .filter((trackedLeadId) => !statuses || statuses.includes(_trackingStatuses.get(trackedLeadId) ?? "pending"))
+                .map((trackedLeadId) => ({
+                  id: `tracking-${trackedLeadId}`,
+                  lead_id: trackedLeadId,
+                  owner_id: ownerId,
+                  status: _trackingStatuses.get(trackedLeadId) ?? "pending",
+                }));
+            };
+            const chain: Record<string, unknown> = {};
+            chain["eq"] = (column: string, value: unknown) => {
+              if (column === "owner_id") ownerId = String(value);
+              if (column === "lead_id") leadId = String(value);
+              return chain;
+            };
+            chain["in"] = (column: string, values: unknown[]) => {
+              if (column === "lead_id") leadIds = values.map(String);
+              if (column === "status") statuses = values.map(String);
+              return chain;
+            };
+            chain["then"] = (resolve: (value: { data: Array<Record<string, unknown>>; error: null }) => unknown, reject?: (reason: unknown) => unknown) =>
+              Promise.resolve({ data: buildRows(), error: null }).then(resolve, reject);
+            chain["limit"] = () => ({
+              maybeSingle: async () => ({ data: buildRows()[0] ?? null, error: null }),
+              then: (resolve: (value: { data: Array<Record<string, unknown>>; error: null }) => unknown, reject?: (reason: unknown) => unknown) =>
+                Promise.resolve({ data: buildRows(), error: null }).then(resolve, reject),
+            });
+            chain["maybeSingle"] = async () => ({ data: buildRows()[0] ?? null, error: null });
+            return chain;
+          },
+        };
+      }
       return {};
     },
   }),
@@ -283,6 +345,8 @@ describe("GET /api/v1/leads", () => {
     _mockLeadFeedbackRows = [];
     _lastLeadFeedbackInsert = null;
     _auditLogInserts = [];
+    _trackedLeadIds = new Set();
+    _trackingStatuses = new Map();
     _mockUser = {
       id: "admin-user-id",
       email: "admin@blindspot.local",
@@ -381,6 +445,72 @@ describe("GET /api/v1/leads", () => {
     await app.close();
   });
 
+  it("redacts contact fields for CM users until they start tracking the lead", async () => {
+    _mockUser = {
+      id: "cm-user-id",
+      email: "cm@blindspot.local",
+      role: "cm",
+      lead_filter: { contact_tier: ["A"] },
+      active: true,
+    };
+
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "cm-user-id", email: "cm@blindspot.local" });
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/leads",
+      headers: { authorization: `Bearer ${token}` },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().data[0]).toEqual(
+      expect.objectContaining({
+        phone: "***",
+        whatsapp: "***",
+        email: "***",
+      })
+    );
+    expect(res.json().data[0].canonical_fields.phone.value).toBe("***");
+    expect(res.json().data[0].digital_footprint.contact_emails).toEqual(["***"]);
+    expect(res.json().data[0].digital_footprint.phone_alternatives).toEqual(["***"]);
+    expect(res.json().data[0].digital_footprint.email_quality[0].email).toBe("***");
+    expect(res.json().data[0].lead_company_data.sales_contact_email).toBe("***");
+    await app.close();
+  });
+
+  it("restores contact fields in list responses once the CM tracks the lead", async () => {
+    _mockUser = {
+      id: "cm-user-id",
+      email: "cm@blindspot.local",
+      role: "cm",
+      lead_filter: { contact_tier: ["A"] },
+      active: true,
+    };
+    _trackedLeadIds = new Set([LEAD_ID]);
+
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "cm-user-id", email: "cm@blindspot.local" });
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/leads",
+      headers: { authorization: `Bearer ${token}` },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().data[0]).toEqual(
+      expect.objectContaining({
+        phone: mockLeadViewRow.phone,
+        whatsapp: mockLeadViewRow.whatsapp,
+        email: mockLeadViewRow.email,
+      })
+    );
+    await app.close();
+  });
+
   it("CM requesting a tier outside their filter returns empty intersection", async () => {
     _mockUser = {
       id: "cm-user-id",
@@ -419,6 +549,8 @@ describe("GET /api/v1/leads/:id", () => {
     _mockLeadFeedbackRows = [];
     _lastLeadFeedbackInsert = null;
     _auditLogInserts = [];
+    _trackedLeadIds = new Set();
+    _trackingStatuses = new Map();
   });
 
   it("returns 401 without token", async () => {
@@ -532,6 +664,104 @@ describe("GET /api/v1/leads/:id", () => {
       headers: { authorization: `Bearer ${token}` },
     });
     expect(res.statusCode).toBe(404);
+    await app.close();
+  });
+
+  it("redacts nested contact data for CM users without active tracking", async () => {
+    _mockUser = {
+      id: "cm-user-id",
+      email: "cm@blindspot.local",
+      role: "cm",
+      lead_filter: { contact_tier: ["A", "B"] },
+      active: true,
+    };
+
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "cm-user-id", email: "cm@blindspot.local" });
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/v1/leads/${LEAD_ID}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().data).toEqual(
+      expect.objectContaining({
+        phone: "***",
+        whatsapp: "***",
+        email: "***",
+      })
+    );
+    expect(res.json().data.canonical_fields.phone.value).toBe("***");
+    expect(res.json().data.digital_footprint.owner_email).toBe("***");
+    expect(res.json().data.digital_footprint.phone_alternatives).toEqual(["***"]);
+    expect(res.json().data.digital_footprint.email_quality[0].email).toBe("***");
+    expect(res.json().data.digital_footprint.nested.contact_phone).toBe("***");
+    expect(res.json().data.digital_footprint.nested.additional_phones).toEqual(["***"]);
+    expect(res.json().data.lead_company_data.manager_phone).toBe("***");
+    await app.close();
+  });
+
+  it("keeps contact redacted when the only tracking is terminal", async () => {
+    _mockUser = {
+      id: "cm-user-id",
+      email: "cm@blindspot.local",
+      role: "cm",
+      lead_filter: { contact_tier: ["A", "B"] },
+      active: true,
+    };
+    _trackedLeadIds = new Set([LEAD_ID]);
+    _trackingStatuses = new Map([[LEAD_ID, "accepted"]]);
+
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "cm-user-id", email: "cm@blindspot.local" });
+    const listRes = await app.inject({
+      method: "GET",
+      url: "/api/v1/leads",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    const detailRes = await app.inject({
+      method: "GET",
+      url: `/api/v1/leads/${LEAD_ID}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+
+    expect(listRes.statusCode).toBe(200);
+    expect(listRes.json().data[0].phone).toBe("***");
+    expect(detailRes.statusCode).toBe(200);
+    expect(detailRes.json().data.phone).toBe("***");
+    await app.close();
+  });
+  it("unlocks contact data for tracked leads only", async () => {
+    _mockUser = {
+      id: "cm-user-id",
+      email: "cm@blindspot.local",
+      role: "cm",
+      lead_filter: { contact_tier: ["A", "B"] },
+      active: true,
+    };
+    _trackedLeadIds = new Set([LEAD_ID]);
+
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "cm-user-id", email: "cm@blindspot.local" });
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/v1/leads/${LEAD_ID}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().data).toEqual(
+      expect.objectContaining({
+        phone: mockLeadViewRow.phone,
+        whatsapp: mockLeadViewRow.whatsapp,
+        email: mockLeadViewRow.email,
+      })
+    );
+    expect(res.json().data.canonical_fields.phone.value).toBe(mockLeadViewRow.canonical_fields.phone.value);
     await app.close();
   });
 

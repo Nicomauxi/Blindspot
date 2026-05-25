@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const startFilterEnrichmentJob = vi.fn();
 const countLeadsByFilterSelection = vi.fn();
+const geocodeAddress = vi.fn();
 
 vi.mock("../../src/cli/commands/enrich.js", () => ({
   startFilterEnrichmentJob,
@@ -11,7 +12,23 @@ vi.mock("../../src/storage/leads.js", () => ({
   countLeadsByFilterSelection,
 }));
 
+vi.mock("../../api/src/services/lead-geocoding.js", () => ({
+  createLeadGeocodingService: () => ({ geocodeAddress }),
+}));
+
 let _activePipelineRun: Record<string, unknown> | null = null;
+
+let _mockLeads: Record<string, unknown>[] = [
+  {
+    id: "lead-1",
+    source: "yelu",
+    niche: "restaurant",
+    address: "Montevideo, Uruguay",
+    prospect_score: 70,
+    gps: { lat: -34.9, lng: -56.2 },
+    corroborating_sources: [{ source: "osm" }],
+  },
+];
 
 let _mockUser: Record<string, unknown> = {
   id: "admin-user-id",
@@ -259,17 +276,7 @@ vi.mock("../../api/src/db/client.js", () => ({
           select: () => ({
             order: () => ({
               limit: (_n: number) => Promise.resolve({
-                data: [
-                  {
-                    id: "lead-1",
-                    source: "yelu",
-                    niche: "restaurant",
-                    address: "Montevideo, Uruguay",
-                    prospect_score: 70,
-                    gps: { lat: -34.9, lng: -56.2 },
-                    corroborating_sources: [{ source: "osm" }],
-                  },
-                ],
+                data: _mockLeads,
                 error: null,
               }),
             }),
@@ -338,8 +345,21 @@ describe("Pipeline routes — admin only", () => {
     startFilterEnrichmentJob.mockResolvedValue({ runId: "filter-run-1" });
     countLeadsByFilterSelection.mockReset();
     countLeadsByFilterSelection.mockResolvedValue(2);
+    geocodeAddress.mockReset();
+    geocodeAddress.mockResolvedValue(null);
     process.env["API_JWT_SECRET"] = "test-secret-at-least-32-chars-long-1234";
     _activePipelineRun = null;
+    _mockLeads = [
+      {
+        id: "lead-1",
+        source: "yelu",
+        niche: "restaurant",
+        address: "Montevideo, Uruguay",
+        prospect_score: 70,
+        gps: { lat: -34.9, lng: -56.2 },
+        corroborating_sources: [{ source: "osm" }],
+      },
+    ];
     _mockUser = {
       id: "admin-user-id",
       email: "admin@blindspot.local",
@@ -457,6 +477,19 @@ describe("Pipeline routes — admin only", () => {
 describe("Discovery routes", () => {
   beforeEach(() => {
     process.env["API_JWT_SECRET"] = "test-secret-at-least-32-chars-long-1234";
+    geocodeAddress.mockReset();
+    geocodeAddress.mockResolvedValue(null);
+    _mockLeads = [
+      {
+        id: "lead-1",
+        source: "yelu",
+        niche: "restaurant",
+        address: "Montevideo, Uruguay",
+        prospect_score: 70,
+        gps: { lat: -34.9, lng: -56.2 },
+        corroborating_sources: [{ source: "osm" }],
+      },
+    ];
     _mockUser = {
       id: "admin-user-id",
       email: "admin@blindspot.local",
@@ -598,6 +631,78 @@ describe("Discovery routes", () => {
     expect(Array.isArray(body.data.supported_sources)).toBe(true);
     await app.close();
   });
+
+  it("GET /admin/geo/lead-density rejects unsupported filters", async () => {
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/admin/geo/lead-density?source=linkedin&contact_tier=Z&gps_source=maybe",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.statusCode).toBe(400);
+    const body = res.json();
+    expect(body.error_code).toBe("invalid_query");
+    await app.close();
+  });
+
+  it("GET /admin/geo/lead-density returns granular zones and metadata", async () => {
+    geocodeAddress.mockImplementation(async (address: string) => address.includes("Pocitos") ? { lat: -34.916, lng: -56.149 } : null);
+    _mockLeads = [
+      {
+        id: "lead-gps",
+        source: "yelu",
+        niche: "restaurant",
+        address: "Pocitos, Montevideo, Uruguay",
+        prospect_score: 81,
+        contact_tier: "A",
+        gps: { lat: -34.905, lng: -56.191 },
+        corroborating_sources: [],
+      },
+      {
+        id: "lead-google",
+        source: "google_places",
+        niche: "restaurant",
+        address: "Pocitos, Montevideo, Uruguay",
+        prospect_score: 77,
+        contact_tier: "B",
+        gps: { lat: -34.904, lng: -56.19 },
+        corroborating_sources: [],
+      },
+      {
+        id: "lead-address",
+        source: "osm",
+        niche: "restaurant",
+        address: "Benito Blanco 1234, Pocitos, Montevideo",
+        prospect_score: 64,
+        contact_tier: "B",
+        gps: null,
+        corroborating_sources: [],
+      },
+    ];
+
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/admin/geo/lead-density?limit=10&source=google_places,osm&niche=restaurant&prospect_score_gte=70&contact_tier=B&gps_source=google",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(Array.isArray(body.data.locations)).toBe(true);
+    expect(body.data.meta.filtered_leads).toBe(1);
+    expect(body.data.meta.positioned_leads).toBe(1);
+    expect(body.data.meta.raw_gps_leads).toBe(1);
+    expect(body.data.meta.geocoded_address_leads).toBe(0);
+    expect(body.data.locations[0]).toHaveProperty("parent_location_label");
+    expect(geocodeAddress).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+
 });
 
 describe("Campaigns routes — implemented (Fase 43)", () => {

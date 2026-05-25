@@ -83,6 +83,17 @@ vi.mock("../../api/src/db/client.js", () => ({
           }),
         };
       }
+      if (table === "lead_tracking") {
+        return {
+          select: () => ({
+            eq: () => ({
+              in: () => ({
+                in: async () => ({ data: [], error: null }),
+              }),
+            }),
+          }),
+        };
+      }
       return {};
     },
   }),
