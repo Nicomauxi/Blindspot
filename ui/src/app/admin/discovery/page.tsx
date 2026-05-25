@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   bulkCreateDiscoveryJobs,
   createDiscoveryJobBatch,
@@ -16,7 +16,9 @@ import {
   type DiscoveryCoverageGap,
   type DiscoveryJob,
   type DiscoveryJobBatch,
-  type DiscoveryLocationDensity,
+  type DiscoveryLeadDensityFilters,
+  type DiscoveryLeadDensityMeta,
+  type DiscoveryMapDensityLocation,
   type DiscoveryPlaceCatalogEntry,
   type DiscoveryRecommendationData,
   type MissingFilters,
@@ -33,6 +35,9 @@ const BULK_COST_WARNING_THRESHOLD = 5;
 
 const SOURCES = ["yelu", "pedidosya", "mintur", "osm", "google_places"] as const;
 const PROFILES = ["A", "B", "C", "D"] as const;
+const EMPTY_DENSITY_FILTERS: DiscoveryLeadDensityFilters = {
+  prospect_score_gte: 0,
+};
 const JOB_STATUS_COLORS: Record<string, string> = {
   queued: "bg-amber-50 text-amber-700",
   running: "bg-sky-50 text-sky-700",
@@ -388,7 +393,10 @@ export default function DiscoveryPage() {
   const [composer, setComposer] = useState<DiscoveryComposerDraft>(EMPTY_COMPOSER);
   const [composerHydrated, setComposerHydrated] = useState(false);
   const [recommendations, setRecommendations] = useState<DiscoveryRecommendationData | null>(null);
-  const [density, setDensity] = useState<DiscoveryLocationDensity[]>([]);
+  const [density, setDensity] = useState<DiscoveryMapDensityLocation[]>([]);
+  const [densityMeta, setDensityMeta] = useState<DiscoveryLeadDensityMeta | null>(null);
+  const [densityFilters, setDensityFilters] = useState<DiscoveryLeadDensityFilters>(EMPTY_DENSITY_FILTERS);
+  const [densityLoading, setDensityLoading] = useState(false);
   const [batches, setBatches] = useState<DiscoveryJobBatch[]>([]);
   const [legacyJobs, setLegacyJobs] = useState<DiscoveryJob[]>([]);
   const [expandedBatchId, setExpandedBatchId] = useState<string | null>(null);
@@ -403,6 +411,7 @@ export default function DiscoveryPage() {
     density: null,
   });
   const [prefillNote, setPrefillNote] = useState<string | null>(null);
+  const densityFiltersBootstrapped = useRef(false);
 
   const [bulkCities, setBulkCities] = useState<string[]>([]);
   const [bulkNiches, setBulkNiches] = useState<string[]>([]);
@@ -461,6 +470,24 @@ export default function DiscoveryPage() {
     return warnings;
   }, [composer.google_cost_cap_usd, composer.location, composer.sources.length, configuredCap, estimatedGoogleCost, includesGoogle, remainingBudget]);
 
+  async function loadDensity(filters: DiscoveryLeadDensityFilters, showSpinner = false) {
+    if (!token) return;
+    if (showSpinner) setDensityLoading(true);
+    try {
+      const response = await getLeadDensity(token, { ...filters, limit: 30 });
+      setDensity(response.data.locations);
+      setDensityMeta(response.data.meta);
+      setSectionErrors((current) => ({ ...current, density: null }));
+      setSelectedLocationKey((current) => response.data.locations.some((location) => location.location_key === current) ? current : null);
+    } catch (err) {
+      setDensity([]);
+      setDensityMeta(null);
+      setSectionErrors((current) => ({ ...current, density: getErrorMessage(err, "No se pudo cargar el mapa de densidad.") }));
+    } finally {
+      if (showSpinner) setDensityLoading(false);
+    }
+  }
+
   async function loadPage() {
     if (!token) return;
     setLoading(true);
@@ -468,7 +495,7 @@ export default function DiscoveryPage() {
       listDiscoveryJobBatches(token, { include_jobs: true, limit: 20 }),
       listDiscoveryJobs(token, { limit: 50 }),
       getDiscoveryRecommendations(token, { sources: composer.sources, location: composer.location || undefined, niche: composer.niche || undefined, limit: 20 }),
-      getLeadDensity(token, { location: selectedLocationKey ?? undefined, limit: 20 }),
+      getLeadDensity(token, { ...densityFilters, limit: 30 }),
     ]);
 
     const nextErrors: Record<DiscoverySection, string | null> = {
@@ -503,9 +530,12 @@ export default function DiscoveryPage() {
 
     if (densityRes.status === "fulfilled") {
       setDensity(densityRes.value.data.locations);
+      setDensityMeta(densityRes.value.data.meta);
+      setSelectedLocationKey((current) => densityRes.value.data.locations.some((location) => location.location_key === current) ? current : null);
     } else {
       nextErrors.density = getErrorMessage(densityRes.reason, "No se pudo cargar el mapa de densidad.");
       setDensity([]);
+      setDensityMeta(null);
     }
 
     setSectionErrors(nextErrors);
@@ -528,7 +558,23 @@ export default function DiscoveryPage() {
   useEffect(() => {
     void loadPage();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token, selectedLocationKey]);
+  }, [token]);
+
+  useEffect(() => {
+    if (!token) return;
+    if (!densityFiltersBootstrapped.current) {
+      densityFiltersBootstrapped.current = true;
+      return;
+    }
+    setDensityLoading(true);
+    const timeout = window.setTimeout(() => {
+      void loadDensity(densityFilters, true);
+    }, 300);
+    return () => {
+      window.clearTimeout(timeout);
+      setDensityLoading(false);
+    };
+  }, [densityFilters, token]);
 
   useEffect(() => {
     if (!token) return;
@@ -596,15 +642,19 @@ export default function DiscoveryPage() {
       niche: gap.niche,
       sources: Array.from(new Set([...gap.present_sources, ...gap.missing_sources])),
     }));
-    setSelectedLocationKey(gap.location_key);
+    setSelectedLocationKey(null);
     setPrefillNote(`Gap ${gap.location_label} · ${gap.niche}`);
   }
 
-  function applyLocationPrefill(location: DiscoveryLocationDensity) {
-    setComposer((current) => ({ ...current, location: location.location_label }));
+  function applyLocationPrefill(location: DiscoveryMapDensityLocation) {
+    setComposer((current) => ({ ...current, location: location.parent_location_label }));
     setSelectedLocationKey(location.location_key);
-    setPrefillNote(`Ubicación ${location.location_label}`);
+    setPrefillNote(`Zona ${location.location_label}`);
   }
+
+  const densityNicheSuggestions = useMemo(() => {
+    return Array.from(new Set((recommendations?.niche_suggestions ?? []).map((entry) => entry.niche).filter(Boolean))).sort((left, right) => left.localeCompare(right, "es"));
+  }, [recommendations]);
 
   const allRecentJobs = useMemo(() => {
     const batchChildren: DiscoveryJob[] = batches.flatMap((batch) => batch.jobs ?? []);
@@ -661,7 +711,7 @@ export default function DiscoveryPage() {
                   );
                 })}
               </div>
-              <p className="mt-2 text-xs text-slate-500">`google_places` queda opt-in explícito y no se preselecciona en recomendaciones.</p>
+              <p className="mt-2 text-xs text-slate-500">&quot;google_places&quot; queda opt-in explícito y no se preselecciona en recomendaciones.</p>
             </div>
 
             <div className="grid gap-4 md:grid-cols-2">
@@ -885,7 +935,7 @@ export default function DiscoveryPage() {
               <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Por ubicación</p>
               <div className="mt-3 space-y-3">
                 {recommendations?.coverage_gaps_by_location.length ? recommendations.coverage_gaps_by_location.map((group) => (
-                  <button key={group.location_key} type="button" onClick={() => applyLocationPrefill({ location_key: group.location_key, location_label: group.location_label, commercial_density_score: group.commercial_density_score, lead_count: 0, hot_leads_count: 0, avg_prospect_score: 0, gps_points: [] })} className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-left hover:border-sky-200 hover:bg-sky-50/40">
+                  <button key={group.location_key} type="button" onClick={() => { setComposer((current) => ({ ...current, location: group.location_label })); setSelectedLocationKey(null); setPrefillNote(`Ubicación ${group.location_label}`); }} className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-left hover:border-sky-200 hover:bg-sky-50/40">
                     <div className="flex items-center justify-between gap-3">
                       <div>
                         <p className="text-sm font-semibold text-slate-900">{group.location_label}</p>
@@ -919,10 +969,19 @@ export default function DiscoveryPage() {
           </div>
       </SectionCard>
 
-      <SectionCard title="Contexto y mapa" description="Vista agregada por ubicación. Tocar una ubicación filtra recomendaciones y deja prefill listo para el composer.">
+      <SectionCard title="Contexto y mapa" description="Vista granular por cuadrículas. Tocar una zona precarga la ubicación padre en el composer y recalcula recomendaciones.">
         <div className="space-y-4">
           <SectionWarning message={sectionErrors.density} />
-          <LocationDensityMap locations={density} selectedLocationKey={selectedLocationKey} onSelect={applyLocationPrefill} />
+          <LocationDensityMap
+            locations={density}
+            meta={densityMeta}
+            selectedLocationKey={selectedLocationKey}
+            onSelect={applyLocationPrefill}
+            filters={densityFilters}
+            onFiltersChange={setDensityFilters}
+            nicheSuggestions={densityNicheSuggestions}
+            loading={densityLoading}
+          />
         </div>
       </SectionCard>
 
@@ -995,7 +1054,7 @@ export default function DiscoveryPage() {
             <SectionWarning message={sectionErrors.jobs} />
             {legacyJobs.length ? (
               <details className="rounded-2xl border border-slate-200 bg-white p-4">
-                <summary className="cursor-pointer list-none text-sm font-semibold text-slate-900">{`Ver  jobs legacy`}</summary>
+                <summary className="cursor-pointer list-none text-sm font-semibold text-slate-900">Ver jobs legacy</summary>
                 <div className="mt-4 space-y-3">
                   {legacyJobs.map((job) => (
                     <div key={job.id} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">

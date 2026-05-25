@@ -93,6 +93,7 @@ function formatSectionError(error: unknown, fallbackMessage: string) {
 export default function LeadDetailPage() {
   const { id } = useParams<{ id: string }>();
   const token = useAuthStore((s) => s.token);
+  const role = useAuthStore((s) => s.role);
   const router = useRouter();
 
   const [lead, setLead] = useState<LeadDetail | null>(null);
@@ -182,7 +183,7 @@ export default function LeadDetailPage() {
     if (!lead) return [];
     return [
       { label: "Hay un pitch de entrada claro", done: Boolean(lead.pitch_hook || assistant?.personalized_pitch) },
-      { label: "Existe al menos un canal usable", done: Boolean(lead.whatsapp || lead.email || lead.phone) },
+      { label: "Existe al menos un canal usable", done: Boolean((lead.whatsapp && lead.whatsapp !== "***") || (lead.email && lead.email !== "***") || (lead.phone && lead.phone !== "***")) },
       { label: "El contacto parece listo", done: lead.contact_ready === true },
       { label: "Ya se revisó historial de acciones", done: outreach.length > 0 },
       { label: "Se validó si comparte owner group", done: ownerGroup.length > 0 || !lead.owner_group_id },
@@ -223,17 +224,39 @@ export default function LeadDetailPage() {
     }
   }
 
+  const isContactRedacted = Boolean(
+    lead && (lead.phone === "***" || lead.email === "***" || lead.whatsapp === "***")
+  );
+
   async function handleStartTracking() {
     if (!token || !lead) return;
     setStartingTracking(true);
     setTrackingNotice(null);
     try {
       await createTracking(token, { lead_id: lead.id });
-      setTrackingNotice("Seguimiento iniciado.");
-      router.push("/admin/crm");
+      if (isContactRedacted) {
+        // Reload lead to show unredacted contact data
+        const refreshed = await getLead(token, lead.id);
+        setLead(refreshed.data);
+        setTrackingNotice("Seguimiento iniciado. Datos de contacto desbloqueados.");
+      } else {
+        setTrackingNotice("Seguimiento iniciado.");
+        router.push("/admin/crm");
+      }
     } catch (err) {
       if (err instanceof ApiError && err.status === 409) {
-        setTrackingNotice("Ya existe un seguimiento activo para este lead. Buscalo en el board de CRM.");
+        try {
+          const refreshed = await getLead(token, lead.id);
+          setLead(refreshed.data);
+          const unlocked = refreshed.data.phone !== "***" || refreshed.data.email !== "***" || refreshed.data.whatsapp !== "***";
+          setTrackingNotice(
+            unlocked
+              ? "Ya existía un seguimiento activo para este lead. Refrescamos la ficha y desbloqueamos el contacto."
+              : "Ya existe un seguimiento activo para este lead. Buscalo en el board de CRM."
+          );
+        } catch {
+          setTrackingNotice("Ya existe un seguimiento activo para este lead. Buscalo en el board de CRM.");
+        }
       } else {
         setTrackingNotice("No se pudo iniciar el seguimiento. Intentá de nuevo.");
       }
@@ -304,6 +327,31 @@ export default function LeadDetailPage() {
         <StatCard label="Canal recomendado" value={recommendedChannelLabel} hint={lead.contact_ready ? "Listo para primer toque" : "Conviene validar antes de salir"} />
         <StatCard label="Fuentes disponibles" value={lead.sources_count ?? lead.corroborating_sources.length ?? 0} hint={lead.canonical_source ? `Fuente principal: ${lead.canonical_source}` : "Sin canonical_source"} />
       </div>
+
+      {/* RBAC-1: contact unlock banner for cm users */}
+      {role === "cm" && isContactRedacted && (
+        <div className="rounded-2xl border border-amber-200 bg-amber-50 px-5 py-4 flex items-center justify-between gap-4">
+          <div>
+            <p className="text-sm font-semibold text-amber-800">Datos de contacto ocultos</p>
+            <p className="mt-0.5 text-xs text-amber-700">
+              Iniciá el seguimiento de este lead para desbloquear teléfono, WhatsApp y email.
+            </p>
+          </div>
+          <button
+            onClick={handleStartTracking}
+            disabled={startingTracking}
+            className="shrink-0 rounded-lg bg-amber-600 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-700 disabled:opacity-60"
+          >
+            {startingTracking ? "Iniciando…" : "Iniciar seguimiento para ver contacto"}
+          </button>
+        </div>
+      )}
+
+      {trackingNotice && (
+        <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+          {trackingNotice}
+        </div>
+      )}
 
       <SectionCard title="Resumen comercial" description="Qué vender, por qué y con qué evidencia mínima para avanzar.">
           <div className="grid gap-4 lg:grid-cols-[1.2fr,0.8fr]">
@@ -836,7 +884,7 @@ function buildContactPoints(lead: LeadDetail | null): ContactPoint[] {
   function makePoint(kind: ContactPointKind, value: string | null | undefined, trace?: LeadFieldSource | null, source?: string | null, reliability?: number | null, note?: string | null): ContactPoint | null {
     if (!value) return null;
     const trimmed = value.trim();
-    if (!trimmed) return null;
+    if (!trimmed || trimmed === "***") return null;
     const resolvedSource = source ?? trace?.source ?? null;
     const resolvedReliability = reliability ?? trace?.confidence ?? null;
     const resolvedNote = note ?? trace?.evidence?.[0]?.note ?? null;

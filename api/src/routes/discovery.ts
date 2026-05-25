@@ -4,7 +4,7 @@ import { getDb } from "../db/client.js";
 import { requireAuth, requireAdmin, getAuthUser } from "../auth/middleware.js";
 import {
   buildDiscoveryRecommendations,
-  buildLeadDensityRows,
+  buildLeadDensitySnapshot,
   estimateGooglePlacesBatchCost,
   supportedDiscoverySources,
   type LeadInsightRow,
@@ -14,6 +14,7 @@ import {
 } from "./discovery-insights.js";
 import { bulkInsertDiscoveryJobs } from "../../../src/storage/discovery-jobs.js";
 import { getGooglePlacesBudgetStatus } from "../../../src/storage/pipeline-config.js";
+import { createLeadGeocodingService } from "../services/lead-geocoding.js";
 
 const permissiveUuid = z
   .string()
@@ -112,11 +113,50 @@ const recommendationsQuerySchema = z.object({
     .pipe(z.number().int().min(1).max(100)),
 });
 
+const LEAD_DENSITY_CONTACT_TIERS = ["A", "B", "C", "D", "X"] as const;
+const LEAD_DENSITY_GPS_SOURCES = ["real", "inferred", "google"] as const;
+
+const leadDensityQuerySchema = recommendationsQuerySchema.extend({
+  source: z
+    .union([z.string(), z.array(z.string())])
+    .optional()
+    .transform((value) => parseMultiValue(value))
+    .refine(
+      (value) => !value || value.every((entry) => supportedDiscoverySources().includes(entry)),
+      { message: "source must use supported discovery sources" }
+    ),
+  contact_tier: z
+    .union([z.string(), z.array(z.string())])
+    .optional()
+    .transform((value) => parseMultiValue(value)?.map((entry) => entry.toUpperCase()))
+    .refine(
+      (value) => !value || value.every((entry) => LEAD_DENSITY_CONTACT_TIERS.includes(entry as (typeof LEAD_DENSITY_CONTACT_TIERS)[number])),
+      { message: "contact_tier must be one of A, B, C, D or X" }
+    ),
+  gps_source: z
+    .union([z.string(), z.array(z.string())])
+    .optional()
+    .transform((value) => parseMultiValue(value))
+    .refine(
+      (value) => !value || value.every((entry) => LEAD_DENSITY_GPS_SOURCES.includes(entry as (typeof LEAD_DENSITY_GPS_SOURCES)[number])),
+      { message: "gps_source must be one of real, inferred or google" }
+    ),
+  prospect_score_gte: z
+    .string()
+    .optional()
+    .transform((value) => {
+      if (value == null || value.trim() === "") return undefined;
+      return Number(value);
+    })
+    .pipe(z.number().min(0).max(100).optional()),
+});
+
 const batchActionSchema = z.object({
   action: z.enum(["pause", "resume", "cancel"]),
 });
 
 const VALID_JOB_STATUSES = ["queued", "running", "completed", "failed", "cancelled", "paused"];
+const leadGeocodingService = createLeadGeocodingService();
 
 const JOB_STATUS_TRANSITIONS: Record<string, string> = {
   pause: "paused",
@@ -207,6 +247,13 @@ async function recomputeBatchAggregate(db: ReturnType<typeof getDb>, batchId: st
 }
 
 function parseSources(raw: string | string[] | undefined): string[] | undefined {
+  if (!raw) return undefined;
+  const parts = Array.isArray(raw) ? raw : raw.split(",");
+  const values = parts.map((part) => part.trim()).filter(Boolean);
+  return values.length > 0 ? values : undefined;
+}
+
+function parseMultiValue(raw: string | string[] | undefined): string[] | undefined {
   if (!raw) return undefined;
   const parts = Array.isArray(raw) ? raw : raw.split(",");
   const values = parts.map((part) => part.trim()).filter(Boolean);
@@ -688,7 +735,7 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.get("/admin/geo/lead-density", { preHandler: requireAdmin }, async (request, reply) => {
-    const parsedQuery = recommendationsQuerySchema.safeParse(request.query);
+    const parsedQuery = leadDensityQuerySchema.safeParse(request.query);
     if (!parsedQuery.success) {
       return reply.status(400).send({
         error: "Invalid query",
@@ -700,7 +747,7 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
     const db = getDb();
     const leadsRes = await db
       .from("leads")
-      .select("id, source, niche, address, prospect_score, gps, corroborating_sources")
+      .select("id, source, niche, address, prospect_score, contact_tier, gps, corroborating_sources")
       .order("created_at", { ascending: false })
       .limit(5000);
 
@@ -709,8 +756,25 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
       return reply.status(500).send({ error: "Database error", error_code: "db_error" });
     }
 
-    const density = buildLeadDensityRows((leadsRes.data ?? []) as unknown as LeadInsightRow[], parsedQuery.data.location ?? null);
-    return reply.status(200).send({ data: { locations: density, exact_points: density.flatMap((row) => row.gps_points) } });
+    const density = await buildLeadDensitySnapshot((leadsRes.data ?? []) as unknown as LeadInsightRow[], {
+      locationFilter: parsedQuery.data.location ?? null,
+      filters: {
+        sources: parsedQuery.data.source,
+        niche: parsedQuery.data.niche ?? null,
+        prospect_score_gte: parsedQuery.data.prospect_score_gte ?? null,
+        contact_tiers: parsedQuery.data.contact_tier,
+        gps_sources: parsedQuery.data.gps_source as Array<"real" | "inferred" | "google"> | undefined,
+      },
+      geocodeAddress: leadGeocodingService.geocodeAddress,
+      maxGeocodes: Math.min(160, Math.max(parsedQuery.data.limit * 8, 40)),
+    });
+
+    return reply.status(200).send({
+      data: {
+        ...density,
+        locations: density.locations.slice(0, parsedQuery.data.limit),
+      },
+    });
   });
 
   app.get("/discovery/suggestions", { preHandler: requireAdmin }, async (request, reply) => {
