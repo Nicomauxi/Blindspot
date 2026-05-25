@@ -1788,6 +1788,8 @@ export type LeadTrackingLeadData = {
   address: string | null;
   website: string | null;
   phone: string | null;
+  whatsapp: string | null;
+  email: string | null;
 };
 
 export type LeadTrackingDetail = LeadTracking & {

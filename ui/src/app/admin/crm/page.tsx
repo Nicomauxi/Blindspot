@@ -12,6 +12,7 @@ import {
 } from "@dnd-kit/core";
 import {
   addTrackingNote,
+  createLeadFeedback,
   getTracking,
   listTrackings,
   transitionTracking,
@@ -103,6 +104,8 @@ export default function CrmBoardPage() {
   const [saving, setSaving]         = useState(false);
   const [saveError, setSaveError]   = useState<string | null>(null);
   const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [contactChannelPick, setContactChannelPick] = useState("whatsapp");
+  const [contactFeedback, setContactFeedback] = useState<Record<string, "idle" | "saving" | "done">>({});
   const [filters, setFilters]       = useState<TrackingFilters>(() => filtersFromSearchParams(searchParams));
   const [showFilters, setShowFilters] = useState(false);
 
@@ -602,25 +605,115 @@ export default function CrmBoardPage() {
             {detail.detail && (
               <>
                 {/* Lead data */}
-                <div className="rounded-xl border px-3 py-2 mb-4 space-y-1 text-xs theme-text-muted">
+                <div className="rounded-xl border px-3 py-3 mb-4 space-y-2 text-xs theme-text-muted">
                   {detail.detail.lead?.niche && (
                     <p>Rubro: <span className="theme-text-strong">{detail.detail.lead.niche}</span></p>
                   )}
                   {detail.detail.lead?.address && (
                     <p>Dirección: <span className="theme-text-strong">{detail.detail.lead.address}</span></p>
                   )}
-                  {detail.detail.lead?.phone && (
-                    <p>Teléfono: <span className="theme-text-strong">{detail.detail.lead.phone}</span></p>
-                  )}
-                  {detail.detail.lead?.website && (
-                    <p>Web: <a href={detail.detail.lead.website} target="_blank" rel="noopener noreferrer" className="text-sky-600 hover:underline">{detail.detail.lead.website}</a></p>
-                  )}
-                  <p>
+                  <div className="space-y-1.5">
+                    {detail.detail.lead?.whatsapp && detail.detail.lead.whatsapp !== "***" && (
+                      <ContactChannelRow
+                        label="WhatsApp"
+                        value={detail.detail.lead.whatsapp}
+                        href={`https://wa.me/${detail.detail.lead.whatsapp.replace(/\D/g, "")}`}
+                        actionLabel="Abrir"
+                        fieldKey="whatsapp"
+                        leadId={detail.detail.lead_id}
+                        feedbackState={contactFeedback["whatsapp"] ?? "idle"}
+                        onFeedback={(verdict) => {
+                          setContactFeedback((prev) => ({ ...prev, whatsapp: "saving" }));
+                          createLeadFeedback(token!, detail.detail!.lead_id, { field_key: "whatsapp", field_value: detail.detail!.lead?.whatsapp ?? undefined, verdict })
+                            .then(() => setContactFeedback((prev) => ({ ...prev, whatsapp: "done" })))
+                            .catch(() => setContactFeedback((prev) => ({ ...prev, whatsapp: "idle" })));
+                        }}
+                      />
+                    )}
+                    {detail.detail.lead?.phone && detail.detail.lead.phone !== "***" && (
+                      <ContactChannelRow
+                        label="Teléfono"
+                        value={detail.detail.lead.phone}
+                        href={`tel:${detail.detail.lead.phone.replace(/[^\d+]/g, "")}`}
+                        actionLabel="Llamar"
+                        fieldKey="phone"
+                        leadId={detail.detail.lead_id}
+                        feedbackState={contactFeedback["phone"] ?? "idle"}
+                        onFeedback={(verdict) => {
+                          setContactFeedback((prev) => ({ ...prev, phone: "saving" }));
+                          createLeadFeedback(token!, detail.detail!.lead_id, { field_key: "phone", field_value: detail.detail!.lead?.phone ?? undefined, verdict })
+                            .then(() => setContactFeedback((prev) => ({ ...prev, phone: "done" })))
+                            .catch(() => setContactFeedback((prev) => ({ ...prev, phone: "idle" })));
+                        }}
+                      />
+                    )}
+                    {detail.detail.lead?.email && detail.detail.lead.email !== "***" && (
+                      <ContactChannelRow
+                        label="Email"
+                        value={detail.detail.lead.email}
+                        href={`mailto:${detail.detail.lead.email}`}
+                        actionLabel="Enviar"
+                        fieldKey="email"
+                        leadId={detail.detail.lead_id}
+                        feedbackState={contactFeedback["email"] ?? "idle"}
+                        onFeedback={(verdict) => {
+                          setContactFeedback((prev) => ({ ...prev, email: "saving" }));
+                          createLeadFeedback(token!, detail.detail!.lead_id, { field_key: "email", field_value: detail.detail!.lead?.email ?? undefined, verdict })
+                            .then(() => setContactFeedback((prev) => ({ ...prev, email: "done" })))
+                            .catch(() => setContactFeedback((prev) => ({ ...prev, email: "idle" })));
+                        }}
+                      />
+                    )}
+                    {detail.detail.lead?.website && (
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium text-slate-700 w-16 shrink-0">Web</span>
+                        <a href={detail.detail.lead.website.startsWith("http") ? detail.detail.lead.website : `https://${detail.detail.lead.website}`} target="_blank" rel="noreferrer" className="text-sky-600 hover:underline truncate">{detail.detail.lead.website}</a>
+                      </div>
+                    )}
+                  </div>
+                  <p className="pt-1">
                     <Link href={`/admin/leads/${detail.detail.lead_id}`} className="text-sky-600 hover:underline">
-                      Ver ficha del lead →
+                      Ver ficha completa →
                     </Link>
                   </p>
                 </div>
+
+                {/* Channel picker — only when in contact stage */}
+                {detail.detail.status === "contact" && (
+                  <div className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-3 mb-4">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-sky-700 mb-2">¿Qué canal usaste?</p>
+                    <div className="flex flex-wrap gap-2 mb-3">
+                      {(["whatsapp", "phone", "email"] as const).map((ch) => (
+                        <label key={ch} className="flex items-center gap-1.5 cursor-pointer">
+                          <input
+                            type="radio"
+                            name="contact-channel"
+                            value={ch}
+                            checked={contactChannelPick === ch}
+                            onChange={() => setContactChannelPick(ch)}
+                            className="accent-sky-600"
+                          />
+                          <span className="text-xs font-medium text-sky-800 capitalize">
+                            {ch === "whatsapp" ? "WhatsApp" : ch === "phone" ? "Teléfono" : "Email"}
+                          </span>
+                        </label>
+                      ))}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const tracking = trackings.find((t) => t.id === detail.trackingId);
+                        if (tracking) {
+                          closeAll();
+                          setTransition({ tracking, to_status: "validation", notes: "", channel: contactChannelPick, reminder_at: "", isRegression: false });
+                        }
+                      }}
+                      className="rounded-lg bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700"
+                    >
+                      Marcar como contactado → validation
+                    </button>
+                  </div>
+                )}
 
                 {/* Events timeline */}
                 <div className="mb-4">
@@ -796,6 +889,47 @@ function TrackingCard({
           </button>
         )}
       </div>
+    </div>
+  );
+}
+
+function ContactChannelRow({
+  label,
+  value,
+  href,
+  actionLabel,
+  feedbackState,
+  onFeedback,
+}: {
+  label: string;
+  value: string;
+  href: string;
+  actionLabel: string;
+  fieldKey: string;
+  leadId: string;
+  feedbackState: "idle" | "saving" | "done";
+  onFeedback: (verdict: "good" | "bad") => void;
+}) {
+  return (
+    <div className="flex items-center gap-2">
+      <span className="font-medium text-slate-700 w-16 shrink-0">{label}</span>
+      <span className="flex-1 min-w-0 truncate text-slate-800">{value}</span>
+      <a
+        href={href}
+        target={href.startsWith("tel:") || href.startsWith("mailto:") ? undefined : "_blank"}
+        rel={href.startsWith("tel:") || href.startsWith("mailto:") ? undefined : "noreferrer"}
+        className="rounded bg-sky-600 px-2 py-0.5 text-[11px] font-medium text-white hover:bg-sky-700 shrink-0"
+      >
+        {actionLabel}
+      </a>
+      {feedbackState === "done" ? (
+        <span className="text-emerald-600 text-xs shrink-0">✓</span>
+      ) : (
+        <>
+          <button type="button" title="Dato correcto" disabled={feedbackState === "saving"} onClick={() => onFeedback("good")} className="text-emerald-600 hover:text-emerald-800 disabled:opacity-40 shrink-0">👍</button>
+          <button type="button" title="Dato incorrecto" disabled={feedbackState === "saving"} onClick={() => onFeedback("bad")} className="text-rose-500 hover:text-rose-700 disabled:opacity-40 shrink-0">👎</button>
+        </>
+      )}
     </div>
   );
 }
