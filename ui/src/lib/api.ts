@@ -1958,3 +1958,49 @@ export async function getZoneLeads(
     token
   );
 }
+
+// Niche aliases
+export type NicheAliasGroup = {
+  id: string;
+  canonical: string;
+  aliases: string[];
+  created_at: string;
+  updated_at: string;
+};
+
+export async function listNicheAliasGroups(token: string) {
+  return request<{ data: NicheAliasGroup[] }>("/api/v1/admin/niches/groups", {}, token);
+}
+
+export async function listDistinctNiches(token: string) {
+  return request<{ data: string[]; total: number }>("/api/v1/admin/niches/distinct", {}, token);
+}
+
+export async function createNicheAliasGroup(
+  token: string,
+  canonical: string,
+  aliases: string[]
+) {
+  return request<{ data: NicheAliasGroup }>("/api/v1/admin/niches/groups", {
+    method: "POST",
+    body: JSON.stringify({ canonical, aliases }),
+  }, token);
+}
+
+export async function updateNicheAliasGroup(
+  token: string,
+  id: string,
+  canonical: string,
+  aliases: string[]
+) {
+  return request<{ data: NicheAliasGroup }>(`/api/v1/admin/niches/groups/${id}`, {
+    method: "PUT",
+    body: JSON.stringify({ canonical, aliases }),
+  }, token);
+}
+
+export async function deleteNicheAliasGroup(token: string, id: string) {
+  return request<{ data: { deleted: string } }>(`/api/v1/admin/niches/groups/${id}`, {
+    method: "DELETE",
+  }, token);
+}

@@ -4,6 +4,7 @@ import { getDb } from "../db/client.js";
 import { requireAuth, requireAdmin, getAuthUser, type AuthUser } from "../auth/middleware.js";
 import { createLLMProvider } from "../llm/factory.js";
 import { countLeadsByFilterSelection, type EnrichmentLeadFilterSelection } from "../../../src/storage/leads.js";
+import { expandNiche } from "../../../src/storage/niches.js";
 import { startFilterEnrichmentJob } from "../../../src/cli/commands/enrich.js";
 import { startReDiscoveryJob } from "../../../src/cli/commands/re-discover.js";
 import { summarizeFeedbackRows, computeFeedbackAdjustedConfidence } from "../../../src/modules/feedback/summary.js";
@@ -998,10 +999,12 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
       }
       const { contact_tier, prospect_score_gte, niche, source, primary_offer, q,
         missing_gps, missing_address, missing_phone, missing_whatsapp, missing_email, missing_website } = parseResult.data;
+      const nicheExpanded = niche !== undefined ? await expandNiche(niche) : undefined;
       const filters: EnrichmentLeadFilterSelection = {
         ...(contact_tier !== undefined && { contact_tier }),
         ...(prospect_score_gte !== undefined && { prospect_score_gte }),
         ...(niche !== undefined && { niche }),
+        ...(nicheExpanded !== undefined && nicheExpanded.length > 1 && { niche_expanded: nicheExpanded }),
         ...(source !== undefined && { source }),
         ...(primary_offer !== undefined && { primary_offer }),
         ...(q !== undefined && { q }),
@@ -1038,10 +1041,12 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
         missing_gps, missing_address, missing_phone, missing_whatsapp, missing_email, missing_website,
         mode, with_heuristic, concurrency,
       } = parseResult.data;
+      const nicheExpanded = niche !== undefined ? await expandNiche(niche) : undefined;
       const filters: EnrichmentLeadFilterSelection = {
         ...(contact_tier !== undefined && { contact_tier }),
         ...(prospect_score_gte !== undefined && { prospect_score_gte }),
         ...(niche !== undefined && { niche }),
+        ...(nicheExpanded !== undefined && nicheExpanded.length > 1 && { niche_expanded: nicheExpanded }),
         ...(source !== undefined && { source }),
         ...(primary_offer !== undefined && { primary_offer }),
         ...(q !== undefined && { q }),

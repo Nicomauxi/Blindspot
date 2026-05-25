@@ -1,13 +1,19 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   getPerformanceErrors,
   getPerformanceOverview,
   getPerformanceQuality,
+  listNicheAliasGroups,
+  listDistinctNiches,
+  createNicheAliasGroup,
+  updateNicheAliasGroup,
+  deleteNicheAliasGroup,
   type PerformanceErrorRow,
   type PerformanceOverview,
   type PerformanceQuality,
+  type NicheAliasGroup,
 } from "@/lib/api";
 import { useAuthStore } from "@/lib/auth-store";
 import { cn } from "@/lib/utils";
@@ -47,6 +53,8 @@ function CoverageBar({ label, value }: { label: string; value: number }) {
   );
 }
 
+type NicheFormMode = "idle" | "create" | { editing: NicheAliasGroup };
+
 export default function PerformancePage() {
   const token = useAuthStore((s) => s.token);
   const [overview, setOverview] = useState<PerformanceOverview | null>(null);
@@ -54,6 +62,17 @@ export default function PerformancePage() {
   const [errors, setErrors] = useState<PerformanceErrorRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Nichos state
+  const [nicheGroups, setNicheGroups] = useState<NicheAliasGroup[]>([]);
+  const [distinctNiches, setDistinctNiches] = useState<string[]>([]);
+  const [nicheLoading, setNicheLoading] = useState(false);
+  const [nicheError, setNicheError] = useState<string | null>(null);
+  const [nicheFormMode, setNicheFormMode] = useState<NicheFormMode>("idle");
+  const [nicheCanonical, setNicheCanonical] = useState("");
+  const [nicheAliasInput, setNicheAliasInput] = useState("");
+  const [nicheSaving, setNicheSaving] = useState(false);
+  const canonicalRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!token) return;
@@ -72,6 +91,81 @@ export default function PerformancePage() {
       .catch((err) => setError(err instanceof Error ? err.message : "Error al cargar rendimiento"))
       .finally(() => setLoading(false));
   }, [token]);
+
+  useEffect(() => {
+    if (!token) return;
+    setNicheLoading(true);
+    Promise.all([listNicheAliasGroups(token), listDistinctNiches(token)])
+      .then(([groups, distinct]) => {
+        setNicheGroups(groups.data);
+        setDistinctNiches(distinct.data);
+        setNicheError(null);
+      })
+      .catch((err) => setNicheError(err instanceof Error ? err.message : "Error al cargar nichos"))
+      .finally(() => setNicheLoading(false));
+  }, [token]);
+
+  function openCreate() {
+    setNicheCanonical("");
+    setNicheAliasInput("");
+    setNicheFormMode("create");
+    setTimeout(() => canonicalRef.current?.focus(), 50);
+  }
+
+  function openEdit(group: NicheAliasGroup) {
+    setNicheCanonical(group.canonical);
+    setNicheAliasInput(group.aliases.join(", "));
+    setNicheFormMode({ editing: group });
+    setTimeout(() => canonicalRef.current?.focus(), 50);
+  }
+
+  function cancelNicheForm() {
+    setNicheFormMode("idle");
+    setNicheCanonical("");
+    setNicheAliasInput("");
+  }
+
+  function parseAliases(raw: string): string[] {
+    return raw
+      .split(/[,\n]+/)
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+  }
+
+  async function saveNicheGroup() {
+    if (!token || !nicheCanonical.trim()) return;
+    const aliases = parseAliases(nicheAliasInput);
+    setNicheSaving(true);
+    try {
+      if (nicheFormMode === "create") {
+        const { data } = await createNicheAliasGroup(token, nicheCanonical.trim(), aliases);
+        setNicheGroups((prev) => [...prev, data].sort((a, b) => a.canonical.localeCompare(b.canonical)));
+      } else if (typeof nicheFormMode === "object") {
+        const { data } = await updateNicheAliasGroup(token, nicheFormMode.editing.id, nicheCanonical.trim(), aliases);
+        setNicheGroups((prev) => prev.map((g) => g.id === data.id ? data : g));
+      }
+      cancelNicheForm();
+    } catch (err) {
+      setNicheError(err instanceof Error ? err.message : "Error al guardar grupo");
+    } finally {
+      setNicheSaving(false);
+    }
+  }
+
+  async function removeNicheGroup(id: string) {
+    if (!token) return;
+    try {
+      await deleteNicheAliasGroup(token, id);
+      setNicheGroups((prev) => prev.filter((g) => g.id !== id));
+    } catch (err) {
+      setNicheError(err instanceof Error ? err.message : "Error al eliminar grupo");
+    }
+  }
+
+  const groupedNiches = new Set(
+    nicheGroups.flatMap((g) => [g.canonical, ...g.aliases])
+  );
+  const ungroupedNiches = distinctNiches.filter((n) => !groupedNiches.has(n));
 
   if (loading) return <div className="text-gray-400 text-sm py-8 text-center">Cargando...</div>;
   if (error) return <div className="bg-red-50 border border-red-200 text-red-700 rounded px-3 py-3 text-sm">{error}</div>;
@@ -267,6 +361,142 @@ export default function PerformancePage() {
           </div>
         ) : (
           <p className="text-sm text-gray-400">No hay cambios significativos en la ventana seleccionada.</p>
+        )}
+      </Section>
+
+      <Section title="Nichos — grupos de sinónimos">
+        {nicheError && (
+          <div className="bg-red-50 border border-red-200 text-red-700 rounded px-3 py-2 text-sm mb-3">{nicheError}</div>
+        )}
+
+        {nicheLoading ? (
+          <p className="text-sm text-gray-400">Cargando nichos...</p>
+        ) : (
+          <>
+            {nicheGroups.length > 0 && (
+              <div className="space-y-2 mb-4">
+                {nicheGroups.map((group) => (
+                  <div key={group.id} className="border rounded-lg px-3 py-2">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <span className="font-medium text-gray-800">{group.canonical}</span>
+                        {group.aliases.length > 0 && (
+                          <span className="ml-2 text-sm text-gray-500">
+                            = {group.aliases.join(", ")}
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => openEdit(group)}
+                          className="text-xs text-sky-600 hover:text-sky-800"
+                        >
+                          Editar
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => removeNicheGroup(group.id)}
+                          className="text-xs text-red-500 hover:text-red-700"
+                        >
+                          Eliminar
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {nicheFormMode !== "idle" && (
+              <div className="border rounded-lg p-4 bg-gray-50 space-y-3 mb-4">
+                <div className="text-sm font-medium text-gray-700">
+                  {nicheFormMode === "create" ? "Nuevo grupo de sinónimos" : "Editar grupo"}
+                </div>
+                <div className="space-y-2">
+                  <div>
+                    <label htmlFor="niche-canonical" className="text-xs text-gray-500 block mb-1">
+                      Nombre canónico
+                    </label>
+                    <input
+                      id="niche-canonical"
+                      ref={canonicalRef}
+                      type="text"
+                      value={nicheCanonical}
+                      onChange={(e) => setNicheCanonical(e.target.value)}
+                      placeholder="ej: restaurante"
+                      className="w-full border rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-sky-400"
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="niche-aliases" className="text-xs text-gray-500 block mb-1">
+                      Sinónimos (separados por coma)
+                    </label>
+                    <input
+                      id="niche-aliases"
+                      type="text"
+                      value={nicheAliasInput}
+                      onChange={(e) => setNicheAliasInput(e.target.value)}
+                      placeholder="ej: restaurant, parrilla, parilla"
+                      className="w-full border rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-sky-400"
+                    />
+                  </div>
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={saveNicheGroup}
+                    disabled={nicheSaving || !nicheCanonical.trim()}
+                    className="px-3 py-1.5 rounded text-sm font-medium bg-sky-600 text-white hover:bg-sky-700 disabled:opacity-50"
+                  >
+                    {nicheSaving ? "Guardando..." : "Guardar"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={cancelNicheForm}
+                    className="px-3 py-1.5 rounded text-sm text-gray-600 hover:text-gray-900"
+                  >
+                    Cancelar
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {nicheFormMode === "idle" && (
+              <button
+                type="button"
+                onClick={openCreate}
+                className="text-sm text-sky-600 hover:text-sky-800 font-medium"
+              >
+                + Nuevo grupo
+              </button>
+            )}
+
+            {ungroupedNiches.length > 0 && (
+              <details className="mt-4">
+                <summary className="text-sm text-gray-500 cursor-pointer select-none">
+                  {ungroupedNiches.length} niches sin grupo
+                </summary>
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {ungroupedNiches.map((n) => (
+                    <button
+                      key={n}
+                      type="button"
+                      onClick={() => {
+                        setNicheCanonical(n);
+                        setNicheAliasInput("");
+                        setNicheFormMode("create");
+                        setTimeout(() => canonicalRef.current?.focus(), 50);
+                      }}
+                      className="px-2 py-0.5 rounded-full bg-gray-100 text-gray-700 text-xs hover:bg-sky-50 hover:text-sky-700 border border-gray-200"
+                    >
+                      {n}
+                    </button>
+                  ))}
+                </div>
+              </details>
+            )}
+          </>
         )}
       </Section>
     </div>

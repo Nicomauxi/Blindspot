@@ -2061,7 +2061,7 @@
 
 ## QUAL-1 — Apartado "Nichos" en Calidad con aliasing/sinónimos
 
-**Status:** `pending`
+**Status:** `done (2026-05-25)`
 
 **Resultado esperado**
 - En la pantalla de Calidad (probable `/admin/quality` o `/admin/performance/quality`), un nuevo sub-apartado "Nichos" lista los niches encontrados en `leads` agrupados por similitud.
