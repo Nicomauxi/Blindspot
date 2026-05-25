@@ -93,7 +93,7 @@ Estado actual (`DISC-2` cerrado):
 - nichos sugeridos con detalle por fuente en hover
 - composer persistente después de crear batch
 - `jobs legacy` fuera de la experiencia principal, visibles solo como compatibilidad
-- `Contexto y mapa` con Leaflet + OSM, viewport real, lista lateral acotada, scroll y filtros/orden
+- `Contexto y mapa` con Leaflet + OSM, cuadrículas granulares, geocoding on-demand cacheado, lista lateral acotada, scroll, filtros server-side con debounce y métricas separadas de GPS real vs inferido
 - composer con toggle persistente `discovery + enrich` y trazabilidad por runs en cada job hijo
 - Lead Explorer puede lanzar enrichment de la colección filtrada actual con guardrails de volumen, concurrencia y trazabilidad por run
 
@@ -110,7 +110,8 @@ La ficha del lead debe volverse también punto de validación humana.
 
 Estado actual:
 - ya existe feedback persistido por lead/campo en backend con auditoría
-- la siguiente fase activa es `FDBK-2`, para exponerlo en Lead Detail
+- `RBAC-1` cerrado: usuarios `cm` ven contacto redactado en Lead Detail hasta iniciar seguimiento propio
+- la siguiente gran línea pendiente sobre la ficha comercial queda en `LEAD-*` y `CRM-9`
 
 ## CRM
 

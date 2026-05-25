@@ -104,7 +104,7 @@ Estado actual (`BKP-1` cerrado):
 **Gaps conocidos:**
 - `jobs legacy` ya no forman parte de la experiencia principal y quedan solo como compatibilidad colapsable
 - el provider MINTUR ya usa `TipoOperador`/`Operador` para reducir `other`
-- discovery admin ya renderiza densidad comercial sobre mapa real Leaflet/OSM con `gps_points` agregados por ubicación
+- discovery admin ya renderiza densidad comercial sobre Leaflet/OSM en cuadrículas granulares, combinando `gps` reales con geocoding on-demand cacheado para leads con `address` pero sin coordenadas, y soporta filtros server-side por `source`, `niche`, `prospect_score_gte`, `contact_tier` y `gps_source`
 - el composer ya encadena enrichment por `run_id` del job hijo, pero la herramienta de enrich por filtros sigue pendiente
 
 ## Monitoreo implementado hoy

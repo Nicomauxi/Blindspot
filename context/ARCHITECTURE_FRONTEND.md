@@ -83,9 +83,11 @@ Estado actual (`DISC-1` cerrado): hover con breakdown por fuente, draft persisti
 
 ### Contexto y mapa
 
-- `Contexto y mapa` usa Leaflet sobre OpenStreetMap con atribución visible y viewport ajustado a `gps_points` reales
+- `Contexto y mapa` usa Leaflet sobre OpenStreetMap con atribución visible y viewport ajustado a cuadrículas granulares
+- combina GPS reales y geocoding on-demand cacheado, mostrando métricas separadas para ambos
 - panel lateral con altura limitada y scroll
-- filtros y orden útiles, incluyendo métricas agregadas de puntos exactos por ubicación
+- filtros server-side con debounce de 300ms (`source`, `niche`, `prospect_score_gte`, `contact_tier`, `gps_source`) + filtros locales de zona/orden
+- metadata operativa del backlog de geocoding y contador de leads filtrados/posicionados
 
 ### Limpieza UX
 

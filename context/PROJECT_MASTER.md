@@ -51,7 +51,7 @@ CRM real con feedback humano estructurado.
 - monitoreo fragmentado entre health/system/costs/performance
 - monitoreo fragmentado entre health/system/costs/performance
 - no hay dark mode
-- density map no está apoyado sobre mapa real
+- density map ya usa cuadrículas granulares con geocoding on-demand y metadata de backlog
 - backup policy ya separa retención manual vs scheduled y expone métricas de capacidad
 - discovery workspace todavía tiene deuda de UX y orquestación
 - MINTUR sigue aportando demasiado `other`
@@ -118,10 +118,13 @@ CRM real con feedback humano estructurado.
 - DISC-4: location subdivider para Montevideo y otras ciudades UY, fetchPlaceCandidates paraleliza sub-áreas y deduplica por placeId
 - DISC-5: geo-validator con bounding box Uruguay + departamentos, campo lat/lng/geo_suspect/departamento en PlaceCandidate, places.location en field mask
 - DISC-6: endpoint POST /discovery/jobs/bulk + bulkInsertDiscoveryJobs + UI creación masiva con ciudades × nichos predefinidos
+- RBAC-1: datos de contacto redactados server-side para `cm` hasta iniciar tracking propio; Lead Detail muestra unlock explícito y refresca el detalle al abrir seguimiento
+- MAP-2: `lead-density` ahora agrega por cuadrículas, geocodea direcciones sin GPS con Nominatim + cache local y Discovery UI expone métricas separadas de GPS real vs inferido
+- MAP-3: el heatmap acepta filtros server-side (`source`, `niche`, `prospect_score_gte`, `contact_tier`, `gps_source`) y la UI aplica debounce de 300ms con contador de leads filtrados/posicionados
 
 **Siguiente paso:**
 - Ciclo 3 abierto el 2026-05-24 con 35 fases nuevas (BUG-1 → UI-RESP-1) cubriendo: bugfixes urgentes, pantalla Operaciones unificada con Variables/Procesos, refresh masivo de leads, optimización de discovery + hard cap del budget GP, mapa heatmap granular con filtros, limpieza UI deprecated, sistema de alertas, mejoras CRM + RBAC de contacto, rediseño completo de la ficha de Lead con auditoría triple, aliasing de nichos y responsive global.
-- Primera fase a ejecutar: `BUG-1` (Budget Google Places muestra 0 gastado). Es bugfix puro y prerequisito de BUG-2 y UI-4.
+- Próxima fase pendiente en el orden canónico: `MAP-4` (modo individual por zona en el mapa).
 - El usuario adjuntó `context/prompts/deepsearch-discovery-places.md` como input aparte para generar el XLS que consume `DISC-10`.
 
 **Lo que no hacer al retomar:**
@@ -136,9 +139,9 @@ CRM real con feedback humano estructurado.
 - bug: Budget GP spent muestra 0 en lugar del valor real
 - Pipeline y Monitoreo viven como pantallas separadas, sin variables ni vista de procesos en vivo
 - Discovery permite crear jobs pero no refrescar/re-enriquecer leads existentes ni traer datos de Google Places sobre leads viejos
-- mapa de densidad agrupa solo a nivel departamento; no hay filtros; no hay modo individual; geocoding ausente para leads con address pero sin gps
+- mapa de densidad ya usa cuadrículas granulares con geocoding on-demand, filtros server-side/UI (`MAP-3`) y cache local; queda pendiente el modo individual (`MAP-4`)
 - home muestra alertas hardcoded y bloques poco accionables; falta sistema de alertas persistido con campanita y counter
-- CRM funciona pero las transiciones de retroceso, el historial completo en popup y los filtros no están implementados; los datos de contacto son visibles a comercial sin gating
+- CRM ya tiene transiciones bidireccionales, historial, filtros y gating server-side de contacto para `cm`; queda pendiente embebido de contacto en popup (`CRM-9`)
 - ficha de Lead mezcla técnico y comercial; no diferencia ofertas de software vs marketing; el feedback humano está separado del dato que valida; bloques deprecated siguen visibles
 - nichos divergen por sinónimos sin forma de unirlos
 - no hay garantía de responsive en todo el admin

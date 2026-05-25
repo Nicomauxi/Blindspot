@@ -7,6 +7,12 @@
 
 ---
 
+## RBAC comercial vigente
+
+- Usuarios `cm` no deben recibir `phone`, `whatsapp`, `email` ni equivalentes anidados desde `/api/v1/leads` o `/api/v1/leads/:id` hasta tener tracking activo propio sobre el lead.
+- La redacción es server-side. Ocultar campos solo en frontend no cumple.
+- Admin mantiene visibilidad completa.
+
 ## Comandos BLOQUEADOS — no ejecutar en modo autónomo
 
 ```

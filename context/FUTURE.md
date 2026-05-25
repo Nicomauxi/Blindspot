@@ -56,8 +56,8 @@
 - `DISC-11` — done (2026-05-24)
 - `PIPE-4` — done
 - `PIPE-5` — done
-- `MAP-2` — pending
-- `MAP-3` — pending
+- `MAP-2` — done (2026-05-24)
+- `MAP-3` — done (2026-05-24)
 - `MAP-4` — pending
 - `UI-3` — done
 - `UI-4` — done
@@ -69,7 +69,7 @@
 - `CRM-6` — done
 - `CRM-7` — done
 - `CRM-8` — done
-- `RBAC-1` — pending
+- `RBAC-1` — done (2026-05-24)
 - `CRM-9` — pending
 - `LEAD-1` — pending
 - `LEAD-2` — pending
@@ -1554,7 +1554,7 @@
 
 ## MAP-2 — Mapa heatmap granular con geocoding
 
-**Status:** `dependency-approval`
+**Status:** `done` (2026-05-24)
 
 **Resultado esperado**
 - La densidad del mapa ya no agrupa solo a nivel departamento, sino a nivel **barrio/zona/cuadricula** (resolución configurable, default ~500m).
@@ -1577,13 +1577,19 @@
 - Smoke: backfill de 10 leads sin gps, verificar que aparecen con `gps_source` no-google.
 
 **Riesgos**
-- Nominatim TOS prohíbe heavy use. Mitigación: rate limit estricto + cache permanente del resultado por address.
+- Nominatim TOS prohíbe heavy use. Mitigación: rate limit estricto + cache persistida en archivo local de runtime (`logs/lead-geocode-cache.json`).
+
+**Cierre**
+- `GET /api/v1/admin/geo/lead-density` ahora devuelve cuadrículas granulares con `parent_location_*`, `grid_center`, conteos separados de GPS reales vs geocoding y metadata operativa del backlog.
+- Leads con `gps` siguen usando coordenada real; leads con `address` pero sin `gps` se geocodean on-demand con Nominatim bajo 1 req/s y cache persistida en runtime, sin introducir migración ni backfill destructivo en esta fase.
+- Discovery UI (`Contexto y mapa`) consume la nueva capa granular, muestra métricas de geocoding y al tocar una zona precarga la ubicación padre en el composer para recalcular recomendaciones.
+- Verificación: `pnpm test`, `pnpm typecheck`, `pnpm --dir ui typecheck`, `pnpm --dir ui build`, `pnpm smoke:api`.
 
 ---
 
 ## MAP-3 — Filtros del mapa heatmap
 
-**Status:** `pending`
+**Status:** `done`
 
 **Resultado esperado**
 - El mapa permite filtrar visualmente por:
@@ -1603,6 +1609,12 @@
 - `pnpm test` (filtros aplicados en `buildLeadDensityRows`).
 - `pnpm smoke:api`.
 - Smoke browser.
+
+**Cierre**
+- `GET /api/v1/admin/geo/lead-density` acepta `source`, `niche`, `prospect_score_gte`, `contact_tier` y `gps_source`, aplicados antes de armar cuadrículas.
+- Discovery UI agrega panel lateral de filtros con debounce de 300ms, autocompletado básico de niche y contador de leads filtrados/posicionados.
+- El mapa conserva filtros locales de zona/orden y expone metadata operativa (`filtered_leads`, `positioned_leads`, backlog/unresolved geocoding).
+- Validado con `pnpm test tests/api/discovery-insights.test.ts tests/api/pipeline-discovery-users.test.ts tests/ui/location-density-map.test.ts`, `pnpm typecheck`, `pnpm --dir ui typecheck`, `pnpm --dir ui build`, `pnpm smoke:api` y `pnpm test`.
 
 ---
 
@@ -1859,7 +1871,7 @@
 
 ## RBAC-1 — Datos de contacto ocultos hasta iniciar seguimiento
 
-**Status:** `pending`
+**Status:** `done` (2026-05-24)
 
 **Resultado esperado**
 - Para usuarios con role `comercial`, los campos `phone`, `whatsapp`, `email` y cualquier otro dato de contacto vienen redactados (`***` o placeholder) en `GET /api/v1/leads` y `GET /api/v1/leads/:id` hasta que el lead tenga un tracking activo asignado a ese usuario.
@@ -1882,6 +1894,11 @@
 
 **Riesgos**
 - Romper Lead Explorer / pantallas admin si la redactor no respeta el rol. Mitigación: test E2E con dos usuarios (admin y comercial) en paralelo.
+
+**Cierre**
+- `GET /api/v1/leads` y `GET /api/v1/leads/:id` redactan server-side `phone`, `whatsapp`, `email` y estructuras anidadas de contacto para usuarios `cm` sin tracking activo propio.
+- `Lead Detail` muestra banner de bloqueo y refresca el lead al iniciar seguimiento para desbloquear contacto sin exponer datos antes de tiempo.
+- Verificación: `pnpm test tests/api/leads.test.ts`, `pnpm typecheck`, `pnpm --dir ui typecheck`, `pnpm smoke:api`.
 
 ---
 
