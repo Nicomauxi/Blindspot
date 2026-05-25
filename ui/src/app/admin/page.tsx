@@ -2,17 +2,22 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { CircleMarker, MapContainer, Popup, TileLayer } from "react-leaflet";
 import {
+  getLeadDensity,
   getOutreachStats,
   getStatsOverview,
   listDiscoveryJobs,
   listPipelineRuns,
   type DiscoveryJob,
+  type DiscoveryMapDensityLocation,
   type PipelineRun,
   type StatsOverview,
   type StatsOutreachRow,
 } from "@/lib/api";
 import { useAuthStore } from "@/lib/auth-store";
+import { computeLocationCentroid } from "@/lib/location-density-map";
 import { formatRelative } from "@/lib/utils";
 import { AdminPageLayout, SectionCard, StatCard } from "@/components/admin-shell";
 import { LeadExplorer } from "@/components/lead-explorer";
@@ -30,6 +35,7 @@ function aggregateOutreach(rows: StatsOutreachRow[]) {
 export default function AdminHomePage() {
   const token = useAuthStore((state) => state.token);
   const role = useAuthStore((state) => state.role);
+  const router = useRouter();
 
   const [stats, setStats] = useState<StatsOverview | null>(null);
   const [runs, setRuns] = useState<PipelineRun[]>([]);
@@ -37,6 +43,9 @@ export default function AdminHomePage() {
   const [outreachStats, setOutreachStats] = useState<Record<string, number>>({});
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [densityLocations, setDensityLocations] = useState<DiscoveryMapDensityLocation[]>([]);
+  const [densityLoading, setDensityLoading] = useState(false);
+  const [mapMounted, setMapMounted] = useState(false);
 
   useEffect(() => {
     if (!token) return;
@@ -58,6 +67,16 @@ export default function AdminHomePage() {
       .catch((err) => setError(err instanceof Error ? err.message : "Error al cargar el inicio"))
       .finally(() => setLoading(false));
   }, [role, token]);
+
+  useEffect(() => {
+    if (!token || role !== "admin") return;
+    setDensityLoading(true);
+    setMapMounted(true);
+    getLeadDensity(token, { prospect_score_gte: 0 })
+      .then((res) => setDensityLocations(res.data.locations))
+      .catch(() => {})
+      .finally(() => setDensityLoading(false));
+  }, [token, role]);
 
   const responses = (outreachStats.responded ?? 0) + (outreachStats.interested ?? 0) + (outreachStats.closed_won ?? 0);
 
@@ -83,6 +102,85 @@ export default function AdminHomePage() {
         <StatCard label="Leads visibles" value={loading ? "..." : stats?.total_leads.toLocaleString("es-UY") ?? 0} hint="Inventario actual del usuario en el panel" />
         <StatCard label="Outreach registrado" value={loading ? "..." : stats?.total_outreach.toLocaleString("es-UY") ?? 0} hint={`Respuestas o interés detectado: ${responses}`} tone="info" />
       </div>
+
+      {role === "admin" ? (
+        <SectionCard
+          title="Mapa de leads"
+          description="Densidad comercial por zona. Hacé clic en una zona para explorar sus leads en el Lead Explorer."
+          actions={
+            <Link href="/admin/discovery" className="text-xs font-medium text-sky-600 hover:underline">
+              Vista completa →
+            </Link>
+          }
+        >
+          <div className="relative h-[320px] overflow-hidden rounded-2xl border border-slate-200 bg-slate-950">
+            {densityLoading && densityLocations.length === 0 ? (
+              <div className="flex h-full items-center justify-center text-sm text-slate-400">
+                Cargando mapa...
+              </div>
+            ) : !mapMounted ? (
+              <div className="flex h-full items-center justify-center text-sm text-slate-400">
+                Inicializando mapa...
+              </div>
+            ) : densityLocations.length === 0 ? (
+              <div className="flex h-full items-center justify-center text-sm text-slate-400">
+                Sin datos de densidad disponibles.{" "}
+                <Link href="/admin/discovery" className="ml-1 text-sky-400 hover:underline">
+                  Ejecutar discovery
+                </Link>
+              </div>
+            ) : (
+              <MapContainer
+                center={[-32.5228, -55.7658]}
+                zoom={7}
+                scrollWheelZoom={false}
+                className="location-density-leaflet h-full w-full"
+              >
+                <TileLayer
+                  attribution={'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'}
+                  url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                />
+                {densityLocations.map((location) => {
+                  const centroid = computeLocationCentroid(location);
+                  if (!centroid) return null;
+                  const radius = 7 + (location.commercial_density_score / 100) * 15;
+                  return (
+                    <CircleMarker
+                      key={location.location_key}
+                      center={[centroid.lat, centroid.lng]}
+                      radius={radius}
+                      pathOptions={{
+                        color: "#dbeafe",
+                        fillColor: "#38bdf8",
+                        fillOpacity: 0.6,
+                        weight: 1.4,
+                      }}
+                      eventHandlers={{
+                        click: () => router.push(`/admin/leads?q=${encodeURIComponent(location.location_label)}`),
+                      }}
+                    >
+                      <Popup>
+                        <div className="space-y-1">
+                          <p className="text-sm font-semibold text-slate-900">{location.location_label}</p>
+                          <p className="text-xs text-slate-600">{location.lead_count} leads · {location.hot_leads_count} hot</p>
+                          <p className="text-xs text-slate-600">Score promedio {location.avg_prospect_score.toFixed(1)}</p>
+                          <button
+                            type="button"
+                            onClick={() => router.push(`/admin/leads?q=${encodeURIComponent(location.location_label)}`)}
+                            className="block text-xs font-medium text-sky-600 hover:underline"
+                          >
+                            Explorar leads →
+                          </button>
+                        </div>
+                      </Popup>
+                    </CircleMarker>
+                  );
+                })}
+              </MapContainer>
+            )}
+          </div>
+        </SectionCard>
+      ) : null}
 
       {(runs.some((run) => run.status === "failed" || run.status === "partial") || jobs.some((job) => job.status === "failed")) ? (
         <SectionCard title="Alertas" description="Solo lo que cambia decisión o requiere intervención.">

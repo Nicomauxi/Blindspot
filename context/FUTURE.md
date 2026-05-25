@@ -58,11 +58,11 @@
 - `PIPE-5` — done
 - `MAP-2` — done (2026-05-24)
 - `MAP-3` — done (2026-05-24)
-- `MAP-4` — pending
+- `MAP-4` — done (2026-05-25)
 - `UI-3` — done
 - `UI-4` — done
 - `UI-5` — done
-- `UI-6` — pending (depends on MAP-4)
+- `UI-6` — done (2026-05-25)
 - `UI-7` — done
 - `ALERT-1` — done
 - `ALERT-2` — done
@@ -1620,7 +1620,7 @@
 
 ## MAP-4 — Modo "leads individuales por zona" en el mapa
 
-**Status:** `pending`
+**Status:** `done`
 
 **Resultado esperado**
 - El mapa tiene un toggle entre dos modos:
@@ -1702,7 +1702,7 @@
 
 ## UI-6 — Reemplazar "Colas de trabajo" + "Alertas" del home por el mapa interactivo
 
-**Status:** `pending`
+**Status:** `done`
 
 **Resultado esperado**
 - El espacio dejado por UI-5 (Colas) y UI-4 (Alerta GP) en `/admin` se llena con un widget de mapa interactivo basado en MAP-4 (modo dual heatmap + individual).
