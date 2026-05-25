@@ -76,6 +76,7 @@ export default function UsersPage() {
       )}
 
       <div className="bg-white rounded-lg shadow-sm border overflow-hidden">
+        <div className="overflow-x-auto">
         <table className="min-w-full text-sm">
           <thead className="bg-gray-50 text-gray-600 text-xs uppercase">
             <tr>
@@ -171,6 +172,7 @@ export default function UsersPage() {
             )}
           </tbody>
         </table>
+        </div>
         {nextCursor && (
           <div className="px-4 py-3 border-t text-center">
             <button

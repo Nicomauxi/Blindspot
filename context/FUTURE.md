@@ -2088,7 +2088,7 @@
 
 ## UI-RESP-1 — Responsive global: ningún viewport excedido
 
-**Status:** `pending`
+**Status:** `done (2026-05-25)`
 
 **Resultado esperado**
 - Existe un contenedor wrapper alrededor del contenido principal (`AdminPageLayout` o un nuevo `ResponsiveShell`) que:

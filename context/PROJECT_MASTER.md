@@ -124,7 +124,8 @@ CRM real con feedback humano estructurado.
 
 **Siguiente paso:**
 - Ciclo 3 abierto el 2026-05-24 con 35 fases nuevas (BUG-1 → UI-RESP-1) cubriendo: bugfixes urgentes, pantalla Operaciones unificada con Variables/Procesos, refresh masivo de leads, optimización de discovery + hard cap del budget GP, mapa heatmap granular con filtros, limpieza UI deprecated, sistema de alertas, mejoras CRM + RBAC de contacto, rediseño completo de la ficha de Lead con auditoría triple, aliasing de nichos y responsive global.
-- Próxima fase pendiente en el orden canónico: `UI-RESP-1` (responsive global en todas las pantallas admin).
+- Todas las fases del ciclo 3 completadas al 2026-05-25. Ciclo 3 cerrado.
+- UI-RESP-1 cerrado el 2026-05-25: max-width 1440px en layout, overflow-x-auto en todas las tablas (audit-log, users, discovery), grids responsivos en audit-log diff y segments.
 - QUAL-1 cerrado el 2026-05-25: tabla `niche_aliases` + storage/niches + CRUD admin API + expansión automática en filtros de leads + sección Nichos en `/admin/performance`.
 - El usuario adjuntó `context/prompts/deepsearch-discovery-places.md` como input aparte para generar el XLS que consume `DISC-10`.
 

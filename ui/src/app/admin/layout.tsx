@@ -56,7 +56,9 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   return (
     <div className="theme-page flex min-h-screen">
       <AdminSidebar />
-      <main className="min-w-0 flex-1 overflow-auto p-6">{children}</main>
+      <main className="min-w-0 flex-1 overflow-auto p-6">
+        <div className="mx-auto w-full max-w-[1440px]">{children}</div>
+      </main>
       <button
         type="button"
         onClick={toggleTheme}
