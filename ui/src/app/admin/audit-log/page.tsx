@@ -117,6 +117,7 @@ export default function AuditLogPage() {
       )}
 
       <div className="bg-white rounded-lg shadow-sm border overflow-hidden">
+        <div className="overflow-x-auto">
         <table className="min-w-full text-sm">
           <thead className="bg-gray-50 text-gray-600 text-xs uppercase">
             <tr>
@@ -145,6 +146,7 @@ export default function AuditLogPage() {
             )}
           </tbody>
         </table>
+        </div>
         {nextCursor && (
           <div className="px-4 py-3 border-t text-center">
             <button
@@ -339,7 +341,7 @@ function DiffModal({
         </div>
         <div className="overflow-auto flex-1 px-6 py-4">
           {hasSides ? (
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div>
                 <p className="text-xs font-semibold text-gray-500 mb-2 uppercase tracking-wide">
                   Antes

@@ -99,7 +99,7 @@ export default function SegmentsPage() {
         Clic en un segmento para abrir el Lead Explorer filtrado. Columna derecha: score promedio.
       </p>
 
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
         <SegmentTable
           title="Por niche"
           rows={data.by_niche}

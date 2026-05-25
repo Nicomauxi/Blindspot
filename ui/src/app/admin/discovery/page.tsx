@@ -1036,6 +1036,7 @@ export default function DiscoveryPage() {
                 </div>
                 {expandedBatchId === batch.id ? (
                   <div className="mt-4 overflow-hidden rounded-2xl border border-slate-100">
+                    <div className="overflow-x-auto">
                     <table className="min-w-full text-sm">
                       <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
                         <tr>
@@ -1066,6 +1067,7 @@ export default function DiscoveryPage() {
                         ))}
                       </tbody>
                     </table>
+                    </div>
                   </div>
                 ) : null}
               </div>
