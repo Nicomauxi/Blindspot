@@ -878,6 +878,26 @@ export type CommercialEvidenceNode = {
   children?: CommercialEvidenceNode[];
 };
 
+export type CommercialSignal = {
+  label: string;
+  weight: "high" | "medium" | "low";
+};
+
+export type CommercialOffering = {
+  id: string;
+  label: string;
+  description: string;
+  score: number;
+  confidence: "high" | "medium" | "low";
+  signals: CommercialSignal[];
+};
+
+export type CommercialOfferings = {
+  software: CommercialOffering[];
+  marketing: CommercialOffering[];
+  has_data: boolean;
+};
+
 export type LeadDashboard = {
   id: string;
   name: string;
@@ -919,6 +939,7 @@ export type LeadDetail = LeadDashboard & {
   canonical_fields: Record<string, unknown> | null;
   field_sources: Record<string, LeadFieldSource> | null;
   commercial_evidence_tree: CommercialEvidenceNode[] | null;
+  commercial_offerings: CommercialOfferings | null;
   notes: string | null;
   business_status: string | null;
 };
