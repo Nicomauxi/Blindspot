@@ -33,6 +33,7 @@ import {
 import { cn, formatRelative } from "@/lib/utils";
 import { AdminPageLayout, EmptyPanel, HelpTip, SectionCard, StatCard } from "@/components/admin-shell";
 import { CommercialSummary } from "@/components/lead/commercial-summary";
+import { ContactBlock, type ContactPoint } from "@/components/lead/contact-block";
 
 const TIER_COLORS: Record<string, string> = {
   A: "bg-emerald-100 text-emerald-800",
@@ -58,19 +59,7 @@ const CHANNEL_LABELS: Record<string, string> = {
   contacto_directo: "Contacto directo",
 };
 
-type ContactPointKind = "whatsapp" | "phone" | "email" | "address" | "website" | "instagram" | "facebook";
-
-type ContactPoint = {
-  id: string;
-  kind: ContactPointKind;
-  label: string;
-  value: string;
-  href: string;
-  actionLabel: string;
-  source: string | null;
-  reliability: number | null;
-  note: string | null;
-};
+type ContactPointKind = ContactPoint["kind"];
 
 type LeadFeedbackDraft = {
   fieldKey: string;
@@ -439,14 +428,8 @@ export default function LeadDetailPage() {
       </SectionCard>
 
       <div className="grid gap-4 xl:grid-cols-[1fr,1fr]">
-        <SectionCard title="Contacto y datos listos para vender" description="Mostramos todos los contactos y redes encontradas, con acción directa y fiabilidad por dato.">
-          <div className="space-y-3">
-            {contactPoints.length === 0 ? (
-              <EmptyPanel title="Sin contactos accionables" description="No encontramos teléfonos, mails, direcciones ni redes utilizables en este lead." />
-            ) : (
-              contactPoints.map((point) => <ContactPointRow key={point.id} point={point} />)
-            )}
-          </div>
+        <SectionCard title="Contacto y datos listos para vender" description="Filtrá por tipo, fuente y fiabilidad para priorizar el primer toque.">
+          <ContactBlock points={contactPoints} />
           <div className="mt-4 grid gap-3 md:grid-cols-3">
             <SourceFieldCard label="Contacto listo" value={formatBoolean(lead.contact_ready)} trace={fieldSources.contact_ready} />
             <SourceFieldCard label="Tier de contacto" value={lead.contact_tier} trace={fieldSources.contact_tier} />
@@ -978,27 +961,6 @@ function buildContactPoints(lead: LeadDetail | null): ContactPoint[] {
 
   const order: ContactPointKind[] = ["whatsapp", "phone", "email", "instagram", "facebook", "website", "address"];
   return points.sort((left, right) => order.indexOf(left.kind) - order.indexOf(right.kind) || left.value.localeCompare(right.value));
-}
-
-function ContactPointRow({ point }: { point: ContactPoint }) {
-  return (
-    <div className="flex flex-col gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4 lg:flex-row lg:items-center lg:justify-between">
-      <div className="min-w-0 flex-1">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">{point.label}</span>
-          {point.reliability != null ? <span className="rounded-full bg-sky-100 px-2 py-0.5 text-[11px] font-semibold text-sky-700">{Math.round(point.reliability * 100)}% fiable</span> : null}
-          {point.source ? <span className="rounded-full bg-slate-200 px-2 py-0.5 text-[11px] text-slate-600">{sourceLabel(point.source)}</span> : null}
-        </div>
-        <div className="mt-2 break-all text-sm font-medium text-slate-900">{point.value}</div>
-        {point.note ? <div className="mt-1 text-xs text-slate-500">{point.note}</div> : null}
-      </div>
-      <div className="flex shrink-0 gap-2">
-        <a href={point.href} target={point.kind === "phone" || point.kind === "email" ? undefined : "_blank"} rel={point.kind === "phone" || point.kind === "email" ? undefined : "noreferrer"} className="rounded-lg bg-sky-600 px-3 py-2 text-sm font-medium text-white hover:bg-sky-700">
-          {point.actionLabel}
-        </a>
-      </div>
-    </div>
-  );
 }
 
 function StructuredValue({ value }: { value: unknown }) {

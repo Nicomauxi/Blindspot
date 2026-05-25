@@ -72,7 +72,7 @@
 - `RBAC-1` — done (2026-05-24)
 - `CRM-9` — pending
 - `LEAD-1` — done (2026-05-25)
-- `LEAD-2` — pending
+- `LEAD-2` — done (2026-05-25)
 - `LEAD-3` — pending
 - `LEAD-4` — pending
 - `LEAD-5` — pending
@@ -1961,7 +1961,7 @@
 
 ## LEAD-2 — "Contacto y datos listos para vender": filtros + scroll
 
-**Status:** `pending`
+**Status:** `done`
 
 **Resultado esperado**
 - El bloque actual de contacto/datos en la ficha de lead pasa a tener:
