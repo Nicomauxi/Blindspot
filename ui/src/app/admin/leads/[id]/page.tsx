@@ -22,6 +22,7 @@ import {
 import { useAuthStore } from "@/lib/auth-store";
 import { cn, formatRelative } from "@/lib/utils";
 import { AdminPageLayout, EmptyPanel, HelpTip, SectionCard, StatCard } from "@/components/admin-shell";
+import { CollapsibleSection } from "@/components/collapsible-section";
 import { CommercialSummary } from "@/components/lead/commercial-summary";
 import { ContactBlock, type ContactPoint } from "@/components/lead/contact-block";
 
@@ -33,8 +34,8 @@ const TIER_COLORS: Record<string, string> = {
   X: "bg-rose-100 text-rose-700",
 };
 
-const STATUS_COLORS: Record<string, string> = {
-  contacted: "bg-sky-50 text-sky-700",
+const OUTREACH_STATUS_COLORS: Record<string, string> = {
+  sent: "bg-sky-50 text-sky-700",
   responded: "bg-violet-50 text-violet-700",
   interested: "bg-amber-50 text-amber-700",
   closed_won: "bg-emerald-50 text-emerald-700",
@@ -119,7 +120,7 @@ export default function LeadDetailPage() {
         );
       })
       .finally(() => setAssistantLoading(false));
-  }, [id, lead, token]);
+  }, [id, lead?.id, token]);
 
   const fieldSources = lead?.field_sources ?? {};
   const evidenceTree = lead?.commercial_evidence_tree ?? [];
@@ -213,9 +214,10 @@ export default function LeadDetailPage() {
 
   function copyText(key: string, value: string | null | undefined) {
     if (!value) return;
-    navigator.clipboard.writeText(value);
-    setCopiedKey(key);
-    window.setTimeout(() => setCopiedKey((current) => (current === key ? null : current)), 1800);
+    navigator.clipboard.writeText(value).then(() => {
+      setCopiedKey(key);
+      window.setTimeout(() => setCopiedKey((current) => (current === key ? null : current)), 1800);
+    }).catch(() => {});
   }
 
   if (loading) return <div className="py-8 text-center text-sm text-slate-400">Cargando ficha…</div>;
@@ -231,10 +233,11 @@ export default function LeadDetailPage() {
       description="Vista pitch-first con contexto comercial, trazabilidad de cada dato y acceso completo al registro del lead."
       actions={
         <>
-          <button onClick={() => router.back()} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50">
+          <button type="button" onClick={() => router.back()} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50">
             Volver
           </button>
           <button
+            type="button"
             onClick={handleStartTracking}
             disabled={startingTracking}
             className="rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-60"
@@ -244,11 +247,13 @@ export default function LeadDetailPage() {
         </>
       }
     >
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+      {/* 1. Header stat cards */}
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
         <StatCard label="Prospect score" value={lead.prospect_score ?? "—"} hint="Prioridad comercial relativa" tone="good" />
         <StatCard label="Oferta sugerida" value={lead.primary_offer ?? "—"} hint={lead.pitch_hook ?? "Sin pitch hook sugerido"} tone="info" />
         <StatCard label="Canal recomendado" value={recommendedChannelLabel} hint={lead.contact_ready ? "Listo para primer toque" : "Conviene validar antes de salir"} />
         <StatCard label="Fuentes disponibles" value={lead.sources_count ?? lead.corroborating_sources.length ?? 0} hint={lead.canonical_source ? `Fuente principal: ${lead.canonical_source}` : "Sin canonical_source"} />
+        <StatCard label="Tier / Estado" value={`${lead.contact_tier ?? "—"} · ${lead.state}`} hint={lead.business_status ?? "Sin estado comercial"} />
       </div>
 
       {/* RBAC-1: contact unlock banner for cm users */}
@@ -276,201 +281,242 @@ export default function LeadDetailPage() {
         </div>
       )}
 
-      <SectionCard title="Resumen comercial" description="Ofertas sugeridas por categoría y evidencia para avanzar.">
-          <CommercialSummary offerings={lead.commercial_offerings ?? null} leadName={lead.name} evidenceTree={evidenceTree} />
+      {/* 2. Análisis comercial — full width */}
+      <SectionCard title="Análisis comercial" description="Ofertas sugeridas, evidencia por oferta y lectura asistida para abrir conversación.">
+        <CommercialSummary offerings={lead.commercial_offerings ?? null} leadName={lead.name} evidenceTree={evidenceTree} />
 
-          <div className="mt-6 grid gap-4 lg:grid-cols-[1.2fr,0.8fr]">
-            <div className="space-y-4">
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Lectura rápida</div>
-                {assistantLoading ? (
-                  <div className="mt-3 space-y-2 animate-pulse">
-                    <div className="h-4 w-2/3 rounded bg-slate-200" />
-                    <div className="h-4 w-full rounded bg-slate-100" />
-                    <div className="h-4 w-5/6 rounded bg-slate-100" />
+        <div className="mt-6 grid gap-4 lg:grid-cols-[1.2fr,0.8fr]">
+          <div className="space-y-4">
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+              <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Lectura rápida</div>
+              {assistantLoading ? (
+                <div className="mt-3 space-y-2 animate-pulse">
+                  <div className="h-4 w-2/3 rounded bg-slate-200" />
+                  <div className="h-4 w-full rounded bg-slate-100" />
+                  <div className="h-4 w-5/6 rounded bg-slate-100" />
+                </div>
+              ) : assistant ? (
+                <div className="mt-3 space-y-3 text-sm text-slate-700">
+                  <p className="text-base font-semibold text-slate-900">{assistant.summary}</p>
+                  <p>{assistant.why_it_matters}</p>
+                  <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-3 text-emerald-900">
+                    <div className="text-xs font-semibold uppercase tracking-wide text-emerald-700">Pitch de entrada</div>
+                    <p className="mt-1">{assistant.personalized_pitch}</p>
                   </div>
-                ) : assistant ? (
-                  <div className="mt-3 space-y-3 text-sm text-slate-700">
-                    <p className="text-base font-semibold text-slate-900">{assistant.summary}</p>
-                    <p>{assistant.why_it_matters}</p>
-                    <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-3 text-emerald-900">
+                </div>
+              ) : (
+                <>
+                  {lead.pitch_hook ? (
+                    <div className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-3 text-emerald-900">
                       <div className="text-xs font-semibold uppercase tracking-wide text-emerald-700">Pitch de entrada</div>
-                      <p className="mt-1">{assistant.personalized_pitch}</p>
+                      <p className="mt-1 text-sm">{lead.pitch_hook}</p>
                     </div>
-                  </div>
-                ) : (
+                  ) : null}
                   <EmptyPanel
                     title="Sin resumen asistido"
                     description={assistantError ?? "La ficha sigue disponible con todos los datos y su trazabilidad."}
                   />
-                )}
-              </div>
-
-              <div className="grid gap-3 md:grid-cols-2">
-                <SourceFieldCard label="Oferta sugerida" value={lead.primary_offer} trace={fieldSources.primary_offer} help="Oferta prioritaria para abrir conversación." />
-                <SourceFieldCard label="Pitch hook" value={lead.pitch_hook} trace={fieldSources.pitch_hook} help="Frase o hallazgo que justifica el primer mensaje." />
-                <SourceFieldCard label="Buyer probable" value={lead.top_buyer_type} trace={fieldSources.top_buyer_type} />
-                <SourceFieldCard label="Urgencia" value={lead.urgency_signal} trace={fieldSources.urgency_signal} />
-              </div>
+                </>
+              )}
             </div>
 
-            <div className="space-y-4">
-              <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Qué hacer ahora</div>
-                <div className="mt-3 space-y-3 text-sm text-slate-700">
-                  <div>
-                    <div className="font-medium text-slate-900">Siguiente paso sugerido</div>
-                    <p className="mt-1">{assistant?.next_step ?? "Revisá la evidencia y definí el canal de salida."}</p>
-                  </div>
-                  <div>
-                    <div className="font-medium text-slate-900">Canal recomendado</div>
-                    <p className="mt-1">{recommendedChannelLabel}</p>
-                  </div>
-                  <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
-                    <div className="font-medium text-slate-900">Checklist previo</div>
-                    <div className="mt-3 space-y-2">
-                      {actionChecklist.map((item) => (
-                        <div key={item.label} className="flex items-start gap-2 text-sm">
-                          <span className={cn("mt-0.5 inline-flex h-5 w-5 items-center justify-center rounded-full text-[11px] font-semibold", item.done ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-500")}>{item.done ? "✓" : "•"}</span>
-                          <span className={item.done ? "text-slate-700" : "text-slate-500"}>{item.label}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              </div>
+            <div className="grid gap-3 md:grid-cols-2">
+              <SourceFieldCard label="Oferta sugerida" value={lead.primary_offer} trace={fieldSources.primary_offer} help="Oferta prioritaria para abrir conversación." />
+              <SourceFieldCard label="Pitch hook" value={lead.pitch_hook} trace={fieldSources.pitch_hook} help="Frase o hallazgo que justifica el primer mensaje." />
+              <SourceFieldCard label="Buyer probable" value={lead.top_buyer_type} trace={fieldSources.top_buyer_type} />
+              <SourceFieldCard label="Urgencia" value={lead.urgency_signal} trace={fieldSources.urgency_signal} />
+            </div>
+          </div>
 
-              <div className="rounded-2xl border border-slate-200 bg-slate-950 p-4 text-slate-100">
-                <div className="text-xs font-semibold uppercase tracking-[0.18em] text-sky-300">Estado operativo</div>
-                <div className="mt-3 flex flex-wrap gap-2 text-xs">
-                  <span className={cn("rounded-full px-2.5 py-1 font-semibold", lead.contact_tier ? TIER_COLORS[lead.contact_tier] ?? "bg-slate-700 text-white" : "bg-slate-800 text-slate-200")}>Tier {lead.contact_tier ?? "—"}</span>
-                  <span className="rounded-full bg-white/10 px-2.5 py-1">{lead.state}</span>
-                  {lead.business_status ? <span className="rounded-full bg-white/10 px-2.5 py-1">{lead.business_status}</span> : null}
-                  {lead.contact_ready != null ? <span className="rounded-full bg-white/10 px-2.5 py-1">{lead.contact_ready ? "Contacto listo" : "Validar contacto"}</span> : null}
+          <div className="space-y-4">
+            <div className="rounded-2xl border border-slate-200 bg-white p-4">
+              <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Qué hacer ahora</div>
+              <div className="mt-3 space-y-3 text-sm text-slate-700">
+                <div>
+                  <div className="font-medium text-slate-900">Siguiente paso sugerido</div>
+                  <p className="mt-1">{assistant?.next_step ?? "Revisá la evidencia y definí el canal de salida."}</p>
                 </div>
-                {lead.tags.length > 0 ? (
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {lead.tags.map((tag) => (
-                      <span key={tag} className="rounded-full border border-white/10 px-2.5 py-1 text-xs text-slate-300">{tag}</span>
+                <div>
+                  <div className="font-medium text-slate-900">Canal recomendado</div>
+                  <p className="mt-1">{recommendedChannelLabel}</p>
+                </div>
+                <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
+                  <div className="font-medium text-slate-900">Checklist previo</div>
+                  <div className="mt-3 space-y-2">
+                    {actionChecklist.map((item) => (
+                      <div key={item.label} className="flex items-start gap-2 text-sm">
+                        <span className={cn("mt-0.5 inline-flex h-5 w-5 items-center justify-center rounded-full text-[11px] font-semibold", item.done ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-500")}>{item.done ? "✓" : "•"}</span>
+                        <span className={item.done ? "text-slate-700" : "text-slate-500"}>{item.label}</span>
+                      </div>
                     ))}
                   </div>
-                ) : null}
+                </div>
               </div>
             </div>
-          </div>
-      </SectionCard>
 
-      <div className="grid gap-4 xl:grid-cols-[1fr,1fr]">
-        <SectionCard title="Contacto y datos listos para vender" description="Filtrá por tipo, fuente y fiabilidad para priorizar el primer toque.">
-          <ContactBlock points={contactPoints} onFeedback={handleContactFeedback} />
-          <div className="mt-4 grid gap-3 md:grid-cols-3">
-            <SourceFieldCard label="Contacto listo" value={formatBoolean(lead.contact_ready)} trace={fieldSources.contact_ready} />
-            <SourceFieldCard label="Tier de contacto" value={lead.contact_tier} trace={fieldSources.contact_tier} />
-            <SourceFieldCard label="Fuente principal" value={lead.canonical_source ?? lead.source} trace={fieldSources.name} help="Usamos la misma base de evidencia que respalda el registro principal del lead." />
-          </div>
-        </SectionCard>
-
-        <SectionCard title="Lectura del negocio" description="Contexto comercial útil antes de escribir o llamar.">
-          <div className="grid gap-3 md:grid-cols-2">
-            <SourceFieldCard label="Rubro" value={lead.niche} trace={fieldSources.niche} />
-            <SourceFieldCard label="Estado comercial" value={lead.business_status} trace={fieldSources.business_status} />
-            <SourceFieldCard label="Rating" value={lead.rating != null ? `${lead.rating} ★` : null} trace={fieldSources.rating} />
-            <SourceFieldCard label="Reseñas" value={lead.review_count} trace={fieldSources.review_count} />
-            <SourceFieldCard label="Top buyer" value={lead.top_buyer_type} trace={fieldSources.top_buyer_type} />
-            <SimpleFieldCard label="Confianza fuente" value={formatPercent(lead.source_confidence)} />
-            <SimpleFieldCard label="Confiabilidad contacto" value={formatPercent(lead.contact_reliability_score)} />
-            <SimpleFieldCard label="Creado" value={lead.created_at ? formatRelative(lead.created_at) : "—"} />
-          </div>
-        </SectionCard>
-      </div>
-
-      <SectionCard title="Generar mensaje alternativo" description="Versión rápida por canal si querés otro texto además del pitch asistido.">
-          <div className="mb-3 flex flex-wrap items-center gap-2">
-            <select value={offerChannel} onChange={(event) => setOfferChannel(event.target.value)} className="rounded-lg border border-slate-300 px-2 py-2 text-sm">
-              <option value="whatsapp">WhatsApp</option>
-              <option value="email">Email</option>
-              <option value="phone">Teléfono</option>
-            </select>
-            <button onClick={() => void handleGenerateOffer()} disabled={offerLoading} className="rounded-lg bg-sky-600 px-3 py-2 text-sm font-medium text-white hover:bg-sky-700 disabled:opacity-50">
-              {offerLoading ? "Generando…" : "Generar mensaje"}
-            </button>
-          </div>
-          {offer ? (
-            <CopyPanel title="Mensaje generado" body={offer.text} copyKey="offer" copiedKey={copiedKey} onCopy={copyText} footer={<span className="text-xs text-slate-400">{offer.provider ?? offer.source_llm}</span>} />
-          ) : offerError ? (
-            <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-3 text-sm text-amber-900">{offerError}</div>
-          ) : (
-            <p className="text-sm text-slate-500">Elegí un canal y generá una alternativa lista para copiar.</p>
-          )}
-        </SectionCard>
-
-      <SectionCard title="Datos completos del lead" description="Todo el registro disponible, organizado para lectura progresiva sin exponer JSON crudo como vista principal.">
-        <div className="space-y-3">
-          <StructuredSection title="Resumen de registro" defaultOpen>
-            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-              <SimpleFieldCard label="Nombre" value={lead.name} />
-              <SimpleFieldCard label="ID" value={lead.id} />
-              <SimpleFieldCard label="Fuente" value={lead.source} />
-              <SimpleFieldCard label="Canonical source" value={lead.canonical_source} />
-              <SimpleFieldCard label="Estado" value={lead.state} />
-              <SimpleFieldCard label="Contactado por" value={lead.contacted_by} />
-              <SimpleFieldCard label="Top buyer score" value={lead.top_buyer_score} />
-              <SimpleFieldCard label="Data confidence" value={formatPercent(lead.data_confidence_score)} />
-              <SimpleFieldCard label="Sources count" value={lead.sources_count ?? lead.corroborating_sources.length} />
-            </div>
-          </StructuredSection>
-
-          <StructuredSection title="Huella digital">
-            <StructuredValue value={digitalFootprint} />
-          </StructuredSection>
-
-          <StructuredSection title="Estado inferido">
-            <StructuredValue value={inferredState} />
-          </StructuredSection>
-
-          <StructuredSection title="Score breakdown">
-            <StructuredValue value={scoreBreakdown} />
-          </StructuredSection>
-
-          <StructuredSection title="Lead company data">
-            <StructuredValue value={companyData} />
-          </StructuredSection>
-
-          <StructuredSection title="Canonical fields">
-            <StructuredValue value={canonicalFields} />
-          </StructuredSection>
-
-          <StructuredSection title="Fuentes corroborantes y traza por campo">
-            <div className="space-y-3">
-              <StructuredValue value={lead.corroborating_sources} />
-              <div className="grid gap-3 md:grid-cols-2">
-                {Object.entries(fieldSources).map(([key, trace]) => (
-                  <div key={key} className="rounded-xl border border-slate-200 px-3 py-3">
-                    <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">{trace.label}</div>
-                    <div className="mt-2 text-sm text-slate-800">{formatValue(trace.value)}</div>
-                    <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-500">
-                      {trace.source ? <span className="rounded-full bg-slate-100 px-2 py-1">Principal: {trace.source}</span> : null}
-                      {trace.confirmations > 0 ? <span className="rounded-full bg-emerald-50 px-2 py-1 text-emerald-700">+{trace.confirmations} confirmaciones</span> : null}
-                    </div>
-                    {trace.evidence.length > 0 ? (
-                      <ul className="mt-3 space-y-1 text-xs text-slate-600">
-                        {trace.evidence.map((item, index) => (
-                          <li key={`${key}-${index}`}>• {item.label}{item.note ? ` · ${item.note}` : ""}{item.confidence != null ? ` · ${Math.round(item.confidence * 100)}%` : ""}</li>
-                        ))}
-                      </ul>
-                    ) : null}
-                  </div>
-                ))}
+            <div className="rounded-2xl border border-slate-200 bg-slate-950 p-4 text-slate-100">
+              <div className="text-xs font-semibold uppercase tracking-[0.18em] text-sky-300">Estado operativo</div>
+              <div className="mt-3 flex flex-wrap gap-2 text-xs">
+                <span className={cn("rounded-full px-2.5 py-1 font-semibold", lead.contact_tier ? TIER_COLORS[lead.contact_tier] ?? "bg-slate-700 text-white" : "bg-slate-800 text-slate-200")}>Tier {lead.contact_tier ?? "—"}</span>
+                <span className="rounded-full bg-white/10 px-2.5 py-1">{lead.state}</span>
+                {lead.business_status ? <span className="rounded-full bg-white/10 px-2.5 py-1">{lead.business_status}</span> : null}
+                {lead.contact_ready != null ? <span className="rounded-full bg-white/10 px-2.5 py-1">{lead.contact_ready ? "Contacto listo" : "Validar contacto"}</span> : null}
               </div>
+              {lead.tags.length > 0 ? (
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {lead.tags.map((tag) => (
+                    <span key={tag} className="rounded-full border border-white/10 px-2.5 py-1 text-xs text-slate-300">{tag}</span>
+                  ))}
+                </div>
+              ) : null}
             </div>
-          </StructuredSection>
-
-          <StructuredSection title="Notas internas">
-            <StructuredValue value={lead.notes} />
-          </StructuredSection>
+          </div>
         </div>
       </SectionCard>
 
+      {/* 3. Contacto y datos — full width */}
+      <SectionCard title="Contacto y datos listos para vender" description="Filtrá por tipo, fuente y fiabilidad para priorizar el primer toque.">
+        <ContactBlock points={contactPoints} onFeedback={handleContactFeedback} />
+        <div className="mt-6 grid gap-4 lg:grid-cols-2">
+          <div>
+            <div className="mb-3 text-xs font-semibold uppercase tracking-[0.15em] text-slate-500">Datos de contacto</div>
+            <div className="grid gap-3 sm:grid-cols-3">
+              <SourceFieldCard label="Contacto listo" value={formatBoolean(lead.contact_ready)} trace={fieldSources.contact_ready} />
+              <SourceFieldCard label="Tier de contacto" value={lead.contact_tier} trace={fieldSources.contact_tier} />
+              <SourceFieldCard label="Fuente principal" value={lead.canonical_source ?? lead.source} trace={fieldSources.name} help="Usamos la misma base de evidencia que respalda el registro principal del lead." />
+            </div>
+          </div>
+          <div>
+            <div className="mb-3 text-xs font-semibold uppercase tracking-[0.15em] text-slate-500">Lectura del negocio</div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <SourceFieldCard label="Rubro" value={lead.niche} trace={fieldSources.niche} />
+              <SourceFieldCard label="Estado comercial" value={lead.business_status} trace={fieldSources.business_status} />
+              <SourceFieldCard label="Rating" value={lead.rating != null ? `${lead.rating} ★` : null} trace={fieldSources.rating} />
+              <SourceFieldCard label="Reseñas" value={lead.review_count} trace={fieldSources.review_count} />
+              <SimpleFieldCard label="Confiabilidad contacto" value={formatPercent(lead.contact_reliability_score)} />
+              <SimpleFieldCard label="Creado" value={lead.created_at ? formatRelative(lead.created_at) : "—"} />
+            </div>
+          </div>
+        </div>
+      </SectionCard>
+
+      {/* 4. Historial de seguimiento (si existe) */}
+      {outreach.length > 0 ? (
+        <CollapsibleSection
+          title="Historial de seguimiento"
+          description={`${outreach.length} acciones registradas`}
+          defaultOpen={false}
+          storageKey={`lead-history-${id}`}
+        >
+          <div className="space-y-2">
+            {outreach.map((entry) => (
+              <OutreachRow key={entry.id} entry={entry} />
+            ))}
+          </div>
+        </CollapsibleSection>
+      ) : null}
+
+      {/* 5. Diagnóstico técnico — collapsible, cerrado por defecto */}
+      <CollapsibleSection
+        title="Diagnóstico técnico"
+        description="Enriquecimiento, mensaje alternativo y datos completos del registro"
+        defaultOpen={false}
+        storageKey={`lead-diagnostico-${id}`}
+      >
+        <div className="space-y-4">
+          <div>
+            <div className="mb-3 text-xs font-semibold uppercase tracking-[0.15em] text-slate-500">Generar mensaje alternativo</div>
+            <div className="mb-3 flex flex-wrap items-center gap-2">
+              <label htmlFor="offer-channel" className="sr-only">Canal de mensaje</label>
+              <select id="offer-channel" value={offerChannel} onChange={(event) => setOfferChannel(event.target.value)} disabled={offerLoading} className="rounded-lg border border-slate-300 px-2 py-2 text-sm disabled:opacity-50">
+                <option value="whatsapp">WhatsApp</option>
+                <option value="email">Email</option>
+                <option value="phone">Teléfono</option>
+              </select>
+              <button type="button" onClick={() => void handleGenerateOffer()} disabled={offerLoading} className="rounded-lg bg-sky-600 px-3 py-2 text-sm font-medium text-white hover:bg-sky-700 disabled:opacity-50">
+                {offerLoading ? "Generando…" : "Generar mensaje"}
+              </button>
+            </div>
+            {offer ? (
+              <CopyPanel title="Mensaje generado" body={offer.text} copyKey="offer" copiedKey={copiedKey} onCopy={copyText} footer={<span className="text-xs text-slate-400">{offer.provider ?? offer.source_llm}</span>} />
+            ) : offerError ? (
+              <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-3 text-sm text-amber-900">{offerError}</div>
+            ) : (
+              <p className="text-sm text-slate-500">Elegí un canal y generá una alternativa lista para copiar.</p>
+            )}
+          </div>
+
+          <div>
+            <div className="mb-3 text-xs font-semibold uppercase tracking-[0.15em] text-slate-500">Datos completos del lead</div>
+            <div className="space-y-3">
+              <StructuredSection title="Resumen de registro" defaultOpen>
+                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                  <SimpleFieldCard label="Nombre" value={lead.name} />
+                  <SimpleFieldCard label="ID" value={lead.id} />
+                  <SimpleFieldCard label="Fuente" value={lead.source} />
+                  <SimpleFieldCard label="Canonical source" value={lead.canonical_source} />
+                  <SimpleFieldCard label="Estado" value={lead.state} />
+                  <SimpleFieldCard label="Contactado por" value={lead.contacted_by} />
+                  <SimpleFieldCard label="Top buyer score" value={lead.top_buyer_score} />
+                  <SimpleFieldCard label="Data confidence" value={formatPercent(lead.data_confidence_score)} />
+                  <SimpleFieldCard label="Sources count" value={lead.sources_count ?? lead.corroborating_sources.length} />
+                </div>
+              </StructuredSection>
+
+              <StructuredSection title="Huella digital">
+                <StructuredValue value={digitalFootprint} />
+              </StructuredSection>
+
+              <StructuredSection title="Estado inferido">
+                <StructuredValue value={inferredState} />
+              </StructuredSection>
+
+              <StructuredSection title="Score breakdown">
+                <StructuredValue value={scoreBreakdown} />
+              </StructuredSection>
+
+              <StructuredSection title="Lead company data">
+                <StructuredValue value={companyData} />
+              </StructuredSection>
+
+              <StructuredSection title="Canonical fields">
+                <StructuredValue value={canonicalFields} />
+              </StructuredSection>
+
+              <StructuredSection title="Fuentes corroborantes y traza por campo">
+                <div className="space-y-3">
+                  <StructuredValue value={lead.corroborating_sources} />
+                  <div className="grid gap-3 md:grid-cols-2">
+                    {Object.entries(fieldSources).map(([key, trace]) => (
+                      <div key={key} className="rounded-xl border border-slate-200 px-3 py-3">
+                        <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">{trace.label}</div>
+                        <div className="mt-2 text-sm text-slate-800">{formatValue(trace.value)}</div>
+                        <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-500">
+                          {trace.source ? <span className="rounded-full bg-slate-100 px-2 py-1">Principal: {trace.source}</span> : null}
+                          {trace.confirmations > 0 ? <span className="rounded-full bg-emerald-50 px-2 py-1 text-emerald-700">+{trace.confirmations} confirmaciones</span> : null}
+                        </div>
+                        {trace.evidence.length > 0 ? (
+                          <ul className="mt-3 space-y-1 text-xs text-slate-600">
+                            {trace.evidence.map((item, index) => (
+                              <li key={`${key}-${index}`}>• {item.label}{item.note ? ` · ${item.note}` : ""}{item.confidence != null ? ` · ${Math.round(item.confidence * 100)}%` : ""}</li>
+                            ))}
+                          </ul>
+                        ) : null}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </StructuredSection>
+
+              <StructuredSection title="Notas internas">
+                <StructuredValue value={lead.notes} />
+              </StructuredSection>
+            </div>
+          </div>
+        </div>
+      </CollapsibleSection>
+
+      {/* 6. Mismo propietario */}
       {ownerGroup.length > 0 ? (
         <SectionCard title="Mismo propietario" description="Otras fichas que conviene revisar antes de salir a contactar.">
           <div className="space-y-2">
@@ -485,6 +531,30 @@ export default function LeadDetailPage() {
           </div>
         </SectionCard>
       ) : null}
+
+      {/* Footer admin actions */}
+      <div className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-slate-200 bg-slate-50 px-5 py-4">
+        <span className="text-xs text-slate-500">Lead ID: {lead.id}</span>
+        <div className="flex flex-wrap gap-2">
+          <button type="button" onClick={() => router.back()} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
+            Volver al listado
+          </button>
+          {trackingNotice ? (
+            <button type="button" onClick={() => router.push("/admin/crm")} className="rounded-lg bg-sky-600 px-3 py-2 text-sm font-medium text-white hover:bg-sky-700">
+              Ver en CRM
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={handleStartTracking}
+              disabled={startingTracking}
+              className="rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-60"
+            >
+              {startingTracking ? "Iniciando…" : "Iniciar seguimiento"}
+            </button>
+          )}
+        </div>
+      </div>
 
     </AdminPageLayout>
   );
@@ -506,15 +576,6 @@ function compactPhone(value: string): string {
 
 function compactPhoneForWhatsapp(value: string): string {
   return value.replace(/\D/g, "");
-}
-
-function sourceLabel(value: string | null | undefined): string | null {
-  if (!value) return null;
-  return value
-    .split(/[_\-\s]+/)
-    .filter(Boolean)
-    .map((chunk) => chunk.charAt(0).toUpperCase() + chunk.slice(1))
-    .join(" ");
 }
 
 function formatBoolean(value: boolean | null | undefined) {
@@ -607,19 +668,21 @@ function CopyPanel({
   );
 }
 
-function ListPanel({ title, items }: { title: string; items: string[] }) {
+function OutreachRow({ entry }: { entry: OutreachEntry }) {
   return (
-    <div className="rounded-xl border border-slate-200 px-4 py-4">
-      <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">{title}</div>
-      {items.length === 0 ? (
-        <p className="mt-2 text-sm text-slate-500">Sin puntos sugeridos.</p>
-      ) : (
-        <ul className="mt-3 space-y-2 text-sm text-slate-700">
-          {items.map((item) => (
-            <li key={item} className="rounded-lg bg-slate-50 px-3 py-2">{item}</li>
-          ))}
-        </ul>
-      )}
+    <div className="flex items-start gap-3 rounded-xl border border-slate-200 px-4 py-3 text-sm">
+      <div className="mt-0.5 flex-1 min-w-0">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="font-medium text-slate-900 capitalize">{entry.channel}</span>
+          {entry.offer_type ? <span className="text-slate-500">{entry.offer_type}</span> : null}
+          <span className={cn("rounded-full px-2 py-0.5 text-xs font-semibold", OUTREACH_STATUS_COLORS[entry.status] ?? "bg-slate-100 text-slate-600")}>
+            {entry.status}
+          </span>
+        </div>
+        {entry.notes ? <p className="mt-1 text-xs text-slate-500">{entry.notes}</p> : null}
+        {entry.outcome ? <p className="mt-1 text-xs text-slate-600">Resultado: {entry.outcome}</p> : null}
+      </div>
+      <span className="shrink-0 text-xs text-slate-400">{formatRelative(entry.contacted_at)}</span>
     </div>
   );
 }
@@ -695,7 +758,8 @@ function buildContactPoints(lead: LeadDetail | null): ContactPoint[] {
   const emailRegex = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i;
   const phoneRegex = /\+?[\d()\-\s]{7,}/;
 
-  function visit(value: unknown, keyPath: string[], inheritedSource: string | null, inheritedConfidence: number | null) {
+  function visit(value: unknown, keyPath: string[], inheritedSource: string | null, inheritedConfidence: number | null, depth = 0) {
+    if (depth > 10) return;
     if (typeof value === "string") {
       const key = keyPath[keyPath.length - 1]?.toLowerCase() ?? "";
       const trimmed = value.trim();
@@ -723,7 +787,7 @@ function buildContactPoints(lead: LeadDetail | null): ContactPoint[] {
     }
 
     if (Array.isArray(value)) {
-      value.forEach((entry, index) => visit(entry, [...keyPath, String(index)], inheritedSource, inheritedConfidence));
+      value.forEach((entry, index) => visit(entry, [...keyPath, String(index)], inheritedSource, inheritedConfidence, depth + 1));
       return;
     }
 
@@ -732,7 +796,7 @@ function buildContactPoints(lead: LeadDetail | null): ContactPoint[] {
       const nextSource = typeof record.source === "string" ? record.source : inheritedSource;
       const nextConfidence = typeof record.confidence === "number" ? record.confidence : inheritedConfidence;
       Object.entries(record).forEach(([childKey, childValue]) => {
-        visit(childValue, [...keyPath, childKey], nextSource, nextConfidence);
+        visit(childValue, [...keyPath, childKey], nextSource, nextConfidence, depth + 1);
       });
     }
   }
