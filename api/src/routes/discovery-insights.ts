@@ -8,6 +8,7 @@ export type LeadInsightRow = {
   niche: string | null;
   address: string | null;
   prospect_score: number | null;
+  contact_tier: string | null;
   gps: unknown;
   corroborating_sources: unknown;
 };
@@ -38,6 +39,48 @@ export type LocationDensityPoint = {
   avg_prospect_score: number;
   commercial_density_score: number;
   gps_points: Array<{ lat: number; lng: number }>;
+};
+
+export type GranularLocationDensityPoint = {
+  location_key: string;
+  location_label: string;
+  parent_location_key: string;
+  parent_location_label: string;
+  lead_count: number;
+  hot_leads_count: number;
+  avg_prospect_score: number;
+  commercial_density_score: number;
+  gps_points: Array<{ lat: number; lng: number }>;
+  raw_gps_lead_count: number;
+  geocoded_lead_count: number;
+  grid_center: { lat: number; lng: number };
+};
+
+export type LeadDensityGpsSource = "real" | "inferred" | "google";
+
+export type LeadDensityFilters = {
+  sources?: string[];
+  niche?: string | null;
+  prospect_score_gte?: number | null;
+  contact_tiers?: string[];
+  gps_sources?: LeadDensityGpsSource[];
+};
+
+export type LeadDensityMeta = {
+  raw_gps_leads: number;
+  geocoded_address_leads: number;
+  unresolved_address_leads: number;
+  deferred_geocode_leads: number;
+  filtered_leads: number;
+  positioned_leads: number;
+  grid_cell_size_km: number;
+};
+
+export type LeadDensitySnapshot = {
+  locations: GranularLocationDensityPoint[];
+  exact_points: Array<{ lat: number; lng: number }>;
+  geocoded_points: Array<{ lat: number; lng: number }>;
+  meta: LeadDensityMeta;
 };
 
 export type CoverageGap = {
@@ -84,6 +127,13 @@ export type DiscoveryRecommendations = {
 
 function stripDiacritics(value: string): string {
   return value.normalize("NFD").replace(/\p{Diacritic}+/gu, "");
+}
+
+function normalizeSearchText(value: string | null | undefined): string {
+  return stripDiacritics(value ?? "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function titleCase(value: string): string {
@@ -216,6 +266,78 @@ function percentile(value: number, sortedValues: number[]): number {
   return (lastIndex / (sortedValues.length - 1)) * 100;
 }
 
+const HEATMAP_GRID_STEP_DEGREES = 0.02;
+const HEATMAP_GRID_SIZE_KM = 2.2;
+const DEFAULT_GEOCODE_LIMIT = 120;
+
+type DensityCoordinate = {
+  lat: number;
+  lng: number;
+  source: "gps" | "geocoded";
+};
+
+function buildGridCell(point: { lat: number; lng: number }, step = HEATMAP_GRID_STEP_DEGREES) {
+  const latIndex = Math.floor(point.lat / step);
+  const lngIndex = Math.floor(point.lng / step);
+  const center = {
+    lat: Number((latIndex * step + step / 2).toFixed(5)),
+    lng: Number((lngIndex * step + step / 2).toFixed(5)),
+  };
+  return {
+    gridKey: `${latIndex}:${lngIndex}`,
+    center,
+    label: `Cuadrícula ${center.lat.toFixed(2)} / ${center.lng.toFixed(2)}`,
+  };
+}
+
+function getPrimaryCoordinate(lead: LeadInsightRow): DensityCoordinate | null {
+  const [firstPoint] = extractGpsPoints(lead.gps);
+  if (!firstPoint) return null;
+  return { ...firstPoint, source: "gps" };
+}
+
+function normalizeContactTier(value: string | null | undefined): string | null {
+  const normalized = (value ?? "").trim().toUpperCase();
+  return normalized || null;
+}
+
+function resolveRawGpsSource(lead: LeadInsightRow): Exclude<LeadDensityGpsSource, "inferred"> {
+  const sources = extractSources(lead.source, lead.corroborating_sources);
+  return sources.includes("google_places") ? "google" : "real";
+}
+
+function matchesLeadDensityFilters(
+  lead: LeadInsightRow,
+  filters: LeadDensityFilters,
+  rawCoordinate: DensityCoordinate | null
+): boolean {
+  if (filters.sources && filters.sources.length > 0) {
+    const leadSource = lead.source?.trim();
+    if (!leadSource || !filters.sources.includes(leadSource)) return false;
+  }
+
+  if (filters.niche) {
+    const haystack = normalizeSearchText(lead.niche);
+    if (!haystack.includes(normalizeSearchText(filters.niche))) return false;
+  }
+
+  if (filters.prospect_score_gte != null && asNumber(lead.prospect_score) < filters.prospect_score_gte) {
+    return false;
+  }
+
+  if (filters.contact_tiers && filters.contact_tiers.length > 0) {
+    const tier = normalizeContactTier(lead.contact_tier);
+    if (!tier || !filters.contact_tiers.includes(tier)) return false;
+  }
+
+  if (filters.gps_sources && filters.gps_sources.length > 0) {
+    if (!rawCoordinate) return filters.gps_sources.includes("inferred");
+    return filters.gps_sources.includes(resolveRawGpsSource(lead));
+  }
+
+  return true;
+}
+
 function computeDensityScores(points: LocationDensityPoint[]): LocationDensityPoint[] {
   const leadCounts = [...points.map((point) => point.lead_count)].sort((a, b) => a - b);
   const hotCounts = [...points.map((point) => point.hot_leads_count)].sort((a, b) => a - b);
@@ -268,6 +390,138 @@ export function buildLeadDensityRows(leads: LeadInsightRow[], locationFilter?: s
     }
     return right.lead_count - left.lead_count;
   });
+}
+
+export async function buildLeadDensitySnapshot(
+  leads: LeadInsightRow[],
+  options: {
+    locationFilter?: string | null;
+    filters?: LeadDensityFilters;
+    geocodeAddress?: (address: string) => Promise<{ lat: number; lng: number } | null>;
+    maxGeocodes?: number;
+  } = {}
+): Promise<LeadDensitySnapshot> {
+  const grouped = new Map<string, GranularLocationDensityPoint>();
+  const normalizedFilter = options.locationFilter ? buildLocationKey(options.locationFilter) : null;
+  const geocodeAddress = options.geocodeAddress;
+  const maxGeocodes = Math.max(0, options.maxGeocodes ?? DEFAULT_GEOCODE_LIMIT);
+  const filters: LeadDensityFilters = {
+    sources: options.filters?.sources?.map((value) => value.trim()).filter(Boolean),
+    niche: options.filters?.niche?.trim() || null,
+    prospect_score_gte: options.filters?.prospect_score_gte ?? null,
+    contact_tiers: options.filters?.contact_tiers?.map((value) => value.trim().toUpperCase()).filter(Boolean),
+    gps_sources: options.filters?.gps_sources?.filter(Boolean),
+  };
+
+  const scopedLeads = leads
+    .map((lead) => {
+      const parentLocationLabel = deriveLocationLabelFromAddress(lead.address);
+      const parentLocationKey = buildLocationKey(parentLocationLabel);
+      const rawCoordinate = getPrimaryCoordinate(lead);
+      return { lead, parentLocationLabel, parentLocationKey, rawCoordinate };
+    })
+    .filter((entry) => (!normalizedFilter || entry.parentLocationKey === normalizedFilter) && matchesLeadDensityFilters(entry.lead, filters, entry.rawCoordinate));
+
+  const geocodingCandidates = scopedLeads.filter(
+    (entry) => !entry.rawCoordinate && typeof entry.lead.address === "string" && entry.lead.address.trim() !== ""
+  );
+
+  const attemptedGeocodeCandidates = geocodingCandidates.slice(0, maxGeocodes);
+  const attemptedGeocodeLeadIds = new Set(attemptedGeocodeCandidates.map((entry) => entry.lead.id));
+  const deferredGeocodeLeads = Math.max(0, geocodingCandidates.length - attemptedGeocodeCandidates.length);
+  const geocodedByLeadId = new Map<string, { lat: number; lng: number }>();
+  if (geocodeAddress) {
+    for (const entry of attemptedGeocodeCandidates) {
+      const point = await geocodeAddress(entry.lead.address ?? "");
+      if (point) geocodedByLeadId.set(entry.lead.id, point);
+    }
+  }
+
+  let rawGpsLeads = 0;
+  let geocodedAddressLeads = 0;
+  let unresolvedAddressLeads = 0;
+  let filteredLeads = scopedLeads.length;
+  let positionedLeads = 0;
+  const exactPoints: Array<{ lat: number; lng: number }> = [];
+  const geocodedPoints: Array<{ lat: number; lng: number }> = [];
+
+  for (const entry of scopedLeads) {
+    const score = asNumber(entry.lead.prospect_score);
+    const rawCoordinate = entry.rawCoordinate;
+    const geocodedCoordinate = geocodedByLeadId.get(entry.lead.id);
+    const coordinate = rawCoordinate ?? (geocodedCoordinate ? { ...geocodedCoordinate, source: "geocoded" as const } : null);
+
+    if (!coordinate) {
+      if (typeof entry.lead.address === "string" && entry.lead.address.trim() !== "" && attemptedGeocodeLeadIds.has(entry.lead.id)) {
+        unresolvedAddressLeads += 1;
+      }
+      continue;
+    }
+
+    positionedLeads += 1;
+    const cell = buildGridCell(coordinate);
+    const locationKey = `${entry.parentLocationKey || "sin-ubicacion"}::${cell.gridKey}`;
+    const locationLabel = `${entry.parentLocationLabel} · ${cell.label}`;
+    const current = grouped.get(locationKey) ?? {
+      location_key: locationKey,
+      location_label: locationLabel,
+      parent_location_key: entry.parentLocationKey,
+      parent_location_label: entry.parentLocationLabel,
+      lead_count: 0,
+      hot_leads_count: 0,
+      avg_prospect_score: 0,
+      commercial_density_score: 0,
+      gps_points: [],
+      raw_gps_lead_count: 0,
+      geocoded_lead_count: 0,
+      grid_center: cell.center,
+    };
+
+    current.lead_count += 1;
+    current.avg_prospect_score += score;
+    if (score >= 55) current.hot_leads_count += 1;
+    current.gps_points.push({ lat: coordinate.lat, lng: coordinate.lng });
+
+    if (coordinate.source === "gps") {
+      current.raw_gps_lead_count += 1;
+      rawGpsLeads += 1;
+      exactPoints.push({ lat: coordinate.lat, lng: coordinate.lng });
+    } else {
+      current.geocoded_lead_count += 1;
+      geocodedAddressLeads += 1;
+      geocodedPoints.push({ lat: coordinate.lat, lng: coordinate.lng });
+    }
+
+    grouped.set(locationKey, current);
+  }
+
+  const rows = [...grouped.values()].map((row) => ({
+    ...row,
+    avg_prospect_score: row.lead_count > 0 ? Number((row.avg_prospect_score / row.lead_count).toFixed(2)) : 0,
+  }));
+
+  const locations = computeDensityScores(rows).sort((left, right) => {
+    if (right.commercial_density_score !== left.commercial_density_score) {
+      return right.commercial_density_score - left.commercial_density_score;
+    }
+    if (right.lead_count !== left.lead_count) return right.lead_count - left.lead_count;
+    return left.location_label.localeCompare(right.location_label);
+  });
+
+  return {
+    locations,
+    exact_points: exactPoints,
+    geocoded_points: geocodedPoints,
+    meta: {
+      raw_gps_leads: rawGpsLeads,
+      geocoded_address_leads: geocodedAddressLeads,
+      unresolved_address_leads: unresolvedAddressLeads,
+      deferred_geocode_leads: deferredGeocodeLeads,
+      filtered_leads: filteredLeads,
+      positioned_leads: positionedLeads,
+      grid_cell_size_km: HEATMAP_GRID_SIZE_KM,
+    },
+  };
 }
 
 export function buildDiscoveryRecommendations(params: {
