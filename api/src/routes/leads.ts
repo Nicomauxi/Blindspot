@@ -701,6 +701,114 @@ function normalizeLeadRow(row: JsonRecord): JsonRecord {
   };
 }
 
+const ACTIVE_TRACKING_STATUSES = ["pending", "validation", "contact", "observed"] as const;
+
+function isContactFieldKey(key: string): boolean {
+  const normalized = key.trim().toLowerCase();
+  return (
+    normalized === "emails" ||
+    normalized.includes("phone") ||
+    normalized.includes("whatsapp") ||
+    normalized.includes("mobile") ||
+    normalized.includes("email") ||
+    normalized.includes("mail")
+  );
+}
+
+function redactContactValue(value: unknown): unknown {
+  if (value == null) return null;
+  if (typeof value === "string" || typeof value === "number") return "***";
+  if (typeof value === "boolean") return value;
+  if (Array.isArray(value)) return value.map((entry) => redactContactValue(entry));
+  if (!isRecord(value)) return value;
+
+  const next: JsonRecord = {};
+  for (const [key, entry] of Object.entries(value)) {
+    next[key] = isContactFieldKey(key) ? redactContactContainer(entry) : redactNestedContactData(entry);
+  }
+  return next;
+}
+
+function redactContactContainer(value: unknown): unknown {
+  if (value == null) return null;
+  if (typeof value === "string" || typeof value === "number") return "***";
+  if (typeof value === "boolean") return value;
+  if (Array.isArray(value)) {
+    return value.map((entry) => redactContactContainer(entry));
+  }
+  if (!isRecord(value)) return value;
+
+  const next: JsonRecord = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (
+      key === "source" ||
+      key === "confidence" ||
+      key === "confirmations" ||
+      key === "label" ||
+      key === "role" ||
+      key === "external_id" ||
+      key === "note"
+    ) {
+      next[key] = entry;
+      continue;
+    }
+    next[key] = isContactFieldKey(key) ? redactContactContainer(entry) : redactContactValue(entry);
+  }
+  return next;
+}
+
+function redactNestedContactData(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((entry) => redactNestedContactData(entry));
+  }
+  if (!isRecord(value)) {
+    return value;
+  }
+
+  const next: JsonRecord = {};
+  for (const [key, entry] of Object.entries(value)) {
+    next[key] = isContactFieldKey(key)
+      ? redactContactContainer(entry)
+      : redactNestedContactData(entry);
+  }
+  return next;
+}
+
+function redactContactFields(lead: JsonRecord): JsonRecord {
+  return {
+    ...lead,
+    phone:    lead["phone"]    != null ? "***" : null,
+    whatsapp: lead["whatsapp"] != null ? "***" : null,
+    email:    lead["email"]    != null ? "***" : null,
+    // Also redact field_sources so the UI doesn't leak values via evidence.
+    field_sources: isRecord(lead["field_sources"])
+      ? {
+          ...(lead["field_sources"] as JsonRecord),
+          phone:    null,
+          whatsapp: null,
+          email:    null,
+        }
+      : lead["field_sources"],
+    canonical_fields: redactNestedContactData(lead["canonical_fields"]),
+    digital_footprint: redactNestedContactData(lead["digital_footprint"]),
+    lead_company_data: redactNestedContactData(lead["lead_company_data"]),
+  };
+}
+
+async function getCmActiveTrackedLeadIds(userId: string, leadIds: string[]): Promise<Set<string>> {
+  if (leadIds.length === 0) return new Set();
+
+  const db = getDb();
+  const { data } = await db
+    .from("lead_tracking")
+    .select("lead_id")
+    .eq("owner_id", userId)
+    .in("status", [...ACTIVE_TRACKING_STATUSES])
+    .in("lead_id", leadIds);
+
+  return new Set(((data ?? []) as { lead_id: string }[]).map((r) => r.lead_id));
+}
+
 export async function leadsRoutes(app: FastifyInstance): Promise<void> {
   app.get(
     "/leads",
@@ -780,7 +888,7 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
       if (resolvedCursor) {
         if (
           !/^[0-9a-f-]{36}$/i.test(resolvedCursor.id) ||
-          !/^\d{4}-\d{2}-\d{2}T/.test(resolvedCursor.created_at)
+          !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/.test(resolvedCursor.created_at)
         ) {
           return reply.code(400).send({ error: "Invalid cursor" });
         }
@@ -829,6 +937,9 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
       const filteredRows = cmLeadFilter
         ? rows.filter((row) => passesLeadFilter(row, cmLeadFilter))
         : rows;
+
+      // RBAC-1: redact contact fields for cm users who haven't started tracking.
+      let cmTrackedIds: Set<string> | null = null;
       const maxVisible =
         authUser.role === "cm" &&
         typeof authUser.lead_filter?.["max_leads_visible"] === "number" &&
@@ -837,8 +948,20 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
           : null;
       const cappedRows = maxVisible === null ? filteredRows : filteredRows.slice(0, maxVisible);
       const hasMore = cappedRows.length > limit;
-      const page = hasMore ? cappedRows.slice(0, limit) : cappedRows;
-      const lastRow = page[page.length - 1] as JsonRecord | undefined;
+      const rawPage = hasMore ? cappedRows.slice(0, limit) : cappedRows;
+      if (authUser.role === "cm") {
+        cmTrackedIds = await getCmActiveTrackedLeadIds(
+          authUser.id,
+          rawPage.map((row) => asNullableString(row["id"])).filter((id): id is string => Boolean(id))
+        );
+      }
+      const trackedForPage = cmTrackedIds;
+      const page = trackedForPage
+        ? rawPage.map((row) =>
+            trackedForPage.has(asNullableString(row["id"]) ?? "") ? row : redactContactFields(row)
+          )
+        : rawPage;
+      const lastRow = rawPage[rawPage.length - 1] as JsonRecord | undefined;
       const nextCursor =
         hasMore && lastRow
           ? encodeLeadCursor({
@@ -853,7 +976,7 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
       return reply.status(200).send({
         data: page,
         next_cursor: nextCursor,
-        total: maxVisible === null ? count ?? page.length : Math.min(count ?? page.length, maxVisible),
+        total: maxVisible === null ? count ?? page.length : cappedRows.length,
       });
     }
   );
@@ -1215,6 +1338,19 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
         if (!passesLeadFilter(normalizedLead, authUser.lead_filter)) {
           return reply.status(404).send({ error: "Lead not found", error_code: "not_found" });
         }
+        // RBAC-1: redact contact fields unless the cm user has started tracking this lead
+        const db2 = getDb();
+        const { data: trackingRow } = await db2
+          .from("lead_tracking")
+          .select("id")
+          .eq("lead_id", id)
+          .eq("owner_id", authUser.id)
+          .in("status", [...ACTIVE_TRACKING_STATUSES])
+          .limit(1)
+          .maybeSingle();
+        if (!trackingRow) {
+          return reply.status(200).send({ data: redactContactFields(normalizedLead) });
+        }
       }
 
       return reply.status(200).send({ data: normalizedLead });
@@ -1280,8 +1416,20 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
         );
       }
 
+      const normalizedResults = results.map((row) => normalizeLeadRow(row as JsonRecord));
+
+      if (authUser.role === "cm") {
+        const siblingIds = normalizedResults.map((r) => r["id"] as string).filter(Boolean);
+        const trackedSiblingIds = await getCmActiveTrackedLeadIds(authUser.id, siblingIds);
+        return reply.status(200).send({
+          data: normalizedResults.map((r) =>
+            trackedSiblingIds.has(r["id"] as string) ? r : redactContactFields(r)
+          ),
+        });
+      }
+
       return reply.status(200).send({
-        data: results.map((row) => normalizeLeadRow(row as JsonRecord)),
+        data: normalizedResults,
       });
     }
   );
@@ -1309,6 +1457,10 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
       if (authUser.role === "cm") {
         if (!authUser.lead_filter || !passesLeadFilter(normalizedLead, authUser.lead_filter)) {
           return reply.status(404).send({ error: "Lead not found", error_code: "not_found" });
+        }
+        const trackedIds = await getCmActiveTrackedLeadIds(authUser.id, [id]);
+        if (!trackedIds.has(id)) {
+          return reply.status(403).send({ error: "Brief not available until tracking is started", error_code: "contact_redacted" });
         }
       }
 
@@ -1373,7 +1525,7 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
             fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
           errorMessage = `primary:${primaryError}; fallback:${fallbackMessage}`;
           request.log.error({ fallbackErr }, "Template lead brief fallback error");
-          Promise.resolve(
+          void Promise.resolve(
             db.from("llm_usage_log").insert({
               provider: provider.name,
               model: provider.model,
@@ -1400,7 +1552,7 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
         }
       }
 
-      Promise.resolve(
+      void Promise.resolve(
         db.from("llm_usage_log").insert({
           provider: result.provider ?? provider.name,
           model: result.model ?? provider.model,
