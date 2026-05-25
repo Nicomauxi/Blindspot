@@ -12,7 +12,6 @@ import {
   getLead,
   getOwnerGroup,
   listOutreach,
-  type CommercialEvidenceNode,
   type LeadAssistantBrief,
   type LeadDetail,
   type LeadFieldSource,
@@ -278,7 +277,7 @@ export default function LeadDetailPage() {
       )}
 
       <SectionCard title="Resumen comercial" description="Ofertas sugeridas por categoría y evidencia para avanzar.">
-          <CommercialSummary offerings={lead.commercial_offerings ?? null} leadName={lead.name} />
+          <CommercialSummary offerings={lead.commercial_offerings ?? null} leadName={lead.name} evidenceTree={evidenceTree} />
 
           <div className="mt-6 grid gap-4 lg:grid-cols-[1.2fr,0.8fr]">
             <div className="space-y-4">
@@ -384,18 +383,6 @@ export default function LeadDetailPage() {
           </div>
         </SectionCard>
       </div>
-
-      <SectionCard title="Traza de evidencia comercial" description="Por qué el sistema sugiere este pitch, este timing y este nivel de readiness.">
-        {evidenceTree.length === 0 ? (
-          <EmptyPanel title="Sin traza comercial disponible" description="Todavía no hay señales derivadas suficientes para mostrar evidencia resumida." />
-        ) : (
-          <div className="grid gap-3 lg:grid-cols-3">
-            {evidenceTree.map((node) => (
-              <EvidenceNodeCard key={node.id} node={node} />
-            ))}
-          </div>
-        )}
-      </SectionCard>
 
       <SectionCard title="Generar mensaje alternativo" description="Versión rápida por canal si querés otro texto además del pitch asistido.">
           <div className="mb-3 flex flex-wrap items-center gap-2">
@@ -587,31 +574,6 @@ function SimpleFieldCard({ label, value }: { label: string; value: ReactNode }) 
     <div className="rounded-xl border border-slate-200 px-3 py-3">
       <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</div>
       <div className="mt-2 text-sm text-slate-900">{value ?? "—"}</div>
-    </div>
-  );
-}
-
-function EvidenceNodeCard({ node }: { node: CommercialEvidenceNode }) {
-  return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">{node.title}</div>
-          <p className="mt-2 text-sm font-medium text-slate-900">{node.summary}</p>
-        </div>
-        <span className={cn("rounded-full px-2.5 py-1 text-xs font-semibold", node.strength === "high" ? "bg-emerald-100 text-emerald-700" : node.strength === "medium" ? "bg-amber-100 text-amber-700" : "bg-slate-100 text-slate-600")}>{node.strength}</span>
-      </div>
-      <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-500">
-        {node.source ? <span className="rounded-full bg-slate-100 px-2 py-1">Origen: {node.source}</span> : null}
-        {node.confirmations > 0 ? <span className="rounded-full bg-emerald-50 px-2 py-1 text-emerald-700">+{node.confirmations} confirmaciones</span> : null}
-      </div>
-      {node.evidence.length > 0 ? (
-        <ul className="mt-4 space-y-2 text-sm text-slate-700">
-          {node.evidence.map((item) => (
-            <li key={item} className="rounded-xl bg-slate-50 px-3 py-2">{item}</li>
-          ))}
-        </ul>
-      ) : null}
     </div>
   );
 }
