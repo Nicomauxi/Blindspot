@@ -99,8 +99,8 @@ function OfferingCard({
       </div>
       {offering.signals.length > 0 ? (
         <ul className="mt-3 space-y-1">
-          {offering.signals.map((signal, idx) => (
-            <li key={idx} className="flex items-center gap-2 text-xs text-slate-700">
+          {offering.signals.map((signal) => (
+            <li key={signal.label} className="flex items-center gap-2 text-xs text-slate-700">
               <span className={cn("text-[10px]", SIGNAL_WEIGHT_CLASS[signal.weight])}>
                 {SIGNAL_WEIGHT_ICON[signal.weight]}
               </span>
