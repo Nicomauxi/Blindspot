@@ -7,6 +7,7 @@ import type {
   DiscoveryLeadDensityGpsSource,
   DiscoveryLeadDensityMeta,
   DiscoveryMapDensityLocation,
+  ZoneLead,
 } from "@/lib/api";
 import {
   computeLocationCentroid,
@@ -25,6 +26,32 @@ const GPS_SOURCE_OPTIONS: Array<{ value: DiscoveryLeadDensityGpsSource; label: s
   { value: "google", label: "Google" },
   { value: "inferred", label: "Inferido" },
 ];
+
+const TIER_COLORS: Record<string, { color: string; fillColor: string }> = {
+  A: { color: "#6ee7b7", fillColor: "#10b981" },
+  B: { color: "#7dd3fc", fillColor: "#0ea5e9" },
+  C: { color: "#fcd34d", fillColor: "#f59e0b" },
+  D: { color: "#94a3b8", fillColor: "#64748b" },
+  X: { color: "#fca5a5", fillColor: "#ef4444" },
+};
+
+const TIER_BADGE_CLASSES: Record<string, string> = {
+  A: "bg-emerald-100 text-emerald-700",
+  B: "bg-sky-100 text-sky-700",
+  C: "bg-amber-100 text-amber-700",
+  D: "bg-slate-100 text-slate-600",
+  X: "bg-rose-100 text-rose-700",
+};
+
+function extractGpsPoint(gps: unknown): { lat: number; lng: number } | null {
+  if (!gps || typeof gps !== "object") return null;
+  const obj = gps as Record<string, unknown>;
+  if (typeof obj["lat"] === "number" && typeof obj["lng"] === "number") {
+    return { lat: obj["lat"], lng: obj["lng"] };
+  }
+  // EWKB hex fallback — not handled here, only plain objects
+  return null;
+}
 
 function MapViewport({
   locations,
@@ -70,23 +97,32 @@ export function LocationDensityMap({
   meta,
   selectedLocationKey,
   onSelect,
+  onSelectWithDrill,
   filters,
   onFiltersChange,
   nicheSuggestions = [],
   loading = false,
+  zoneLeads,
+  zoneLeadsTotal,
+  zoneLeadsLoading,
 }: {
   locations: DiscoveryMapDensityLocation[];
   meta?: DiscoveryLeadDensityMeta | null;
   selectedLocationKey?: string | null;
   onSelect?: (location: DiscoveryMapDensityLocation) => void;
+  onSelectWithDrill?: (location: DiscoveryMapDensityLocation) => void;
   filters: DiscoveryLeadDensityFilters;
   onFiltersChange?: (filters: DiscoveryLeadDensityFilters) => void;
   nicheSuggestions?: string[];
   loading?: boolean;
+  zoneLeads?: ZoneLead[] | null;
+  zoneLeadsTotal?: number;
+  zoneLeadsLoading?: boolean;
 }) {
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState<LocationDensitySort>("density");
   const [mounted, setMounted] = useState(false);
+  const [mode, setMode] = useState<"heatmap" | "individual">("heatmap");
 
   useEffect(() => {
     setMounted(true);
@@ -122,6 +158,23 @@ export function LocationDensityMap({
     });
   }
 
+  function handleHeatmapMarkerClick(location: DiscoveryMapDensityLocation) {
+    onSelect?.(location);
+    onSelectWithDrill?.(location);
+    setMode("individual");
+  }
+
+  function handleListItemClick(location: DiscoveryMapDensityLocation) {
+    if (mode === "heatmap") {
+      onSelect?.(location);
+    } else {
+      onSelect?.(location);
+      onSelectWithDrill?.(location);
+    }
+  }
+
+  const hasMore = (zoneLeadsTotal ?? 0) > (zoneLeads?.length ?? 0);
+
   return (
     <div className="grid gap-4 xl:grid-cols-[1.2fr,0.8fr]">
       <div className="relative overflow-hidden rounded-3xl border border-slate-200 bg-[radial-gradient(circle_at_top,_rgba(14,165,233,0.16),_transparent_38%),linear-gradient(180deg,_#0f172a_0%,_#111827_48%,_#1e293b_100%)] p-4 text-white shadow-sm">
@@ -133,20 +186,44 @@ export function LocationDensityMap({
               La capa combina GPS reales y geocoding de direcciones sin coordenadas para dibujar cuadrículas operativas más finas que la ubicación agregada original.
             </p>
           </div>
-          <div className="rounded-2xl border border-white/10 bg-white/5 px-3 py-2 text-right text-xs text-slate-200">
-            <div>{visibleLocations.length} cuadrículas visibles</div>
-            <div className="mt-1 text-slate-300">{filteredLeadCount} leads filtrados</div>
-            <div className="mt-1 text-slate-400">{positionedLeadCount} leads posicionados</div>
-            <div className="mt-1 text-slate-400">GPS {rawVisible} · geocodificados {geocodedVisible}</div>
-            <div className="mt-1 text-slate-400">Score 0-100 · grilla ~{meta?.grid_cell_size_km ?? 2.2} km</div>
-            {loading ? <div className="mt-1 text-amber-200">Actualizando filtros…</div> : null}
+          <div className="flex flex-col items-end gap-2">
+            <div className="rounded-2xl border border-white/10 bg-white/5 px-3 py-2 text-right text-xs text-slate-200">
+              <div>{visibleLocations.length} cuadrículas visibles</div>
+              <div className="mt-1 text-slate-300">{filteredLeadCount} leads filtrados</div>
+              <div className="mt-1 text-slate-400">{positionedLeadCount} leads posicionados</div>
+              <div className="mt-1 text-slate-400">GPS {rawVisible} · geocodificados {geocodedVisible}</div>
+              <div className="mt-1 text-slate-400">Score 0-100 · grilla ~{meta?.grid_cell_size_km ?? 2.2} km</div>
+              {loading ? <div className="mt-1 text-amber-200">Actualizando filtros…</div> : null}
+            </div>
+            <div className="flex gap-1 rounded-full border border-white/10 bg-white/5 p-0.5 text-xs">
+              <button
+                className={cn("rounded-full px-3 py-1 transition-colors", mode === "heatmap" ? "bg-sky-500 text-white" : "text-slate-300 hover:text-white")}
+                onClick={() => setMode("heatmap")}
+              >
+                Mapa de calor
+              </button>
+              <button
+                className={cn("rounded-full px-3 py-1 transition-colors", mode === "individual" ? "bg-sky-500 text-white" : "text-slate-300 hover:text-white")}
+                onClick={() => setMode("individual")}
+              >
+                Leads individuales
+              </button>
+            </div>
           </div>
         </div>
 
         <div className="relative mt-6 h-[360px] rounded-[28px] border border-white/10 bg-black/10 p-2 backdrop-blur-sm">
-          {visibleLocations.length === 0 ? (
+          {mode === "heatmap" && visibleLocations.length === 0 ? (
             <div className="flex h-full items-center justify-center rounded-[24px] border border-dashed border-white/15 text-sm text-slate-300">
               Sin densidad para mostrar.
+            </div>
+          ) : mode === "individual" && !selectedLocationKey ? (
+            <div className="flex h-full items-center justify-center rounded-[24px] border border-dashed border-white/15 text-sm text-slate-300">
+              Seleccioná una zona para ver los leads individuales.
+            </div>
+          ) : mode === "individual" && zoneLeadsLoading ? (
+            <div className="flex h-full items-center justify-center rounded-[24px] border border-white/10 bg-black/20 text-sm text-slate-300">
+              Cargando leads...
             </div>
           ) : !mounted ? (
             <div className="flex h-full items-center justify-center rounded-[24px] border border-white/10 bg-black/20 text-sm text-slate-300">
@@ -164,7 +241,8 @@ export function LocationDensityMap({
                 url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
               />
               <MapViewport locations={visibleLocations} selectedLocationKey={selectedLocationKey} />
-              {visibleLocations.map((location) => {
+
+              {mode === "heatmap" && visibleLocations.map((location) => {
                 const centroid = computeLocationCentroid(location);
                 if (!centroid) return null;
                 const radius = 7 + (location.commercial_density_score / 100) * 15;
@@ -181,7 +259,7 @@ export function LocationDensityMap({
                       weight: active ? 2.2 : 1.4,
                     }}
                     eventHandlers={{
-                      click: () => onSelect?.(location),
+                      click: () => handleHeatmapMarkerClick(location),
                     }}
                   >
                     <Popup>
@@ -199,8 +277,61 @@ export function LocationDensityMap({
                   </CircleMarker>
                 );
               })}
+
+              {mode === "individual" && (zoneLeads ?? []).map((lead) => {
+                const point = extractGpsPoint(lead.gps);
+                if (!point) return null;
+                const tier = lead.contact_tier?.toUpperCase() ?? "D";
+                const tierColors = TIER_COLORS[tier] ?? TIER_COLORS["D"];
+                const badgeClass = TIER_BADGE_CLASSES[tier] ?? TIER_BADGE_CLASSES["D"];
+                return (
+                  <CircleMarker
+                    key={lead.id}
+                    center={[point.lat, point.lng]}
+                    radius={8}
+                    pathOptions={{
+                      color: tierColors.color,
+                      fillColor: tierColors.fillColor,
+                      fillOpacity: 0.75,
+                      weight: 1.5,
+                    }}
+                  >
+                    <Popup>
+                      <div className="space-y-1 min-w-[160px]">
+                        <p className="text-sm font-semibold text-slate-900">{lead.name ?? "Sin nombre"}</p>
+                        {lead.niche ? <p className="text-xs text-slate-600">{lead.niche}</p> : null}
+                        <div className="flex items-center gap-2">
+                          {lead.contact_tier ? (
+                            <span className={cn("rounded-full px-2 py-0.5 text-xs font-semibold", badgeClass)}>
+                              Tier {lead.contact_tier}
+                            </span>
+                          ) : null}
+                          {lead.prospect_score != null ? (
+                            <span className="text-xs text-slate-500">Score {lead.prospect_score}</span>
+                          ) : null}
+                        </div>
+                        <a
+                          href={`/admin/leads/${lead.id}`}
+                          className="block text-xs font-medium text-sky-600 hover:underline"
+                        >
+                          Ver ficha →
+                        </a>
+                      </div>
+                    </Popup>
+                  </CircleMarker>
+                );
+              })}
             </MapContainer>
           )}
+
+          {mode === "individual" && hasMore && !zoneLeadsLoading && (zoneLeads?.length ?? 0) > 0 ? (
+            <div className="absolute bottom-2 left-1/2 -translate-x-1/2 z-[1000] rounded-full border border-amber-300/40 bg-amber-900/80 px-4 py-1.5 text-xs text-amber-100 backdrop-blur-sm">
+              Mostrando {zoneLeads?.length} de {zoneLeadsTotal} leads ·{" "}
+              <a href={`/admin/leads?location_key=${selectedLocationKey}`} className="underline">
+                Ver todos
+              </a>
+            </div>
+          ) : null}
         </div>
       </div>
 
@@ -371,7 +502,7 @@ export function LocationDensityMap({
               <button
                 key={location.location_key}
                 type="button"
-                onClick={() => onSelect?.(location)}
+                onClick={() => handleListItemClick(location)}
                 className={cn(
                   "w-full rounded-2xl border px-4 py-3 text-left transition-colors",
                   active

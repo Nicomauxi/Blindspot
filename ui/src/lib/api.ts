@@ -1908,3 +1908,30 @@ export async function importDiscoveryPlacesXlsx(
   }
   return response.json() as Promise<{ data: DiscoveryPlacesImportResult }>;
 }
+
+// Zone leads — individual map mode
+export type ZoneLead = {
+  id: string;
+  name: string | null;
+  niche: string | null;
+  contact_tier: string | null;
+  prospect_score: number | null;
+  address: string | null;
+  gps: unknown;
+  source: string | null;
+};
+
+export async function getZoneLeads(
+  token: string,
+  params: { location_key: string; limit?: number }
+): Promise<{ data: ZoneLead[]; total: number; has_more: boolean }> {
+  const q = new URLSearchParams({
+    location_key: params.location_key,
+    ...(params.limit ? { limit: String(params.limit) } : {}),
+  });
+  return request<{ data: ZoneLead[]; total: number; has_more: boolean }>(
+    `/api/v1/admin/geo/zone-leads?${q}`,
+    {},
+    token
+  );
+}

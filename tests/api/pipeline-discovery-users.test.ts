@@ -882,3 +882,122 @@ describe("Admin audit-log route", () => {
     await app.close();
   });
 });
+
+describe("GET /admin/geo/zone-leads — MAP-4 individual mode", () => {
+  beforeEach(() => {
+    process.env["API_JWT_SECRET"] = "test-secret-at-least-32-chars-long-1234";
+    _mockUser = {
+      id: "admin-user-id",
+      email: "admin@blindspot.local",
+      role: "admin",
+      lead_filter: null,
+      active: true,
+    };
+    _mockLeads = [
+      {
+        id: "lead-1",
+        name: "Restaurante El Parque",
+        source: "yelu",
+        niche: "restaurant",
+        contact_tier: "A",
+        prospect_score: 80,
+        address: "Montevideo, Uruguay",
+        gps: { lat: -34.9, lng: -56.2 },
+        corroborating_sources: [],
+      },
+      {
+        id: "lead-2",
+        name: "Café Sur",
+        source: "osm",
+        niche: "café",
+        contact_tier: "B",
+        prospect_score: 60,
+        address: "Salto, Uruguay",
+        gps: null,
+        corroborating_sources: [],
+      },
+    ];
+  });
+
+  it("returns 403 for CM users", async () => {
+    _mockUser = { id: "cm-id", email: "cm@x.com", role: "cm", lead_filter: null, active: true };
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "cm-id", email: "cm@x.com" });
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/admin/geo/zone-leads?location_key=montevideo",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.statusCode).toBe(403);
+    await app.close();
+  });
+
+  it("returns 400 when location_key is missing", async () => {
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/admin/geo/zone-leads",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error_code).toBe("invalid_query");
+    await app.close();
+  });
+
+  it("returns 200 with matching leads for a valid location_key", async () => {
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/admin/geo/zone-leads?location_key=montevideo",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body).toHaveProperty("data");
+    expect(body).toHaveProperty("total");
+    expect(body).toHaveProperty("has_more");
+    expect(Array.isArray(body.data)).toBe(true);
+    // lead-1 has address "Montevideo, Uruguay" → location_key "montevideo"
+    expect(body.data.some((lead: { id: string }) => lead.id === "lead-1")).toBe(true);
+    // lead-2 has address "Salto, Uruguay" → different location_key
+    expect(body.data.every((lead: { id: string }) => lead.id !== "lead-2")).toBe(true);
+    await app.close();
+  });
+
+  it("respects the limit parameter and signals has_more", async () => {
+    // Add a second Montevideo lead
+    _mockLeads = [
+      ...(_mockLeads as Array<Record<string, unknown>>),
+      {
+        id: "lead-3",
+        name: "Hotel Central",
+        source: "mintur",
+        niche: "hotel",
+        contact_tier: "A",
+        prospect_score: 90,
+        address: "Montevideo, Uruguay",
+        gps: { lat: -34.91, lng: -56.19 },
+        corroborating_sources: [],
+      },
+    ];
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/admin/geo/zone-leads?location_key=montevideo&limit=1",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.data.length).toBe(1);
+    expect(body.total).toBe(2);
+    expect(body.has_more).toBe(true);
+    await app.close();
+  });
+});
