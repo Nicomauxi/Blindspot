@@ -70,7 +70,7 @@
 - `CRM-7` — done
 - `CRM-8` — done
 - `RBAC-1` — done (2026-05-24)
-- `CRM-9` — pending
+- `CRM-9` — done (2026-05-25)
 - `LEAD-1` — done (2026-05-25)
 - `LEAD-2` — done (2026-05-25)
 - `LEAD-3` — done (2026-05-25)

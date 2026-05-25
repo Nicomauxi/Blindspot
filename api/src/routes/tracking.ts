@@ -268,12 +268,12 @@ export async function trackingRoutes(app: FastifyInstance): Promise<void> {
     const leadId = t["lead_id"] as string;
     const { data: leadRow } = await db
       .from("leads")
-      .select("name, niche, address, website, phone")
+      .select("name, niche, address, website, phone, whatsapp, email")
       .eq("id", leadId)
       .single();
 
     const lead = leadRow
-      ? (leadRow as { name: string; niche: string | null; address: string | null; website: string | null; phone: string | null })
+      ? (leadRow as { name: string; niche: string | null; address: string | null; website: string | null; phone: string | null; whatsapp: string | null; email: string | null })
       : null;
 
     return reply.status(200).send({ data: { ...t, events: events ?? [], lead } });
