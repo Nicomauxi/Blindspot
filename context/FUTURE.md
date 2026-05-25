@@ -74,7 +74,7 @@
 - `LEAD-1` — done (2026-05-25)
 - `LEAD-2` — done (2026-05-25)
 - `LEAD-3` — done (2026-05-25)
-- `LEAD-4` — pending
+- `LEAD-4` — done (2026-05-25)
 - `LEAD-5` — pending
 - `QUAL-1` — pending
 - `UI-RESP-1` — pending
