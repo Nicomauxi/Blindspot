@@ -71,7 +71,7 @@
 - `CRM-8` — done
 - `RBAC-1` — done (2026-05-24)
 - `CRM-9` — pending
-- `LEAD-1` — pending
+- `LEAD-1` — done (2026-05-25)
 - `LEAD-2` — pending
 - `LEAD-3` — pending
 - `LEAD-4` — pending
@@ -1928,7 +1928,7 @@
 
 ## LEAD-1 — Resumen comercial dual (Software | Marketing) en ficha de lead
 
-**Status:** `pending`
+**Status:** `done`
 
 **Resultado esperado**
 - En `/admin/leads/:id`, debajo de las cards del header, el primer SectionCard ocupa todo el ancho de pantalla y se llama **"Resumen comercial"**.

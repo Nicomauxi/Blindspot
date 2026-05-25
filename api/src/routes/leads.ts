@@ -7,6 +7,7 @@ import { countLeadsByFilterSelection, type EnrichmentLeadFilterSelection } from 
 import { startFilterEnrichmentJob } from "../../../src/cli/commands/enrich.js";
 import { startReDiscoveryJob } from "../../../src/cli/commands/re-discover.js";
 import { summarizeFeedbackRows, computeFeedbackAdjustedConfidence } from "../../../src/modules/feedback/summary.js";
+import { buildCommercialOfferings } from "../../../src/modules/scoring/offerings.js";
 
 const permissiveUuid = z
   .string()
@@ -698,6 +699,11 @@ function normalizeLeadRow(row: JsonRecord): JsonRecord {
     ...normalized,
     field_sources: fieldSources,
     commercial_evidence_tree: buildCommercialEvidenceTree(normalized, fieldSources),
+    commercial_offerings: buildCommercialOfferings(
+      asStringArray(normalized["tags"]),
+      isRecord(normalized["score_breakdown"]) ? normalized["score_breakdown"] : null,
+      isRecord(normalized["digital_footprint"]) ? normalized["digital_footprint"] : null
+    ),
   };
 }
 

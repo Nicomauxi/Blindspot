@@ -32,6 +32,7 @@ import {
 } from "@/lib/lead-feedback";
 import { cn, formatRelative } from "@/lib/utils";
 import { AdminPageLayout, EmptyPanel, HelpTip, SectionCard, StatCard } from "@/components/admin-shell";
+import { CommercialSummary } from "@/components/lead/commercial-summary";
 
 const TIER_COLORS: Record<string, string> = {
   A: "bg-emerald-100 text-emerald-800",
@@ -353,8 +354,10 @@ export default function LeadDetailPage() {
         </div>
       )}
 
-      <SectionCard title="Resumen comercial" description="Qué vender, por qué y con qué evidencia mínima para avanzar.">
-          <div className="grid gap-4 lg:grid-cols-[1.2fr,0.8fr]">
+      <SectionCard title="Resumen comercial" description="Ofertas sugeridas por categoría y evidencia para avanzar.">
+          <CommercialSummary offerings={lead.commercial_offerings ?? null} leadName={lead.name} />
+
+          <div className="mt-6 grid gap-4 lg:grid-cols-[1.2fr,0.8fr]">
             <div className="space-y-4">
               <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
                 <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Lectura rápida</div>
