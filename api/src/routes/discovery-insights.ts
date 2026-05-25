@@ -691,3 +691,7 @@ export function estimateGooglePlacesBatchCost(maxResults: number): number {
 export function supportedDiscoverySources(): string[] {
   return [...SUPPORTED_DISCOVERY_SOURCES];
 }
+
+export function buildLeadLocationKey(address: string | null | undefined): string {
+  return buildLocationKey(deriveLocationLabelFromAddress(address));
+}

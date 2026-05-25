@@ -8,6 +8,7 @@ import {
   estimateEnrichmentImpact,
   getDiscoveryRecommendations,
   getLeadDensity,
+  getZoneLeads,
   listDiscoveryJobBatches,
   listDiscoveryJobs,
   listDiscoveryPlacesCatalog,
@@ -22,6 +23,7 @@ import {
   type DiscoveryPlaceCatalogEntry,
   type DiscoveryRecommendationData,
   type MissingFilters,
+  type ZoneLead,
 } from "@/lib/api";
 import { useAuthStore } from "@/lib/auth-store";
 import { buildNicheSuggestionTooltip, DISCOVERY_COMPOSER_STORAGE_KEY, parseDiscoveryComposerDraft, type DiscoveryComposerDraft } from "@/lib/discovery-workspace";
@@ -397,6 +399,9 @@ export default function DiscoveryPage() {
   const [densityMeta, setDensityMeta] = useState<DiscoveryLeadDensityMeta | null>(null);
   const [densityFilters, setDensityFilters] = useState<DiscoveryLeadDensityFilters>(EMPTY_DENSITY_FILTERS);
   const [densityLoading, setDensityLoading] = useState(false);
+  const [zoneLeads, setZoneLeads] = useState<ZoneLead[] | null>(null);
+  const [zoneLeadsTotal, setZoneLeadsTotal] = useState(0);
+  const [zoneLeadsLoading, setZoneLeadsLoading] = useState(false);
   const [batches, setBatches] = useState<DiscoveryJobBatch[]>([]);
   const [legacyJobs, setLegacyJobs] = useState<DiscoveryJob[]>([]);
   const [expandedBatchId, setExpandedBatchId] = useState<string | null>(null);
@@ -650,6 +655,21 @@ export default function DiscoveryPage() {
     setComposer((current) => ({ ...current, location: location.parent_location_label }));
     setSelectedLocationKey(location.location_key);
     setPrefillNote(`Zona ${location.location_label}`);
+  }
+
+  async function handleDrillDown(location: DiscoveryMapDensityLocation) {
+    if (!token) return;
+    setSelectedLocationKey(location.location_key);
+    setZoneLeadsLoading(true);
+    try {
+      const res = await getZoneLeads(token, { location_key: location.location_key, limit: 200 });
+      setZoneLeads(res.data);
+      setZoneLeadsTotal(res.total);
+    } catch {
+      setZoneLeads([]);
+    } finally {
+      setZoneLeadsLoading(false);
+    }
   }
 
   const densityNicheSuggestions = useMemo(() => {
@@ -977,10 +997,14 @@ export default function DiscoveryPage() {
             meta={densityMeta}
             selectedLocationKey={selectedLocationKey}
             onSelect={applyLocationPrefill}
+            onSelectWithDrill={handleDrillDown}
             filters={densityFilters}
             onFiltersChange={setDensityFilters}
             nicheSuggestions={densityNicheSuggestions}
             loading={densityLoading}
+            zoneLeads={zoneLeads}
+            zoneLeadsTotal={zoneLeadsTotal}
+            zoneLeadsLoading={zoneLeadsLoading}
           />
         </div>
       </SectionCard>

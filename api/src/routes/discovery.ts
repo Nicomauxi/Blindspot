@@ -5,6 +5,7 @@ import { requireAuth, requireAdmin, getAuthUser } from "../auth/middleware.js";
 import {
   buildDiscoveryRecommendations,
   buildLeadDensitySnapshot,
+  buildLeadLocationKey,
   estimateGooglePlacesBatchCost,
   supportedDiscoverySources,
   type LeadInsightRow,
@@ -153,6 +154,13 @@ const leadDensityQuerySchema = recommendationsQuerySchema.extend({
 
 const batchActionSchema = z.object({
   action: z.enum(["pause", "resume", "cancel"]),
+});
+
+const zoneLeadsQuerySchema = z.object({
+  location_key: z.string().min(1).max(120),
+  limit: z.string().optional()
+    .transform((v) => Math.min(Number(v ?? "200"), 200))
+    .pipe(z.number().int().min(1).max(200)),
 });
 
 const VALID_JOB_STATUSES = ["queued", "running", "completed", "failed", "cancelled", "paused"];
@@ -882,5 +890,34 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
         supported_sources: supportedDiscoverySources(),
       },
     });
+  });
+
+  // GET /admin/geo/zone-leads — individual leads for a zone (individual map mode)
+  app.get("/admin/geo/zone-leads", { preHandler: requireAdmin }, async (request, reply) => {
+    const parsed = zoneLeadsQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.status(400).send({ error: "Invalid query", error_code: "invalid_query", details: parsed.error.flatten().fieldErrors });
+    }
+    const { location_key, limit } = parsed.data;
+    const db = getDb();
+    const leadsRes = await db
+      .from("leads")
+      .select("id, name, niche, contact_tier, prospect_score, address, gps, source")
+      .order("prospect_score", { ascending: false })
+      .limit(4000);
+
+    if (leadsRes.error) {
+      request.log.error({ error: leadsRes.error }, "zone-leads load error");
+      return reply.status(500).send({ error: "Database error", error_code: "db_error" });
+    }
+
+    const all = leadsRes.data ?? [];
+    const matching = all.filter((lead) => {
+      const derived = buildLeadLocationKey((lead as { address?: string | null }).address ?? "");
+      return derived === location_key;
+    });
+
+    const page = matching.slice(0, limit);
+    return reply.status(200).send({ data: page, total: matching.length, has_more: matching.length > limit });
   });
 }
