@@ -19,6 +19,7 @@ import {
 } from "@/lib/api";
 import { useAuthStore } from "@/lib/auth-store";
 import { formatBackupSize } from "@/lib/backups";
+import { summarizeRunCard } from "@/lib/monitoring-runs";
 import { cn, formatDate, formatRelative } from "@/lib/utils";
 import { SectionCard, StatCard } from "@/components/admin-shell";
 
@@ -29,6 +30,14 @@ const RUN_STATUS_COLORS: Record<string, string> = {
   partial: "bg-orange-50 text-orange-700",
   failed: "bg-red-50 text-red-700",
   aborted: "bg-gray-50 text-gray-600",
+};
+
+const PHASE_STATUS_COLORS: Record<string, string> = {
+  pending: "bg-slate-100 text-slate-700",
+  running: "bg-sky-100 text-sky-700",
+  completed: "bg-emerald-100 text-emerald-700",
+  partial: "bg-amber-100 text-amber-700",
+  failed: "bg-rose-100 text-rose-700",
 };
 
 export function MonitoringSection() {
@@ -354,40 +363,128 @@ export function MonitoringSection() {
               <p className="text-sm theme-text-muted">Sin runs recientes.</p>
             ) : (
               <div className="space-y-4">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className={cn("rounded-full px-2 py-1 text-xs font-semibold", RUN_STATUS_COLORS[selectedRun.status === "pending" ? "queued" : selectedRun.status] ?? "bg-slate-100 text-slate-700")}>{selectedRun.status === "pending" ? "queued" : selectedRun.status}</span>
-                  <span className="font-mono text-xs theme-text-muted">{selectedRun.id}</span>
-                  <span className="ml-auto text-xs theme-text-muted">{selectedRun.triggered_by}</span>
-                </div>
-                <div className="grid gap-3 md:grid-cols-3">
-                  {[
-                    { label: "Creado", value: formatRelative(selectedRun.created_at) },
-                    { label: "Inicio", value: selectedRun.started_at ? formatRelative(selectedRun.started_at) : "En cola" },
-                    { label: "Fin", value: selectedRun.completed_at ? formatRelative(selectedRun.completed_at) : "—" },
-                  ].map(({ label, value }) => (
-                    <div key={label} className="rounded-xl border px-3 py-3 theme-panel">
-                      <div className="text-xs font-semibold uppercase tracking-wide theme-text-muted">{label}</div>
-                      <div className="mt-1 text-sm theme-text-strong">{value}</div>
-                    </div>
-                  ))}
-                </div>
-                <div className="grid gap-3 lg:grid-cols-2">
-                  <div className="rounded-xl border border-slate-200 p-4">
-                    <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Fases</div>
-                    {Object.keys(selectedRun.phase_results ?? {}).length === 0 ? (
-                      <p className="text-sm text-slate-500">Sin phase_results todavía.</p>
-                    ) : (
-                      <div className="space-y-2">
-                        {Object.entries(selectedRun.phase_results ?? {}).map(([phase, result]) => (
-                          <div key={phase} className="rounded-xl bg-slate-50 p-3">
-                            <div className="text-sm font-semibold text-slate-900">{phase}</div>
-                            <pre className="mt-1 overflow-auto text-xs text-slate-600">{JSON.stringify(result, null, 2)}</pre>
+                {(() => {
+                  const selectedSummary = summarizeRunCard(selectedRun);
+                  return (
+                    <>
+                      <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                        <div className="flex flex-wrap items-start gap-3">
+                          <div>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className={cn("rounded-full px-2 py-1 text-xs font-semibold", RUN_STATUS_COLORS[selectedRun.status === "pending" ? "queued" : selectedRun.status] ?? "bg-slate-100 text-slate-700")}>{selectedRun.status === "pending" ? "queued" : selectedRun.status}</span>
+                              {selectedSummary.isDryRun ? <span className="rounded-full bg-white px-2 py-1 text-[11px] font-semibold text-slate-600">dry run</span> : null}
+                              {selectedRun.dashboard_stale ? <span className="rounded-full bg-amber-100 px-2 py-1 text-[11px] font-semibold text-amber-700">dashboard stale</span> : null}
+                            </div>
+                            <p className="mt-3 font-mono text-xs text-slate-500">{selectedRun.id}</p>
+                            <p className="mt-1 text-sm font-semibold text-slate-900">Disparado por {selectedRun.triggered_by}</p>
+                          </div>
+                          <div className="ml-auto grid gap-2 text-right text-xs text-slate-500 sm:grid-cols-2 sm:text-left">
+                            <div>
+                              <div className="font-semibold uppercase tracking-wide text-slate-400">Fases</div>
+                              <div className="mt-1 text-sm font-medium text-slate-900">{selectedSummary.completedPhases}/{selectedSummary.phases.length || 0} completas</div>
+                            </div>
+                            <div>
+                              <div className="font-semibold uppercase tracking-wide text-slate-400">Activa</div>
+                              <div className="mt-1 text-sm font-medium text-slate-900">{selectedSummary.runningPhase ?? "sin fase corriendo"}</div>
+                            </div>
+                            <div>
+                              <div className="font-semibold uppercase tracking-wide text-slate-400">Override</div>
+                              <div className="mt-1 text-sm font-medium text-slate-900">{selectedSummary.requestedPhases ? `${selectedSummary.requestedPhases} fases pedidas` : "pipeline completo"}</div>
+                            </div>
+                            <div>
+                              <div className="font-semibold uppercase tracking-wide text-slate-400">Duración</div>
+                              <div className="mt-1 text-sm font-medium text-slate-900">{selectedRun.started_at ? selectedRun.completed_at ? `${Math.max(Math.round((new Date(selectedRun.completed_at).getTime() - new Date(selectedRun.started_at).getTime()) / 60000), 0)} min` : "en curso" : "en cola"}</div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="grid gap-3 md:grid-cols-3">
+                        {[
+                          { label: "Creado", value: formatRelative(selectedRun.created_at) },
+                          { label: "Inicio", value: selectedRun.started_at ? formatRelative(selectedRun.started_at) : "En cola" },
+                          { label: "Fin", value: selectedRun.completed_at ? formatRelative(selectedRun.completed_at) : "—" },
+                        ].map(({ label, value }) => (
+                          <div key={label} className="rounded-xl border px-3 py-3 theme-panel">
+                            <div className="text-xs font-semibold uppercase tracking-wide theme-text-muted">{label}</div>
+                            <div className="mt-1 text-sm theme-text-strong">{value}</div>
                           </div>
                         ))}
                       </div>
-                    )}
-                  </div>
-                  <div className="rounded-xl border border-slate-200 p-4">
+
+                      <div>
+                        <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Runs recientes</div>
+                        <div className="overflow-x-auto pb-2">
+                          <div className="flex min-w-max gap-3">
+                            {runs.slice(0, 6).map((run) => {
+                              const summary = summarizeRunCard(run);
+                              const active = selectedRun.id === run.id;
+                              return (
+                                <button
+                                  key={run.id}
+                                  onClick={() => void loadRunDetail(run.id)}
+                                  className={cn(
+                                    "w-[20rem] shrink-0 rounded-2xl border px-4 py-3 text-left transition-colors",
+                                    active ? "border-sky-300 bg-sky-50 text-sky-900" : "border-slate-200 bg-white hover:border-sky-200 hover:bg-sky-50/40"
+                                  )}
+                                >
+                                  <div className="flex items-start gap-3">
+                                    <div>
+                                      <span className={cn("rounded-full px-2 py-1 text-[11px] font-semibold", RUN_STATUS_COLORS[run.status === "pending" ? "queued" : run.status] ?? "bg-slate-100 text-slate-700")}>{run.status === "pending" ? "queued" : run.status}</span>
+                                      <p className="mt-3 font-mono text-[11px] text-slate-500">{run.id.slice(0, 8)}</p>
+                                      <p className="mt-1 text-sm font-semibold text-slate-900">{run.triggered_by}</p>
+                                    </div>
+                                    <div className="ml-auto text-right text-xs text-slate-500">
+                                      <div>{formatRelative(run.created_at)}</div>
+                                      <div className="mt-1">{summary.completedPhases}/{summary.phases.length || 0} fases</div>
+                                    </div>
+                                  </div>
+                                  <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-slate-600">
+                                    <div className="rounded-xl bg-slate-50 px-3 py-2">
+                                      <div className="font-semibold uppercase tracking-wide text-slate-400">Activa</div>
+                                      <div className="mt-1 text-slate-800">{summary.runningPhase ?? "sin fase"}</div>
+                                    </div>
+                                    <div className="rounded-xl bg-slate-50 px-3 py-2">
+                                      <div className="font-semibold uppercase tracking-wide text-slate-400">Modo</div>
+                                      <div className="mt-1 text-slate-800">{summary.isDryRun ? "dry run" : "real"}</div>
+                                    </div>
+                                  </div>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div>
+                        <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Fases</div>
+                        {selectedSummary.phases.length === 0 ? (
+                          <p className="text-sm text-slate-500">Sin phase_results todavía.</p>
+                        ) : (
+                          <div className="overflow-x-auto pb-2">
+                            <div className="flex min-w-max gap-3">
+                              {selectedSummary.phases.map((phase) => (
+                                <div key={phase.key} className="w-[15rem] shrink-0 rounded-2xl border border-slate-200 bg-white px-4 py-3">
+                                  <div className="flex items-center justify-between gap-2">
+                                    <p className="text-sm font-semibold capitalize text-slate-900">{phase.label}</p>
+                                    <span className={cn("rounded-full px-2 py-1 text-[11px] font-semibold", PHASE_STATUS_COLORS[phase.status] ?? "bg-slate-100 text-slate-700")}>{phase.status}</span>
+                                  </div>
+                                  <div className="mt-3 space-y-1 text-xs text-slate-500">
+                                    <div>Items: <span className="font-medium text-slate-800">{phase.itemsProcessed ?? "—"}</span></div>
+                                    <div>Inicio: <span className="font-medium text-slate-800">{phase.startedAt ? formatDate(phase.startedAt) : "—"}</span></div>
+                                    <div>Fin: <span className="font-medium text-slate-800">{phase.completedAt ? formatDate(phase.completedAt) : "—"}</span></div>
+                                    <div>Metadata: <span className="font-medium text-slate-800">{phase.metadataCount} campos</span></div>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </>
+                  );
+                })()}
+                <div className="rounded-xl border border-slate-200 p-4">
                     <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Log en vivo</div>
                     <div className="max-h-64 space-y-1 overflow-auto rounded-xl bg-slate-950 p-3 text-xs text-slate-200">
                       {runLogs.length === 0 ? (
@@ -400,14 +497,6 @@ export function MonitoringSection() {
                         </div>
                       ))}
                     </div>
-                  </div>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  {runs.slice(0, 6).map((run) => (
-                    <button key={run.id} onClick={() => void loadRunDetail(run.id)} className={cn("rounded-lg border px-2 py-1 text-xs transition-colors", selectedRun.id === run.id ? "border-sky-300 bg-sky-50 text-sky-800" : "border-slate-200 hover:bg-slate-50 theme-text-muted")}>
-                      {run.id.slice(0, 8)} · {run.status === "pending" ? "queued" : run.status}
-                    </button>
-                  ))}
                 </div>
               </div>
             )}

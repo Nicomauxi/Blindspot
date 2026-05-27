@@ -1,4 +1,8 @@
-import type { DiscoveryRecommendationData } from "@/lib/api";
+import type { DiscoveryRecommendationData, LeadGeoSelection } from "@/lib/api";
+
+export type DiscoveryComposerGeoSelection = LeadGeoSelection & {
+  label: string;
+};
 
 export type DiscoveryComposerDraft = {
   sources: string[];
@@ -10,6 +14,7 @@ export type DiscoveryComposerDraft = {
   google_concurrency: string;
   google_cost_cap_usd: string;
   enrich_after_discovery: boolean;
+  geo_selection?: DiscoveryComposerGeoSelection;
 };
 
 export const DISCOVERY_COMPOSER_STORAGE_KEY = "blindspot.discovery.composer";
@@ -32,6 +37,20 @@ export function parseDiscoveryComposerDraft(
         typeof parsed.enrich_after_discovery === "boolean"
           ? parsed.enrich_after_discovery
           : fallback.enrich_after_discovery,
+      geo_selection:
+        parsed.geo_selection &&
+        typeof parsed.geo_selection === "object" &&
+        typeof parsed.geo_selection.label === "string"
+          ? {
+              label: parsed.geo_selection.label,
+              parent_location_keys: Array.isArray(parsed.geo_selection.parent_location_keys)
+                ? parsed.geo_selection.parent_location_keys.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+                : undefined,
+              grid_location_keys: Array.isArray(parsed.geo_selection.grid_location_keys)
+                ? parsed.geo_selection.grid_location_keys.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+                : undefined,
+            }
+          : fallback.geo_selection,
     };
   } catch {
     return fallback;

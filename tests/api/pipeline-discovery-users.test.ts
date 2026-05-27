@@ -17,6 +17,7 @@ vi.mock("../../api/src/services/lead-geocoding.js", () => ({
 }));
 
 let _activePipelineRun: Record<string, unknown> | null = null;
+let _mockLeadSchemaMissingContactTier = false;
 
 let _mockLeads: Record<string, unknown>[] = [
   {
@@ -273,12 +274,20 @@ vi.mock("../../api/src/db/client.js", () => ({
       }
       if (table === "leads") {
         return {
-          select: () => ({
+          select: (cols?: string) => ({
             order: () => ({
-              limit: (_n: number) => Promise.resolve({
-                data: _mockLeads,
-                error: null,
-              }),
+              limit: (_n: number) => {
+                if (_mockLeadSchemaMissingContactTier && cols?.includes("contact_tier")) {
+                  return Promise.resolve({
+                    data: null,
+                    error: { code: "42703", message: "column leads.contact_tier does not exist" },
+                  });
+                }
+                return Promise.resolve({
+                  data: _mockLeads,
+                  error: null,
+                });
+              },
             }),
           }),
         };
@@ -349,6 +358,7 @@ describe("Pipeline routes — admin only", () => {
     geocodeAddress.mockResolvedValue(null);
     process.env["API_JWT_SECRET"] = "test-secret-at-least-32-chars-long-1234";
     _activePipelineRun = null;
+    _mockLeadSchemaMissingContactTier = false;
     _mockLeads = [
       {
         id: "lead-1",
@@ -702,6 +712,34 @@ describe("Discovery routes", () => {
     await app.close();
   });
 
+  it("GET /admin/geo/lead-density falls back when leads.contact_tier is missing in legacy schema", async () => {
+    _mockLeadSchemaMissingContactTier = true;
+    _mockLeads = [
+      {
+        id: "lead-legacy",
+        source: "yelu",
+        niche: "restaurant",
+        address: "Montevideo, Uruguay",
+        prospect_score: 72,
+        gps: { lat: -34.9, lng: -56.2 },
+        corroborating_sources: [],
+      },
+    ];
+
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/admin/geo/lead-density?limit=10",
+      headers: { authorization: `Bearer ${token}` },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().data.locations.length).toBeGreaterThan(0);
+    await app.close();
+  });
+
 
 });
 
@@ -964,8 +1002,110 @@ describe("GET /admin/geo/zone-leads — MAP-4 individual mode", () => {
     expect(Array.isArray(body.data)).toBe(true);
     // lead-1 has address "Montevideo, Uruguay" → location_key "montevideo"
     expect(body.data.some((lead: { id: string }) => lead.id === "lead-1")).toBe(true);
+    expect(body.data[0]).toHaveProperty("map_point");
     // lead-2 has address "Salto, Uruguay" → different location_key
     expect(body.data.every((lead: { id: string }) => lead.id !== "lead-2")).toBe(true);
+    await app.close();
+  });
+
+  it("supports granular location keys and returns plottable geocoded leads", async () => {
+    geocodeAddress.mockImplementation(async (address: string) => address.includes("Benito Blanco") ? { lat: -34.904, lng: -56.19 } : null);
+    _mockLeads = [
+      {
+        id: "lead-gps",
+        name: "Restaurante GPS",
+        source: "yelu",
+        niche: "restaurant",
+        contact_tier: "A",
+        prospect_score: 81,
+        address: "Pocitos, Montevideo, Uruguay",
+        gps: { lat: -34.905, lng: -56.191 },
+        corroborating_sources: [],
+      },
+      {
+        id: "lead-geocoded",
+        name: "Restaurante Geocoded",
+        source: "osm",
+        niche: "restaurant",
+        contact_tier: "B",
+        prospect_score: 64,
+        address: "Benito Blanco 1234, Pocitos, Montevideo",
+        gps: null,
+        corroborating_sources: [],
+      },
+      {
+        id: "lead-other-zone",
+        name: "Hotel Salto",
+        source: "mintur",
+        niche: "hotel",
+        contact_tier: "C",
+        prospect_score: 40,
+        address: "Salto, Uruguay",
+        gps: { lat: -31.39, lng: -57.97 },
+        corroborating_sources: [],
+      },
+    ];
+
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
+    const densityRes = await app.inject({
+      method: "GET",
+      url: "/api/v1/admin/geo/lead-density?limit=10",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(densityRes.statusCode).toBe(200);
+    const densityBody = densityRes.json();
+    const target = densityBody.data.locations.find((location: { lead_count: number; location_key: string }) => location.lead_count >= 2);
+    expect(target?.location_key).toBeTruthy();
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/v1/admin/geo/zone-leads?location_key=${encodeURIComponent(target.location_key)}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.total).toBe(2);
+    expect(body.data.map((lead: { id: string }) => lead.id).sort()).toEqual(["lead-geocoded", "lead-gps"]);
+    expect(body.data.find((lead: { id: string }) => lead.id === "lead-geocoded")?.map_point).toEqual({ lat: -34.904, lng: -56.19 });
+    await app.close();
+  });
+
+  it("accepts the explicit parent/grid contract in parallel to the legacy location_key", async () => {
+    _mockLeads = [
+      {
+        id: "lead-contract",
+        name: "Contrato Zona",
+        source: "yelu",
+        niche: "restaurant",
+        contact_tier: "A",
+        prospect_score: 75,
+        address: "Pocitos, Montevideo, Uruguay",
+        gps: { lat: -34.905, lng: -56.191 },
+        corroborating_sources: [],
+      },
+    ];
+
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
+    const densityRes = await app.inject({
+      method: "GET",
+      url: "/api/v1/admin/geo/lead-density?limit=10",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    const target = densityRes.json().data.locations[0];
+    const [, gridLocationKey] = String(target.location_key).split("::", 2);
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/v1/admin/geo/zone-leads?parent_location_key=${encodeURIComponent(target.parent_location_key)}&grid_location_key=${encodeURIComponent(gridLocationKey)}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().data.map((lead: { id: string }) => lead.id)).toEqual(["lead-contract"]);
     await app.close();
   });
 

@@ -1,4 +1,12 @@
-const BASE = process.env["NEXT_PUBLIC_API_URL"] ?? "http://localhost:3001";
+function resolveBaseUrl(): string {
+  if (typeof window !== "undefined") {
+    // In the browser, prefer same-origin requests so Next rewrites can absorb
+    // local LAN/IP differences without tripping CORS.
+    return "";
+  }
+
+  return process.env["NEXT_PUBLIC_API_URL"] ?? "http://localhost:3001";
+}
 
 export class ApiError extends Error {
   constructor(
@@ -26,7 +34,7 @@ async function request<T>(
 
   if (token) headers["Authorization"] = `Bearer ${token}`;
 
-  const res = await fetch(`${BASE}${path}`, { ...options, headers });
+  const res = await fetch(`${resolveBaseUrl()}${path}`, { ...options, headers });
   const body = await res.json().catch(() => ({}));
 
   if (!res.ok) {
@@ -931,6 +939,11 @@ export type LeadDashboard = {
   sources_count?: number | null;
 };
 
+export type LeadGeoSelection = {
+  parent_location_keys?: string[];
+  grid_location_keys?: string[];
+};
+
 export type LeadDetail = LeadDashboard & {
   digital_footprint: Record<string, unknown> | null;
   inferred_state: Record<string, unknown> | null;
@@ -957,6 +970,8 @@ export async function listLeads(
     sort_direction?: "asc" | "desc";
     cursor?: string;
     limit?: number;
+    parent_location_keys?: string[];
+    grid_location_keys?: string[];
   } = {}
 ) {
   const qp = new URLSearchParams();
@@ -970,6 +985,8 @@ export async function listLeads(
   if (params.sort_direction) qp.set("sort_direction", params.sort_direction);
   if (params.cursor) qp.set("cursor", params.cursor);
   if (params.limit) qp.set("limit", String(params.limit));
+  if (params.parent_location_keys && params.parent_location_keys.length > 0) qp.set("parent_location_keys", params.parent_location_keys.join(","));
+  if (params.grid_location_keys && params.grid_location_keys.length > 0) qp.set("grid_location_keys", params.grid_location_keys.join(","));
   return request<PaginatedResponse<LeadDashboard>>(`/api/v1/leads?${qp}`, {}, token);
 }
 
@@ -1759,6 +1776,8 @@ export type CrmStatus = "pending" | "validation" | "contact" | "observed" | "rej
 
 export type LeadTracking = {
   id: string;
+  case_code: string;
+  title: string;
   lead_id: string;
   lead_name: string | null;
   owner_id: string;
@@ -1772,14 +1791,27 @@ export type LeadTracking = {
 export type LeadTrackingEvent = {
   id: string;
   tracking_id: string;
+  event_type: "system_status_change" | "manual_comment";
   from_status: CrmStatus | null;
   to_status: CrmStatus;
   actor_user_id: string;
   actor_role: "admin" | "cm";
+  actor_email?: string | null;
   notes: string | null;
   channel: string | null;
   reminder_at: string | null;
   created_at: string;
+};
+
+export type LeadTrackingStageDetail = {
+  id: string;
+  tracking_id: string;
+  stage: CrmStatus;
+  summary: string | null;
+  data: Record<string, unknown>;
+  updated_by_user_id: string;
+  created_at: string;
+  updated_at: string;
 };
 
 export type LeadTrackingLeadData = {
@@ -1795,11 +1827,12 @@ export type LeadTrackingLeadData = {
 export type LeadTrackingDetail = LeadTracking & {
   events: LeadTrackingEvent[];
   lead: LeadTrackingLeadData | null;
+  stage_details: LeadTrackingStageDetail[];
 };
 
 export function createTracking(
   token: string,
-  data: { lead_id: string; notes?: string; campaign_id?: string }
+  data: { lead_id: string; title?: string; notes?: string; campaign_id?: string }
 ) {
   return request<{ data: LeadTracking }>(
     "/api/v1/tracking",
@@ -1813,6 +1846,8 @@ export type TrackingFilters = {
   status_in?: string;
   owner_id?: string;
   lead_id?: string;
+  case_code?: string;
+  title?: string;
   niche?: string;
   source?: string;
   contact_tier?: string;
@@ -1828,6 +1863,8 @@ export function listTrackings(token: string, params: TrackingFilters = {}) {
   if (params.status_in) qp.set("status_in", params.status_in);
   if (params.owner_id) qp.set("owner_id", params.owner_id);
   if (params.lead_id) qp.set("lead_id", params.lead_id);
+  if (params.case_code) qp.set("case_code", params.case_code);
+  if (params.title) qp.set("title", params.title);
   if (params.niche) qp.set("niche", params.niche);
   if (params.source) qp.set("source", params.source);
   if (params.contact_tier) qp.set("contact_tier", params.contact_tier);
@@ -1859,6 +1896,26 @@ export function addTrackingNote(token: string, trackingId: string, notes: string
   return request<{ data: LeadTrackingEvent }>(
     `/api/v1/tracking/${trackingId}/note`,
     { method: "POST", body: JSON.stringify({ notes }) },
+    token
+  );
+}
+
+export function updateTrackingTitle(token: string, trackingId: string, title: string) {
+  return request<{ data: LeadTracking }>(
+    `/api/v1/tracking/${trackingId}`,
+    { method: "PATCH", body: JSON.stringify({ title }) },
+    token
+  );
+}
+
+export function upsertTrackingStageDetails(
+  token: string,
+  trackingId: string,
+  data: { stage?: CrmStatus; summary?: string | null; data?: Record<string, unknown> }
+) {
+  return request<{ data: LeadTrackingStageDetail }>(
+    `/api/v1/tracking/${trackingId}/stage-details`,
+    { method: "PUT", body: JSON.stringify(data) },
     token
   );
 }
@@ -1919,8 +1976,7 @@ export async function importDiscoveryPlacesXlsx(
   const formData = new FormData();
   formData.append("file", file);
   const suffix = upsert ? "?upsert=true" : "";
-  const BASE_URL = process.env["NEXT_PUBLIC_API_URL"] ?? "";
-  const response = await fetch(`${BASE_URL}/api/v1/admin/discovery/places/import${suffix}`, {
+  const response = await fetch(`${resolveBaseUrl()}/api/v1/admin/discovery/places/import${suffix}`, {
     method: "POST",
     headers: { Authorization: `Bearer ${token}` },
     body: formData,
@@ -1941,17 +1997,19 @@ export type ZoneLead = {
   prospect_score: number | null;
   address: string | null;
   gps: unknown;
+  map_point?: { lat: number; lng: number } | null;
   source: string | null;
 };
 
 export async function getZoneLeads(
   token: string,
-  params: { location_key: string; limit?: number }
+  params: { location_key?: string; parent_location_key?: string; grid_location_key?: string; limit?: number }
 ): Promise<{ data: ZoneLead[]; total: number; has_more: boolean }> {
-  const q = new URLSearchParams({
-    location_key: params.location_key,
-    ...(params.limit ? { limit: String(params.limit) } : {}),
-  });
+  const q = new URLSearchParams();
+  if (params.location_key) q.set("location_key", params.location_key);
+  if (params.parent_location_key) q.set("parent_location_key", params.parent_location_key);
+  if (params.grid_location_key) q.set("grid_location_key", params.grid_location_key);
+  if (params.limit) q.set("limit", String(params.limit));
   return request<{ data: ZoneLead[]; total: number; has_more: boolean }>(
     `/api/v1/admin/geo/zone-leads?${q}`,
     {},

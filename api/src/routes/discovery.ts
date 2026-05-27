@@ -3,10 +3,13 @@ import { z } from "zod";
 import { getDb } from "../db/client.js";
 import { requireAuth, requireAdmin, getAuthUser } from "../auth/middleware.js";
 import {
+  buildGridCell,
   buildDiscoveryRecommendations,
   buildLeadDensitySnapshot,
   buildLeadLocationKey,
   estimateGooglePlacesBatchCost,
+  getPrimaryCoordinate,
+  parseGranularLocationKey,
   supportedDiscoverySources,
   type LeadInsightRow,
   type DiscoveryJobInsightRow,
@@ -156,12 +159,24 @@ const batchActionSchema = z.object({
   action: z.enum(["pause", "resume", "cancel"]),
 });
 
-const zoneLeadsQuerySchema = z.object({
-  location_key: z.string().min(1).max(120),
-  limit: z.string().optional()
-    .transform((v) => Math.min(Number(v ?? "200"), 200))
-    .pipe(z.number().int().min(1).max(200)),
-});
+const zoneLeadsQuerySchema = z
+  .object({
+    location_key: z.string().min(1).max(120).optional(),
+    parent_location_key: z.string().min(1).max(120).optional(),
+    grid_location_key: z.string().min(1).max(120).optional(),
+    limit: z.string().optional()
+      .transform((v) => Math.min(Number(v ?? "200"), 200))
+      .pipe(z.number().int().min(1).max(200)),
+  })
+  .superRefine((value, ctx) => {
+    if (!value.location_key && !value.parent_location_key && !value.grid_location_key) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["location_key"],
+        message: "location_key or parent/grid location keys are required",
+      });
+    }
+  });
 
 const VALID_JOB_STATUSES = ["queued", "running", "completed", "failed", "cancelled", "paused"];
 const leadGeocodingService = createLeadGeocodingService();
@@ -190,12 +205,104 @@ function asNumber(value: unknown): number {
   }
   return 0;
 }
+
+async function resolveZoneLocationMatch(
+  lead: LeadInsightRow,
+  requestedParentLocationKey: string,
+  requestedGridLocationKey: string | null
+): Promise<{ lat: number; lng: number } | null> {
+  const parentLocationKey = buildLeadLocationKey(lead.address);
+  if (parentLocationKey !== requestedParentLocationKey) return null;
+
+  const rawCoordinate = getPrimaryCoordinate(lead);
+  const geocodedCoordinate = !rawCoordinate && typeof lead.address === "string" && lead.address.trim() !== ""
+    ? await leadGeocodingService.geocodeAddress(lead.address)
+    : null;
+  const coordinate = rawCoordinate ?? (geocodedCoordinate ? { ...geocodedCoordinate, source: "geocoded" as const } : null);
+  if (!coordinate) return null;
+  if (!requestedGridLocationKey) return { lat: coordinate.lat, lng: coordinate.lng };
+
+  return buildGridCell(coordinate).gridKey === requestedGridLocationKey ? { lat: coordinate.lat, lng: coordinate.lng } : null;
+}
 function isDiscoveryBatchSchemaMissing(error: { code?: string; message?: string; details?: string; hint?: string } | null | undefined): boolean {
   if (!error) return false;
   const combined = [error.code, error.message, error.details, error.hint].filter(Boolean).join(" ").toLowerCase();
   return ["42p01", "42703", "pgrst204"].some((code) => combined.includes(code))
     || (combined.includes("discovery_job_batches") && (combined.includes("does not exist") || combined.includes("could not find") || combined.includes("schema cache")))
     || (combined.includes("batch_id") && (combined.includes("does not exist") || combined.includes("could not find") || combined.includes("schema cache")));
+}
+
+function isMissingLeadContactTierSchema(error: { code?: string; message?: string; details?: string; hint?: string } | null | undefined): boolean {
+  if (!error) return false;
+  const combined = [error.code, error.message, error.details, error.hint].filter(Boolean).join(" ").toLowerCase();
+  return combined.includes("42703") && combined.includes("contact_tier");
+}
+
+async function loadLeadDensityRows(request: { log: FastifyInstance["log"] }) {
+  const db = getDb();
+  const baseQuery = await db
+    .from("leads")
+    .select("id, source, niche, address, prospect_score, contact_tier, gps, corroborating_sources")
+    .order("created_at", { ascending: false })
+    .limit(5000);
+
+  if (!baseQuery.error) {
+    return { data: (baseQuery.data ?? []) as unknown as LeadInsightRow[], schemaFallback: false };
+  }
+
+  if (!isMissingLeadContactTierSchema(baseQuery.error)) {
+    request.log.error({ error: baseQuery.error }, "lead density load error");
+    throw new Error("db_error");
+  }
+
+  request.log.warn({ error: baseQuery.error }, "lead density fallback without contact_tier");
+  const legacyQuery = await db
+    .from("leads")
+    .select("id, source, niche, address, prospect_score, gps, corroborating_sources")
+    .order("created_at", { ascending: false })
+    .limit(5000);
+
+  if (legacyQuery.error) {
+    request.log.error({ error: legacyQuery.error }, "lead density load error");
+    throw new Error("db_error");
+  }
+
+  return {
+    data: (legacyQuery.data ?? []).map((lead) => ({ ...(lead as Record<string, unknown>), contact_tier: null })) as unknown as LeadInsightRow[],
+    schemaFallback: true,
+  };
+}
+
+async function loadZoneLeadRows(request: { log: FastifyInstance["log"] }) {
+  const db = getDb();
+  const baseQuery = await db
+    .from("leads")
+    .select("id, name, niche, contact_tier, prospect_score, address, gps, source")
+    .order("prospect_score", { ascending: false })
+    .limit(4000);
+
+  if (!baseQuery.error) {
+    return (baseQuery.data ?? []) as unknown as LeadInsightRow[];
+  }
+
+  if (!isMissingLeadContactTierSchema(baseQuery.error)) {
+    request.log.error({ error: baseQuery.error }, "zone-leads load error");
+    throw new Error("db_error");
+  }
+
+  request.log.warn({ error: baseQuery.error }, "zone-leads fallback without contact_tier");
+  const legacyQuery = await db
+    .from("leads")
+    .select("id, name, niche, prospect_score, address, gps, source")
+    .order("prospect_score", { ascending: false })
+    .limit(4000);
+
+  if (legacyQuery.error) {
+    request.log.error({ error: legacyQuery.error }, "zone-leads load error");
+    throw new Error("db_error");
+  }
+
+  return (legacyQuery.data ?? []).map((lead) => ({ ...(lead as Record<string, unknown>), contact_tier: null })) as unknown as LeadInsightRow[];
 }
 
 
@@ -752,19 +859,14 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
       });
     }
 
-    const db = getDb();
-    const leadsRes = await db
-      .from("leads")
-      .select("id, source, niche, address, prospect_score, contact_tier, gps, corroborating_sources")
-      .order("created_at", { ascending: false })
-      .limit(5000);
-
-    if (leadsRes.error) {
-      request.log.error({ error: leadsRes.error }, "lead density load error");
+    let leads: LeadInsightRow[];
+    try {
+      ({ data: leads } = await loadLeadDensityRows(request));
+    } catch {
       return reply.status(500).send({ error: "Database error", error_code: "db_error" });
     }
 
-    const density = await buildLeadDensitySnapshot((leadsRes.data ?? []) as unknown as LeadInsightRow[], {
+    const density = await buildLeadDensitySnapshot(leads, {
       locationFilter: parsedQuery.data.location ?? null,
       filters: {
         sources: parsedQuery.data.source,
@@ -898,24 +1000,33 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
     if (!parsed.success) {
       return reply.status(400).send({ error: "Invalid query", error_code: "invalid_query", details: parsed.error.flatten().fieldErrors });
     }
-    const { location_key, limit } = parsed.data;
-    const db = getDb();
-    const leadsRes = await db
-      .from("leads")
-      .select("id, name, niche, contact_tier, prospect_score, address, gps, source")
-      .order("prospect_score", { ascending: false })
-      .limit(4000);
+    const { location_key, parent_location_key, grid_location_key, limit } = parsed.data;
+    const parsedLocationKey = location_key ? parseGranularLocationKey(location_key) : null;
+    const requestedParentLocationKey = parent_location_key ?? parsedLocationKey?.parent_location_key ?? "";
+    const requestedGridLocationKey = grid_location_key ?? parsedLocationKey?.grid_location_key ?? null;
 
-    if (leadsRes.error) {
-      request.log.error({ error: leadsRes.error }, "zone-leads load error");
-      return reply.status(500).send({ error: "Database error", error_code: "db_error" });
+    if (!requestedParentLocationKey) {
+      return reply.status(400).send({
+        error: "Invalid query",
+        error_code: "invalid_query",
+        details: { location_key: ["parent_location_key could not be resolved"] },
+      });
     }
 
-    const all = leadsRes.data ?? [];
-    const matching = all.filter((lead) => {
-      const derived = buildLeadLocationKey((lead as { address?: string | null }).address ?? "");
-      return derived === location_key;
-    });
+    let all: LeadInsightRow[];
+    try {
+      all = await loadZoneLeadRows(request);
+    } catch {
+      return reply.status(500).send({ error: "Database error", error_code: "db_error" });
+    }
+    const scoped = all.filter((lead) => buildLeadLocationKey((lead as { address?: string | null }).address ?? "") === requestedParentLocationKey);
+    const matching = [];
+    for (const lead of scoped) {
+      const mapPoint = await resolveZoneLocationMatch(lead as LeadInsightRow, requestedParentLocationKey, requestedGridLocationKey);
+      if (mapPoint) {
+        matching.push({ ...lead, map_point: mapPoint });
+      }
+    }
 
     const page = matching.slice(0, limit);
     return reply.status(200).send({ data: page, total: matching.length, has_more: matching.length > limit });

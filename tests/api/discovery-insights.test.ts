@@ -1,9 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  buildGridCell,
   buildDiscoveryRecommendations,
   buildLeadDensityRows,
   buildLeadDensitySnapshot,
   estimateGooglePlacesBatchCost,
+  parseGranularLocationKey,
 } from "../../api/src/routes/discovery-insights.js";
 
 describe("discovery insights", () => {
@@ -187,6 +189,16 @@ describe("discovery insights", () => {
     expect(snapshot.meta.geocoded_address_leads).toBe(1);
     expect(geocodeAddress).toHaveBeenCalledTimes(1);
     expect(snapshot.locations).toHaveLength(2);
+  });
+
+  it("parses granular location keys and reuses the same grid math as the snapshot", () => {
+    const cell = buildGridCell({ lat: -34.905, lng: -56.191 });
+    const parsed = parseGranularLocationKey(`montevideo::${cell.gridKey}`);
+
+    expect(parsed).toEqual({
+      parent_location_key: "montevideo",
+      grid_location_key: cell.gridKey,
+    });
   });
 
   it("suggests only missing sources for coverage gaps", () => {

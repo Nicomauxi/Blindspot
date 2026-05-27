@@ -43,21 +43,26 @@ export function CrmTimeline({ events }: { events: LeadTrackingEvent[] }) {
   return (
     <ol className="relative space-y-0 border-l-2 border-slate-200 pl-5">
       {sorted.map((ev, i) => {
-        const isNote = ev.from_status === ev.to_status;
+        const isManualComment = ev.event_type === "manual_comment";
         return (
           <li key={ev.id} className={`relative pb-4 ${i === sorted.length - 1 ? "pb-0" : ""}`}>
             {/* dot */}
             <span
-              className={`absolute -left-[1.5rem] top-1.5 flex h-3 w-3 items-center justify-center rounded-full border-2 border-white ${isNote ? "bg-slate-300" : "bg-sky-400"}`}
+              className={`absolute -left-[1.5rem] top-1.5 flex h-3 w-3 items-center justify-center rounded-full border-2 border-white ${isManualComment ? "bg-slate-300" : "bg-sky-400"}`}
             />
 
             <div className="space-y-1">
               {/* header row */}
               <div className="flex flex-wrap items-center gap-1.5 text-xs">
-                {isNote ? (
-                  <StatusPill status="note" />
+                {isManualComment ? (
+                  <span className="inline-block rounded px-1.5 py-0.5 text-[10px] font-medium bg-slate-100 text-slate-600">
+                    comentario manual
+                  </span>
                 ) : (
                   <>
+                    <span className="inline-block rounded px-1.5 py-0.5 text-[10px] font-medium bg-sky-100 text-sky-700">
+                      cambio de estado
+                    </span>
                     <StatusPill status={ev.from_status ?? "—"} />
                     <span className="text-slate-400">→</span>
                     <StatusPill status={ev.to_status} />
@@ -72,7 +77,7 @@ export function CrmTimeline({ events }: { events: LeadTrackingEvent[] }) {
                 </span>
                 <span className="text-slate-400">·</span>
                 <span className="theme-text-muted capitalize">{ev.actor_role}</span>
-                <span className="text-[10px] text-slate-400">{ev.actor_user_id.slice(0, 8)}…</span>
+                <span className="text-[10px] text-slate-400">{ev.actor_email ?? `${ev.actor_user_id.slice(0, 8)}…`}</span>
               </div>
 
               {/* absolute date */}
