@@ -1,8 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const LEAD_ID = "00000000-0000-0000-0000-000000000001";
+const geocodeAddress = vi.fn();
 
 let _orderCalls: Array<{ column: string; ascending?: boolean }> = [];
+let _mockLeadQueryRows: Array<Record<string, unknown>> = [];
 
 let _mockUser: Record<string, unknown> = {
   id: "admin-user-id",
@@ -52,7 +54,7 @@ const mockTemplateLeadBrief = {
 const mockLeadViewRow = {
   id: LEAD_ID,
   name: "Parrilla Don Jorge",
-  address: "Av. 18 de Julio 123",
+  address: "Av. 18 de Julio 123, Montevideo",
   niche: "restaurant",
   source: "google_places",
   canonical_source: "google_places",
@@ -104,6 +106,7 @@ const mockLeadViewRow = {
   primary_offer: "software_pos",
   pitch_hook: "POS sin contrato",
   urgency_signal: "high",
+  gps: { lat: -34.905, lng: -56.191 },
   contacted_at: null,
   contacted_by: null,
   created_at: "2026-01-01T00:00:00Z",
@@ -127,7 +130,7 @@ const mockRejectedLeadRow = {
 function makeLeadQueryChain() {
   const chain: Record<string, unknown> = {};
   const terminal = () =>
-    Promise.resolve({ data: [mockLeadViewRow], error: null, count: 1 });
+    Promise.resolve({ data: _mockLeadQueryRows, error: null, count: _mockLeadQueryRows.length });
   const leaf = () => chain;
   chain["in"] = leaf;
   chain["eq"] = (_col: string, val: string) => {
@@ -143,6 +146,7 @@ function makeLeadQueryChain() {
   };
   chain["gte"] = leaf;
   chain["textSearch"] = leaf;
+  chain["or"] = leaf;
   chain["lt"] = leaf;
   chain["order"] = (column: string, opts?: { ascending?: boolean }) => {
     _orderCalls.push({ column, ascending: opts?.ascending });
@@ -191,6 +195,10 @@ vi.mock("../../api/src/llm/template.js", () => ({
       return mockTemplateLeadBrief;
     }
   },
+}));
+
+vi.mock("../../api/src/services/lead-geocoding.js", () => ({
+  createLeadGeocodingService: () => ({ geocodeAddress }),
 }));
 
 vi.mock("../../api/src/db/client.js", () => ({
@@ -339,6 +347,7 @@ describe("GET /api/v1/leads", () => {
   beforeEach(() => {
     process.env["API_JWT_SECRET"] = "test-secret-at-least-32-chars-long-1234";
     _orderCalls = [];
+    _mockLeadQueryRows = [mockLeadViewRow];
     _lastLlmUsageInsert = null;
     _mockLeadBriefError = null;
     _mockTemplateLeadBriefError = null;
@@ -347,6 +356,8 @@ describe("GET /api/v1/leads", () => {
     _auditLogInserts = [];
     _trackedLeadIds = new Set();
     _trackingStatuses = new Map();
+    geocodeAddress.mockReset();
+    geocodeAddress.mockResolvedValue(null);
     _mockUser = {
       id: "admin-user-id",
       email: "admin@blindspot.local",
@@ -532,6 +543,42 @@ describe("GET /api/v1/leads", () => {
 
     expect(res.statusCode).toBe(200);
     expect(res.json().data).toEqual([]);
+    await app.close();
+  });
+
+  it("filters leads by structured parent/grid selection and geocoded fallback", async () => {
+    const { buildGridCell, buildLeadLocationKey } = await import("../../api/src/routes/discovery-insights.js");
+    const geocodedRow = {
+      ...mockLeadViewRow,
+      id: "00000000-0000-0000-0000-000000000002",
+      name: "Cafe Pocitos",
+      address: "Benito Blanco 900, Montevideo",
+      gps: null,
+    };
+    _mockLeadQueryRows = [mockLeadViewRow, geocodedRow];
+    geocodeAddress.mockImplementation(async (address: string) =>
+      address.includes("Benito Blanco") ? { lat: -34.904, lng: -56.19 } : null
+    );
+
+    const cell = buildGridCell({ lat: -34.904, lng: -56.19, source: "geocoded" });
+    const parentLocationKey = buildLeadLocationKey(geocodedRow.address);
+
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/v1/leads?parent_location_keys=${encodeURIComponent(parentLocationKey)}&grid_location_keys=${encodeURIComponent(cell.gridKey)}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().data.map((lead: { id: string }) => lead.id)).toEqual([
+      "00000000-0000-0000-0000-000000000002",
+    ]);
+    expect(res.json().total).toBe(1);
+    expect(geocodeAddress).toHaveBeenCalled();
     await app.close();
   });
 });

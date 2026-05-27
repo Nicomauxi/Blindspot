@@ -2,25 +2,26 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { CircleMarker, MapContainer, Popup, TileLayer } from "react-leaflet";
 import {
+  getZoneLeads,
   getLeadDensity,
   getOutreachStats,
   getStatsOverview,
   listDiscoveryJobs,
   listPipelineRuns,
   type DiscoveryJob,
+  type DiscoveryLeadDensityFilters,
   type DiscoveryMapDensityLocation,
   type PipelineRun,
   type StatsOverview,
   type StatsOutreachRow,
+  type ZoneLead,
 } from "@/lib/api";
 import { useAuthStore } from "@/lib/auth-store";
-import { computeLocationCentroid } from "@/lib/location-density-map";
 import { formatRelative } from "@/lib/utils";
 import { AdminPageLayout, SectionCard, StatCard } from "@/components/admin-shell";
 import { LeadExplorer } from "@/components/lead-explorer";
+import { LocationDensityMap } from "@/components/location-density-map";
 
 function aggregateOutreach(rows: StatsOutreachRow[]) {
   return rows.reduce(
@@ -35,7 +36,6 @@ function aggregateOutreach(rows: StatsOutreachRow[]) {
 export default function AdminHomePage() {
   const token = useAuthStore((state) => state.token);
   const role = useAuthStore((state) => state.role);
-  const router = useRouter();
 
   const [stats, setStats] = useState<StatsOverview | null>(null);
   const [runs, setRuns] = useState<PipelineRun[]>([]);
@@ -45,7 +45,11 @@ export default function AdminHomePage() {
   const [loading, setLoading] = useState(true);
   const [densityLocations, setDensityLocations] = useState<DiscoveryMapDensityLocation[]>([]);
   const [densityLoading, setDensityLoading] = useState(false);
-  const [mapMounted, setMapMounted] = useState(false);
+  const [densityFilters, setDensityFilters] = useState<DiscoveryLeadDensityFilters>({ prospect_score_gte: 0, limit: 4000 });
+  const [selectedLocationKey, setSelectedLocationKey] = useState<string | null>(null);
+  const [zoneLeads, setZoneLeads] = useState<ZoneLead[] | null>(null);
+  const [zoneLeadsTotal, setZoneLeadsTotal] = useState(0);
+  const [zoneLeadsLoading, setZoneLeadsLoading] = useState(false);
 
   useEffect(() => {
     if (!token) return;
@@ -71,12 +75,45 @@ export default function AdminHomePage() {
   useEffect(() => {
     if (!token || role !== "admin") return;
     setDensityLoading(true);
-    setMapMounted(true);
-    getLeadDensity(token, { prospect_score_gte: 0 })
+    getLeadDensity(token, densityFilters)
       .then((res) => setDensityLocations(res.data.locations))
       .catch(() => {})
       .finally(() => setDensityLoading(false));
-  }, [token, role]);
+  }, [densityFilters, token, role]);
+
+  async function handleDrillDown(location: DiscoveryMapDensityLocation) {
+    if (!token) return;
+    setSelectedLocationKey(location.location_key);
+    setZoneLeadsLoading(true);
+    try {
+      const [, gridLocationKey] = location.location_key.split("::", 2);
+      const response = await getZoneLeads(token, {
+        location_key: location.location_key,
+        parent_location_key: location.parent_location_key,
+        ...(gridLocationKey ? { grid_location_key: gridLocationKey } : {}),
+        limit: 200,
+      });
+      setZoneLeads(response.data);
+      setZoneLeadsTotal(response.total);
+    } catch {
+      setZoneLeads([]);
+      setZoneLeadsTotal(0);
+    } finally {
+      setZoneLeadsLoading(false);
+    }
+  }
+
+  const selectedLocation = selectedLocationKey
+    ? densityLocations.find((location) => location.location_key === selectedLocationKey) ?? null
+    : null;
+  const selectedGridLocationKey = selectedLocationKey?.split("::", 2)[1] ?? null;
+  const geoSelection = selectedLocation && selectedGridLocationKey
+    ? {
+        label: selectedLocation.location_label,
+        parent_location_keys: [selectedLocation.parent_location_key],
+        grid_location_keys: [selectedGridLocationKey],
+      }
+    : undefined;
 
   const responses = (outreachStats.responded ?? 0) + (outreachStats.interested ?? 0) + (outreachStats.closed_won ?? 0);
 
@@ -106,79 +143,25 @@ export default function AdminHomePage() {
       {role === "admin" ? (
         <SectionCard
           title="Mapa de leads"
-          description="Densidad comercial por zona. Hacé clic en una zona para explorar sus leads en el Lead Explorer."
+          description="Mismo mapa y mismos controles que Discovery. Acá la selección sirve para acotar el universo comercial que trabajás en Inicio."
           actions={
             <Link href="/admin/discovery" className="text-xs font-medium text-sky-600 hover:underline">
               Vista completa →
             </Link>
           }
         >
-          <div className="relative h-[320px] overflow-hidden rounded-2xl border border-slate-200 bg-slate-950">
-            {densityLoading && densityLocations.length === 0 ? (
-              <div className="flex h-full items-center justify-center text-sm text-slate-400">
-                Cargando mapa...
-              </div>
-            ) : !mapMounted ? (
-              <div className="flex h-full items-center justify-center text-sm text-slate-400">
-                Inicializando mapa...
-              </div>
-            ) : densityLocations.length === 0 ? (
-              <div className="flex h-full items-center justify-center text-sm text-slate-400">
-                Sin datos de densidad disponibles.{" "}
-                <Link href="/admin/discovery" className="ml-1 text-sky-400 hover:underline">
-                  Ejecutar discovery
-                </Link>
-              </div>
-            ) : (
-              <MapContainer
-                center={[-32.5228, -55.7658]}
-                zoom={7}
-                scrollWheelZoom={false}
-                className="location-density-leaflet h-full w-full"
-              >
-                <TileLayer
-                  attribution={'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'}
-                  url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-                />
-                {densityLocations.map((location) => {
-                  const centroid = computeLocationCentroid(location);
-                  if (!centroid) return null;
-                  const radius = 7 + (location.commercial_density_score / 100) * 15;
-                  return (
-                    <CircleMarker
-                      key={location.location_key}
-                      center={[centroid.lat, centroid.lng]}
-                      radius={radius}
-                      pathOptions={{
-                        color: "#dbeafe",
-                        fillColor: "#38bdf8",
-                        fillOpacity: 0.6,
-                        weight: 1.4,
-                      }}
-                      eventHandlers={{
-                        click: () => router.push(`/admin/leads?q=${encodeURIComponent(location.location_label)}`),
-                      }}
-                    >
-                      <Popup>
-                        <div className="space-y-1">
-                          <p className="text-sm font-semibold text-slate-900">{location.location_label}</p>
-                          <p className="text-xs text-slate-600">{location.lead_count} leads · {location.hot_leads_count} hot</p>
-                          <p className="text-xs text-slate-600">Score promedio {location.avg_prospect_score.toFixed(1)}</p>
-                          <button
-                            type="button"
-                            onClick={() => router.push(`/admin/leads?q=${encodeURIComponent(location.location_label)}`)}
-                            className="block text-xs font-medium text-sky-600 hover:underline"
-                          >
-                            Explorar leads →
-                          </button>
-                        </div>
-                      </Popup>
-                    </CircleMarker>
-                  );
-                })}
-              </MapContainer>
-            )}
-          </div>
+          <LocationDensityMap
+            locations={densityLocations}
+            selectedLocationKey={selectedLocationKey}
+            onSelect={(location) => setSelectedLocationKey(location.location_key)}
+            onSelectWithDrill={handleDrillDown}
+            filters={densityFilters}
+            onFiltersChange={setDensityFilters}
+            loading={densityLoading}
+            zoneLeads={zoneLeads}
+            zoneLeadsTotal={zoneLeadsTotal}
+            zoneLeadsLoading={zoneLeadsLoading}
+          />
         </SectionCard>
       ) : null}
 
@@ -193,7 +176,17 @@ export default function AdminHomePage() {
 
       <div className="grid gap-4 xl:grid-cols-[1.35fr,0.65fr]">
         <SectionCard title="Leads para revisar" description="La misma lógica del Lead Explorer, embebida para abrir y filtrar sin salir de Inicio.">
-          <LeadExplorer mode="embedded" initialFilters={{ minScore: "55", sortValue: "prospect_score:desc" }} pageSize={6} />
+          <LeadExplorer
+            mode="embedded"
+            initialFilters={{ minScore: "55", sortValue: "prospect_score:desc" }}
+            geoSelection={geoSelection}
+            onGeoSelectionClear={() => {
+              setSelectedLocationKey(null);
+              setZoneLeads(null);
+              setZoneLeadsTotal(0);
+            }}
+            pageSize={10}
+          />
         </SectionCard>
 
         <SectionCard title="Actividad del sistema" description="Contexto útil para no separar operación comercial y soporte.">

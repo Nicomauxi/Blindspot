@@ -270,13 +270,13 @@ const HEATMAP_GRID_STEP_DEGREES = 0.02;
 const HEATMAP_GRID_SIZE_KM = 2.2;
 const DEFAULT_GEOCODE_LIMIT = 120;
 
-type DensityCoordinate = {
+export type DensityCoordinate = {
   lat: number;
   lng: number;
   source: "gps" | "geocoded";
 };
 
-function buildGridCell(point: { lat: number; lng: number }, step = HEATMAP_GRID_STEP_DEGREES) {
+export function buildGridCell(point: { lat: number; lng: number }, step = HEATMAP_GRID_STEP_DEGREES) {
   const latIndex = Math.floor(point.lat / step);
   const lngIndex = Math.floor(point.lng / step);
   const center = {
@@ -290,10 +290,21 @@ function buildGridCell(point: { lat: number; lng: number }, step = HEATMAP_GRID_
   };
 }
 
-function getPrimaryCoordinate(lead: LeadInsightRow): DensityCoordinate | null {
+export function getPrimaryCoordinate(lead: LeadInsightRow): DensityCoordinate | null {
   const [firstPoint] = extractGpsPoints(lead.gps);
   if (!firstPoint) return null;
   return { ...firstPoint, source: "gps" };
+}
+
+export function parseGranularLocationKey(locationKey: string): {
+  parent_location_key: string;
+  grid_location_key: string | null;
+} {
+  const [parentLocationKey, gridLocationKey] = locationKey.split("::", 2);
+  return {
+    parent_location_key: parentLocationKey?.trim() || "",
+    grid_location_key: gridLocationKey?.trim() || null,
+  };
 }
 
 function normalizeContactTier(value: string | null | undefined): string | null {
@@ -694,4 +705,8 @@ export function supportedDiscoverySources(): string[] {
 
 export function buildLeadLocationKey(address: string | null | undefined): string {
   return buildLocationKey(deriveLocationLabelFromAddress(address));
+}
+
+export function deriveLeadLocationLabel(address: string | null | undefined): string {
+  return deriveLocationLabelFromAddress(address);
 }

@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { EmptyPanel, HelpTip, SectionCard } from "@/components/admin-shell";
-import { listLeads, type LeadDashboard } from "@/lib/api";
+import { listLeads, type LeadDashboard, type LeadGeoSelection } from "@/lib/api";
 import { useAuthStore } from "@/lib/auth-store";
 import { cn } from "@/lib/utils";
 
@@ -29,10 +29,13 @@ type LeadExplorerProps = {
     sortValue: string;
   }>;
   pageSize?: number;
+  geoSelection?: LeadGeoSelection & { label?: string };
+  onGeoSelectionClear?: () => void;
 };
 
 const FULL_PAGE_SIZE = 50;
-const EMBEDDED_PAGE_SIZE = 6;
+const EMBEDDED_PAGE_SIZE = 10;
+const EMBEDDED_LIST_VIEWPORT_CLASS = "max-h-[52rem] overflow-y-auto pr-1";
 const DEFAULT_SORT = "created_at:desc";
 const SOURCE_OPTIONS = [
   { value: "", label: "Todas las fuentes" },
@@ -92,6 +95,14 @@ function useDebounce<T>(value: T, ms: number): T {
 
 function readSearchParam(searchParams: ReturnType<typeof useSearchParams>, key: string) {
   return searchParams.get(key) ?? "";
+}
+
+function readCsvSearchParam(searchParams: ReturnType<typeof useSearchParams>, key: string) {
+  const raw = searchParams.get(key) ?? "";
+  return raw
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
 }
 
 function parseSortValue(value: string): { sort_by: "created_at" | "prospect_score"; sort_direction: "asc" | "desc" } {
@@ -212,7 +223,7 @@ function LeadRow({ lead }: { lead: LeadDashboard }) {
   );
 }
 
-export function LeadExplorer({ mode, initialFilters, pageSize }: LeadExplorerProps) {
+export function LeadExplorer({ mode, initialFilters, pageSize, geoSelection, onGeoSelectionClear }: LeadExplorerProps) {
   const token = useAuthStore((state) => state.token);
   const router = useRouter();
   const pathname = usePathname();
@@ -226,6 +237,8 @@ export function LeadExplorer({ mode, initialFilters, pageSize }: LeadExplorerPro
   const initialTier = isFull ? readSearchParam(searchParams, "contact_tier") : initialFilters?.tier ?? "";
   const initialMinScore = isFull ? readSearchParam(searchParams, "prospect_score_gte") : initialFilters?.minScore ?? "";
   const initialOffer = isFull ? readSearchParam(searchParams, "primary_offer") : initialFilters?.primaryOffer ?? "";
+  const initialParentLocationKeys = isFull ? readCsvSearchParam(searchParams, "parent_location_keys") : (geoSelection?.parent_location_keys ?? []);
+  const initialGridLocationKeys = isFull ? readCsvSearchParam(searchParams, "grid_location_keys") : (geoSelection?.grid_location_keys ?? []);
   const initialSortValue = isFull
     ? `${readSearchParam(searchParams, "sort_by") || "created_at"}:${readSearchParam(searchParams, "sort_direction") || "desc"}`
     : initialFilters?.sortValue ?? DEFAULT_SORT;
@@ -241,6 +254,8 @@ export function LeadExplorer({ mode, initialFilters, pageSize }: LeadExplorerPro
   const [tier, setTier] = useState(initialTier);
   const [minScore, setMinScore] = useState(initialMinScore);
   const [primaryOffer, setPrimaryOffer] = useState(initialOffer);
+  const [parentLocationKeys, setParentLocationKeys] = useState(initialParentLocationKeys);
+  const [gridLocationKeys, setGridLocationKeys] = useState(initialGridLocationKeys);
   const [sortValue, setSortValue] = useState(initialSortValue || DEFAULT_SORT);
   const [pageCursors, setPageCursors] = useState<Array<string | null>>([isFull ? searchParams.get("cursor") : null]);
   const [pageIndex, setPageIndex] = useState(0);
@@ -259,11 +274,27 @@ export function LeadExplorer({ mode, initialFilters, pageSize }: LeadExplorerPro
   const currentEnd = total === 0 ? 0 : pageIndex * effectivePageSize + leads.length;
   const showLargeDatasetHint = isFull && total >= 500 && !q && !niche && !source && !tier && !minScore && !primaryOffer;
   const sortParams = useMemo(() => parseSortValue(sortValue), [sortValue]);
+  const externalParentLocationKeysKey = (geoSelection?.parent_location_keys ?? []).join(",");
+  const externalGridLocationKeysKey = (geoSelection?.grid_location_keys ?? []).join(",");
+  const geoSelectionLabel = geoSelection?.label ?? (gridLocationKeys.length > 0 || parentLocationKeys.length > 0 ? "Zona geográfica" : "");
+  const fullExplorerHref = useMemo(() => {
+    const params = new URLSearchParams();
+    if (parentLocationKeys.length > 0) params.set("parent_location_keys", parentLocationKeys.join(","));
+    if (gridLocationKeys.length > 0) params.set("grid_location_keys", gridLocationKeys.join(","));
+    return params.toString() ? `/admin/leads?${params.toString()}` : "/admin/leads";
+  }, [gridLocationKeys, parentLocationKeys]);
 
   const resetToFirstPage = useCallback(() => {
     setPageCursors([null]);
     setPageIndex(0);
   }, []);
+
+  useEffect(() => {
+    if (isFull) return;
+    setParentLocationKeys(externalParentLocationKeysKey ? externalParentLocationKeysKey.split(",") : []);
+    setGridLocationKeys(externalGridLocationKeysKey ? externalGridLocationKeysKey.split(",") : []);
+    resetToFirstPage();
+  }, [externalGridLocationKeysKey, externalParentLocationKeysKey, isFull, resetToFirstPage]);
 
   const updateUrl = useCallback(
     (cursor: string | null) => {
@@ -275,6 +306,8 @@ export function LeadExplorer({ mode, initialFilters, pageSize }: LeadExplorerPro
       if (tier) params.set("contact_tier", tier);
       if (minScore.trim()) params.set("prospect_score_gte", minScore.trim());
       if (primaryOffer.trim()) params.set("primary_offer", primaryOffer.trim());
+      if (parentLocationKeys.length > 0) params.set("parent_location_keys", parentLocationKeys.join(","));
+      if (gridLocationKeys.length > 0) params.set("grid_location_keys", gridLocationKeys.join(","));
       if (sortValue !== DEFAULT_SORT) {
         params.set("sort_by", sortParams.sort_by);
         params.set("sort_direction", sortParams.sort_direction);
@@ -285,7 +318,7 @@ export function LeadExplorer({ mode, initialFilters, pageSize }: LeadExplorerPro
       latestUrlRef.current = nextUrl;
       router.replace(nextUrl, { scroll: false });
     },
-    [isFull, minScore, niche, pathname, primaryOffer, q, router, sortParams.sort_by, sortParams.sort_direction, sortValue, source, tier]
+    [gridLocationKeys, isFull, minScore, niche, parentLocationKeys, pathname, primaryOffer, q, router, sortParams.sort_by, sortParams.sort_direction, sortValue, source, tier]
   );
 
   const load = useCallback(
@@ -302,6 +335,8 @@ export function LeadExplorer({ mode, initialFilters, pageSize }: LeadExplorerPro
           contact_tier: tier || undefined,
           prospect_score_gte: minScore ? Number(minScore) : undefined,
           primary_offer: primaryOffer.trim() || undefined,
+          parent_location_keys: parentLocationKeys.length > 0 ? parentLocationKeys : undefined,
+          grid_location_keys: gridLocationKeys.length > 0 ? gridLocationKeys : undefined,
           sort_by: sortParams.sort_by,
           sort_direction: sortParams.sort_direction,
           cursor: cursor || undefined,
@@ -318,7 +353,7 @@ export function LeadExplorer({ mode, initialFilters, pageSize }: LeadExplorerPro
         setLoadingPhase(null);
       }
     },
-    [debouncedQ, effectivePageSize, minScore, niche, primaryOffer, sortParams.sort_by, sortParams.sort_direction, source, tier, token]
+    [debouncedQ, effectivePageSize, gridLocationKeys, minScore, niche, parentLocationKeys, primaryOffer, sortParams.sort_by, sortParams.sort_direction, source, tier, token]
   );
 
   useEffect(() => {
@@ -332,6 +367,8 @@ export function LeadExplorer({ mode, initialFilters, pageSize }: LeadExplorerPro
     const urlTier = readSearchParam(searchParams, "contact_tier");
     const urlMinScore = readSearchParam(searchParams, "prospect_score_gte");
     const urlOffer = readSearchParam(searchParams, "primary_offer");
+    const urlParentLocationKeys = readCsvSearchParam(searchParams, "parent_location_keys");
+    const urlGridLocationKeys = readCsvSearchParam(searchParams, "grid_location_keys");
     const urlSortBy = readSearchParam(searchParams, "sort_by") || "created_at";
     const urlSortDirection = readSearchParam(searchParams, "sort_direction") || "desc";
     const urlSort = `${urlSortBy}:${urlSortDirection}`;
@@ -343,12 +380,14 @@ export function LeadExplorer({ mode, initialFilters, pageSize }: LeadExplorerPro
     if (urlTier !== tier) setTier(urlTier);
     if (urlMinScore !== minScore) setMinScore(urlMinScore);
     if (urlOffer !== primaryOffer) setPrimaryOffer(urlOffer);
+    if (urlParentLocationKeys.join(",") !== parentLocationKeys.join(",")) setParentLocationKeys(urlParentLocationKeys);
+    if (urlGridLocationKeys.join(",") !== gridLocationKeys.join(",")) setGridLocationKeys(urlGridLocationKeys);
     if (urlSort !== sortValue) setSortValue(urlSort);
     if (urlCursor !== currentCursor) {
       setPageCursors([urlCursor]);
       setPageIndex(0);
     }
-  }, [currentCursor, isFull, minScore, niche, pathname, primaryOffer, q, searchParams, sortValue, source, tier]);
+  }, [currentCursor, gridLocationKeys, isFull, minScore, niche, parentLocationKeys, pathname, primaryOffer, q, searchParams, sortValue, source, tier]);
 
   useEffect(() => {
     updateUrl(currentCursor);
@@ -364,6 +403,8 @@ export function LeadExplorer({ mode, initialFilters, pageSize }: LeadExplorerPro
       tier,
       minScore: minScore.trim(),
       primaryOffer: primaryOffer.trim(),
+      parentLocationKeys: parentLocationKeys.join(","),
+      gridLocationKeys: gridLocationKeys.join(","),
       sortValue,
     });
     const filtersChanged = previousFilterKey.current !== filterKey;
@@ -381,7 +422,7 @@ export function LeadExplorer({ mode, initialFilters, pageSize }: LeadExplorerPro
           : "refresh";
 
     void load(currentCursor, phase);
-  }, [currentCursor, debouncedQ, load, minScore, niche, primaryOffer, sortValue, source, tier, token]);
+  }, [currentCursor, debouncedQ, gridLocationKeys, load, minScore, niche, parentLocationKeys, primaryOffer, sortValue, source, tier, token]);
 
   const activeFilters: ActiveFilter[] = [
     q.trim() ? { key: "q", label: "Buscar", value: q.trim(), clear: () => setQ("") } : null,
@@ -390,6 +431,18 @@ export function LeadExplorer({ mode, initialFilters, pageSize }: LeadExplorerPro
     tier ? { key: "tier", label: "Tier", value: TIER_OPTIONS.find((option) => option.value === tier)?.label ?? tier, clear: () => setTier("") } : null,
     minScore.trim() ? { key: "score", label: "Score mín.", value: minScore.trim(), clear: () => setMinScore("") } : null,
     primaryOffer.trim() ? { key: "offer", label: "Oferta", value: primaryOffer.trim(), clear: () => setPrimaryOffer("") } : null,
+    parentLocationKeys.length > 0 || gridLocationKeys.length > 0
+      ? {
+          key: "geo",
+          label: "Mapa",
+          value: geoSelectionLabel || `${gridLocationKeys.length || parentLocationKeys.length} zonas`,
+          clear: () => {
+            setParentLocationKeys([]);
+            setGridLocationKeys([]);
+            onGeoSelectionClear?.();
+          },
+        }
+      : null,
     sortValue !== DEFAULT_SORT ? { key: "sort", label: "Orden", value: SORT_OPTIONS.find((option) => option.value === sortValue)?.label ?? sortValue, clear: () => setSortValue(DEFAULT_SORT) } : null,
   ].filter((value): value is ActiveFilter => value !== null);
 
@@ -400,6 +453,9 @@ export function LeadExplorer({ mode, initialFilters, pageSize }: LeadExplorerPro
     setTier("");
     setMinScore("");
     setPrimaryOffer("");
+    setParentLocationKeys([]);
+    setGridLocationKeys([]);
+    onGeoSelectionClear?.();
     setSortValue(DEFAULT_SORT);
     resetToFirstPage();
   }
@@ -547,7 +603,7 @@ export function LeadExplorer({ mode, initialFilters, pageSize }: LeadExplorerPro
           </button>
         ) : null}
         {!isFull ? (
-          <Link href="/admin/leads" className="ml-auto text-sm font-medium text-sky-700 hover:underline">
+          <Link href={fullExplorerHref} className="ml-auto text-sm font-medium text-sky-700 hover:underline">
             Abrir versión completa
           </Link>
         ) : null}
@@ -591,10 +647,12 @@ export function LeadExplorer({ mode, initialFilters, pageSize }: LeadExplorerPro
             </button>
           </div>
         ) : null}
-        {listContent}
+        <div className={EMBEDDED_LIST_VIEWPORT_CLASS}>
+          {listContent}
+        </div>
         <div className="flex items-center justify-between rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-500 shadow-sm">
           <span>{loading ? "Actualizando…" : total > 0 ? `Mostrando ${currentStart}-${currentEnd} de ${total.toLocaleString("es-UY")} leads` : "Sin resultados para mostrar"}</span>
-          <Link href="/admin/leads" className="font-medium text-sky-700 hover:underline">
+          <Link href={fullExplorerHref} className="font-medium text-sky-700 hover:underline">
             Abrir Lead Explorer
           </Link>
         </div>

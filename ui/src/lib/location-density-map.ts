@@ -52,3 +52,17 @@ export function filterAndSortLocations(
     return textCollator.compare(left.location_label, right.location_label);
   });
 }
+
+export function parseGranularLocationKey(locationKey: string): { parentLocationKey: string; gridLocationKey: string } | null {
+  const [parentLocationKey, gridLocationKey] = locationKey.split("::", 2);
+  if (!parentLocationKey || !gridLocationKey) return null;
+  return { parentLocationKey, gridLocationKey };
+}
+
+export function buildLeadExplorerGeoHref(location: Pick<DiscoveryMapDensityLocation, "parent_location_key" | "location_key">): string {
+  const parsed = parseGranularLocationKey(location.location_key);
+  const params = new URLSearchParams();
+  params.set("parent_location_keys", location.parent_location_key);
+  if (parsed?.gridLocationKey) params.set("grid_location_keys", parsed.gridLocationKey);
+  return `/admin/leads?${params.toString()}`;
+}

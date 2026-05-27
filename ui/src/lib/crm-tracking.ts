@@ -11,8 +11,8 @@ export const CRM_COLUMNS: { status: CrmStatus; label: string; color: string }[] 
 
 export const VALID_TRANSITIONS: Record<CrmStatus, CrmStatus[]> = {
   pending:    ["validation", "rejected"],
-  validation: ["contact", "rejected"],
-  contact:    ["observed", "accepted", "rejected"],
+  validation: ["pending", "contact", "rejected"],
+  contact:    ["validation", "observed", "accepted", "rejected"],
   observed:   ["contact", "accepted", "rejected"],
   rejected:   ["validation"],
   accepted:   ["validation"],

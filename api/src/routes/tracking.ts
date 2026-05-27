@@ -9,11 +9,22 @@ const uuidSchema = z
 
 const CRM_STATUSES = ["pending", "validation", "contact", "observed", "rejected", "accepted"] as const;
 type CrmStatus = (typeof CRM_STATUSES)[number];
+const CRM_EVENT_TYPES = ["system_status_change", "manual_comment"] as const;
+type CrmEventType = (typeof CRM_EVENT_TYPES)[number];
+
+const STATUS_ORDER: Record<CrmStatus, number> = {
+  pending: 0,
+  validation: 1,
+  contact: 2,
+  observed: 3,
+  rejected: 4,
+  accepted: 4,
+};
 
 const VALID_TRANSITIONS: Record<CrmStatus, ReadonlyArray<CrmStatus>> = {
   pending:    ["validation", "rejected"],
-  validation: ["contact", "rejected"],
-  contact:    ["observed", "accepted", "rejected"],
+  validation: ["pending", "contact", "rejected"],
+  contact:    ["validation", "observed", "accepted", "rejected"],
   observed:   ["contact", "accepted", "rejected"],
   rejected:   ["validation"],
   accepted:   ["validation"],
@@ -22,6 +33,7 @@ const VALID_TRANSITIONS: Record<CrmStatus, ReadonlyArray<CrmStatus>> = {
 const createTrackingSchema = z.object({
   lead_id:     uuidSchema,
   notes:       z.string().trim().max(2000).optional(),
+  title:       z.string().trim().min(1).max(160).optional(),
   campaign_id: uuidSchema.optional(),
 });
 
@@ -40,6 +52,8 @@ const listQuerySchema = z.object({
   niche:              z.string().max(80).optional(),
   source:             z.string().max(80).optional(),
   contact_tier:       z.string().max(20).optional(),
+  case_code:          z.string().max(40).optional(),
+  title:              z.string().max(160).optional(),
   prospect_score_gte: z.string().optional()
                       .transform((v) => (v ? parseInt(v, 10) : undefined))
                       .pipe(z.number().int().min(0).max(100).optional()),
@@ -49,6 +63,42 @@ const listQuerySchema = z.object({
                       .transform((v) => Math.min(Number(v ?? "200"), 500))
                       .pipe(z.number().int().min(1).max(500)),
 });
+
+const updateTrackingSchema = z.object({
+  title: z.string().trim().min(1).max(160),
+});
+
+const trackingNoteSchema = z.object({
+  notes: z.string().trim().min(1).max(2000),
+});
+
+const stageDetailsSchema = z.object({
+  stage: z.enum(CRM_STATUSES).optional(),
+  summary: z.union([z.string().trim().max(2000), z.null()]).optional(),
+  data: z.record(z.string(), z.unknown()).optional(),
+});
+
+function isTerminalStatus(status: CrmStatus): boolean {
+  return status === "rejected" || status === "accepted";
+}
+
+function isRegressionTransition(from: CrmStatus, to: CrmStatus): boolean {
+  return STATUS_ORDER[to] < STATUS_ORDER[from];
+}
+
+function matchesTrackingSearch(tracking: Record<string, unknown>, searchTerms: string[]): boolean {
+  if (searchTerms.length === 0) return true;
+  const haystack = [
+    tracking["case_code"],
+    tracking["title"],
+    tracking["lead_name"],
+    tracking["lead_id"],
+  ]
+    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    .join(" ")
+    .toLowerCase();
+  return searchTerms.every((term) => haystack.includes(term));
+}
 
 export async function trackingRoutes(app: FastifyInstance): Promise<void> {
   // POST /api/v1/tracking — create a new CRM tracking entry
@@ -69,7 +119,7 @@ export async function trackingRoutes(app: FastifyInstance): Promise<void> {
     // Verify lead is accessible
     const { data: lead, error: leadErr } = await db
       .from("lead_dashboard")
-      .select("id, contact_tier")
+      .select("id, contact_tier, name")
       .eq("id", parsed.data.lead_id)
       .single();
 
@@ -92,6 +142,7 @@ export async function trackingRoutes(app: FastifyInstance): Promise<void> {
         lead_id:     parsed.data.lead_id,
         owner_id:    authUser.id,
         status:      "pending",
+        title:       parsed.data.title ?? (lead as Record<string, unknown>)["name"] ?? "Caso nuevo",
         campaign_id: parsed.data.campaign_id ?? null,
         notes:       parsed.data.notes ?? null,
       })
@@ -114,6 +165,7 @@ export async function trackingRoutes(app: FastifyInstance): Promise<void> {
 
     const { error: eventErr } = await db.from("lead_tracking_events").insert({
       tracking_id:   trackingId,
+      event_type:    "system_status_change" satisfies CrmEventType,
       from_status:   null,
       to_status:     "pending",
       actor_user_id: authUser.id,
@@ -153,14 +205,13 @@ export async function trackingRoutes(app: FastifyInstance): Promise<void> {
 
     // Resolve lead-based filters first (niche, source, contact_tier, prospect_score_gte, q)
     let restrictLeadIds: string[] | null = null;
-    const hasLeadFilter = f.niche ?? f.source ?? f.contact_tier ?? f.prospect_score_gte ?? f.q;
+    const hasLeadFilter = f.niche ?? f.source ?? f.contact_tier ?? f.prospect_score_gte;
     if (hasLeadFilter) {
       let leadQ = db.from("lead_dashboard").select("id");
       if (f.niche) leadQ = leadQ.eq("niche", f.niche);
       if (f.source) leadQ = leadQ.eq("source", f.source);
       if (f.contact_tier) leadQ = leadQ.eq("contact_tier", f.contact_tier);
       if (f.prospect_score_gte != null) leadQ = leadQ.gte("prospect_score", f.prospect_score_gte);
-      if (f.q) leadQ = leadQ.ilike("name", `%${f.q}%`);
       const { data: matchedLeads, error: leadErr } = await leadQ.limit(1000);
       if (leadErr) {
         request.log.error({ error: leadErr }, "tracking list lead filter failed");
@@ -216,7 +267,14 @@ export async function trackingRoutes(app: FastifyInstance): Promise<void> {
       lead_name: leadNames[t["lead_id"] as string] ?? null,
     }));
 
-    return reply.status(200).send({ data: enriched, total: count ?? enriched.length });
+    const searchTerms = [f.q, f.case_code, f.title]
+      .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+      .map((value) => value.trim().toLowerCase());
+    const filtered = searchTerms.length > 0
+      ? enriched.filter((tracking) => matchesTrackingSearch(tracking, searchTerms))
+      : enriched;
+
+    return reply.status(200).send({ data: filtered, total: searchTerms.length > 0 ? filtered.length : (count ?? filtered.length) });
   });
 
   // GET /api/v1/tracking/:id — get tracking with events
@@ -276,7 +334,35 @@ export async function trackingRoutes(app: FastifyInstance): Promise<void> {
       ? (leadRow as { name: string; niche: string | null; address: string | null; website: string | null; phone: string | null; whatsapp: string | null; email: string | null })
       : null;
 
-    return reply.status(200).send({ data: { ...t, events: events ?? [], lead } });
+    const actorIds = [...new Set((events ?? [])
+      .map((event) => (event as Record<string, unknown>)["actor_user_id"])
+      .filter((value): value is string => typeof value === "string" && value.length > 0))];
+    let actorEmails: Record<string, string> = {};
+    if (actorIds.length > 0) {
+      const { data: users } = await db.from("users").select("id, email").in("id", actorIds);
+      actorEmails = Object.fromEntries(((users ?? []) as Array<{ id: string; email: string }>).map((user) => [user.id, user.email]));
+    }
+
+    const { data: stageDetails, error: stageDetailsErr } = await db
+      .from("lead_tracking_stage_details")
+      .select("*")
+      .eq("tracking_id", id)
+      .order("updated_at", { ascending: true });
+
+    if (stageDetailsErr) {
+      request.log.error({ error: stageDetailsErr }, "tracking stage details fetch failed");
+      return reply.status(500).send({ error: "Database error", error_code: "db_error" });
+    }
+
+    const enrichedEvents = (events ?? []).map((event) => {
+      const row = event as Record<string, unknown>;
+      return {
+        ...row,
+        actor_email: actorEmails[String(row["actor_user_id"])] ?? null,
+      };
+    });
+
+    return reply.status(200).send({ data: { ...t, lead_name: lead?.name ?? null, events: enrichedEvents, lead, stage_details: stageDetails ?? [] } });
   });
 
   // POST /api/v1/tracking/:id/transition — transition CRM state
@@ -338,6 +424,13 @@ export async function trackingRoutes(app: FastifyInstance): Promise<void> {
       });
     }
 
+    if ((isRegressionTransition(currentStatus, toStatus) || isTerminalStatus(currentStatus)) && !parsed.data.notes?.trim()) {
+      return reply.status(422).send({
+        error: "A note is required for regressions or reopenings",
+        error_code: "tracking_reason_required",
+      });
+    }
+
     // Optimistic lock: only update if status is still what we read — prevents concurrent transition races
     const { data: updatedTracking, error: updateErr } = await db
       .from("lead_tracking")
@@ -361,6 +454,7 @@ export async function trackingRoutes(app: FastifyInstance): Promise<void> {
 
     const { error: eventErr } = await db.from("lead_tracking_events").insert({
       tracking_id:   id,
+      event_type:    "system_status_change" satisfies CrmEventType,
       from_status:   currentStatus,
       to_status:     toStatus,
       actor_user_id: authUser.id,
@@ -403,7 +497,7 @@ export async function trackingRoutes(app: FastifyInstance): Promise<void> {
       return reply.status(404).send({ error: "Not found", error_code: "not_found" });
     }
 
-    const parsed = z.object({ notes: z.string().trim().min(1).max(2000) }).safeParse(request.body);
+    const parsed = trackingNoteSchema.safeParse(request.body);
     if (!parsed.success) {
       return reply.status(400).send({
         error: "Validation error",
@@ -434,17 +528,11 @@ export async function trackingRoutes(app: FastifyInstance): Promise<void> {
     }
     const currentStatus = rawNoteStatus as CrmStatus;
 
-    if (currentStatus === "rejected" || currentStatus === "accepted") {
-      return reply.status(422).send({
-        error: "Cannot add notes to a finalized tracking",
-        error_code: "tracking_terminal",
-      });
-    }
-
     const { data: event, error: insertErr } = await db
       .from("lead_tracking_events")
       .insert({
         tracking_id:   id,
+        event_type:    "manual_comment" satisfies CrmEventType,
         from_status:   currentStatus,
         to_status:     currentStatus,
         actor_user_id: authUser.id,
@@ -470,5 +558,144 @@ export async function trackingRoutes(app: FastifyInstance): Promise<void> {
     if (auditErr) request.log.error({ error: auditErr }, "tracking note audit insert failed");
 
     return reply.status(201).send({ data: event });
+  });
+
+  app.patch("/tracking/:id", {
+    preHandler: requireAuth,
+    schema: {
+      params: {
+        type: "object",
+        properties: { id: { type: "string", minLength: 1 } },
+        required: ["id"],
+        additionalProperties: false,
+      },
+    },
+  }, async (request, reply) => {
+    const authUser = getAuthUser(request);
+    const { id } = request.params as { id: string };
+
+    if (!uuidSchema.safeParse(id).success) {
+      return reply.status(404).send({ error: "Not found", error_code: "not_found" });
+    }
+
+    const parsed = updateTrackingSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({
+        error: "Validation error",
+        error_code: "validation_error",
+        details: parsed.error.flatten().fieldErrors,
+      });
+    }
+
+    const db = getDb();
+    const { data: tracking, error: fetchErr } = await db.from("lead_tracking").select("*").eq("id", id).single();
+    if (fetchErr || !tracking) {
+      return reply.status(404).send({ error: "Not found", error_code: "not_found" });
+    }
+
+    const t = tracking as Record<string, unknown>;
+    if (authUser.role !== "admin" && t["owner_id"] !== authUser.id) {
+      return reply.status(404).send({ error: "Not found", error_code: "not_found" });
+    }
+
+    const { data: updated, error: updateErr } = await db
+      .from("lead_tracking")
+      .update({ title: parsed.data.title })
+      .eq("id", id)
+      .select("*")
+      .single();
+
+    if (updateErr || !updated) {
+      request.log.error({ error: updateErr }, "tracking title update failed");
+      return reply.status(500).send({ error: "Database error", error_code: "db_error" });
+    }
+
+    const { error: auditErr } = await db.from("audit_log").insert({
+      actor_user_id: authUser.id,
+      actor_role: authUser.role,
+      action: "tracking.update",
+      target_type: "lead",
+      target_id: String(t["lead_id"]),
+      diff: { tracking_id: id, title: parsed.data.title },
+    });
+    if (auditErr) request.log.error({ error: auditErr }, "tracking title audit insert failed");
+
+    return reply.status(200).send({ data: updated });
+  });
+
+  app.put("/tracking/:id/stage-details", {
+    preHandler: requireAuth,
+    schema: {
+      params: {
+        type: "object",
+        properties: { id: { type: "string", minLength: 1 } },
+        required: ["id"],
+        additionalProperties: false,
+      },
+    },
+  }, async (request, reply) => {
+    const authUser = getAuthUser(request);
+    const { id } = request.params as { id: string };
+
+    if (!uuidSchema.safeParse(id).success) {
+      return reply.status(404).send({ error: "Not found", error_code: "not_found" });
+    }
+
+    const parsed = stageDetailsSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({
+        error: "Validation error",
+        error_code: "validation_error",
+        details: parsed.error.flatten().fieldErrors,
+      });
+    }
+
+    const db = getDb();
+    const { data: tracking, error: fetchErr } = await db.from("lead_tracking").select("*").eq("id", id).single();
+    if (fetchErr || !tracking) {
+      return reply.status(404).send({ error: "Not found", error_code: "not_found" });
+    }
+
+    const t = tracking as Record<string, unknown>;
+    if (authUser.role !== "admin" && t["owner_id"] !== authUser.id) {
+      return reply.status(404).send({ error: "Not found", error_code: "not_found" });
+    }
+
+    const rawStatus = t["status"];
+    if (typeof rawStatus !== "string" || !CRM_STATUSES.includes(rawStatus as CrmStatus)) {
+      return reply.status(500).send({ error: "Invalid tracking state", error_code: "db_error" });
+    }
+    const stage = parsed.data.stage ?? (rawStatus as CrmStatus);
+
+    const payload = {
+      tracking_id: id,
+      stage,
+      summary: parsed.data.summary ?? null,
+      data: parsed.data.data ?? {},
+      updated_by_user_id: authUser.id,
+    };
+
+    const { data: stageDetail, error: stageDetailErr } = await db
+      .from("lead_tracking_stage_details")
+      .upsert(payload, { onConflict: "tracking_id,stage" })
+      .select("*")
+      .single();
+
+    if (stageDetailErr || !stageDetail) {
+      request.log.error({ error: stageDetailErr }, "tracking stage detail upsert failed");
+      return reply.status(500).send({ error: "Database error", error_code: "db_error" });
+    }
+
+    const { error: auditErr } = await db.from("audit_log").insert({
+      actor_user_id: authUser.id,
+      actor_role: authUser.role,
+      action: "tracking.stage_details.upsert",
+      target_type: "lead",
+      target_id: String(t["lead_id"]),
+      diff: { tracking_id: id, stage },
+    });
+    if (auditErr) request.log.error({ error: auditErr }, "tracking stage detail audit insert failed");
+
+    return reply.status(200).send({ data: stageDetail });
   });
 }

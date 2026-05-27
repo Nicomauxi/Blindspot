@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { computeLocationCentroid, countLocationPoints, filterAndSortLocations } from "../../ui/src/lib/location-density-map";
+import {
+  buildLeadExplorerGeoHref,
+  computeLocationCentroid,
+  countLocationPoints,
+  filterAndSortLocations,
+  parseGranularLocationKey,
+} from "../../ui/src/lib/location-density-map";
 import type { DiscoveryMapDensityLocation } from "../../ui/src/lib/api";
 
 const locations: DiscoveryMapDensityLocation[] = [
@@ -75,5 +81,15 @@ describe("location density map helpers", () => {
     expect(centroid?.lat).toBeCloseTo(-34.903, 6);
     expect(centroid?.lng).toBeCloseTo(-56.1895, 6);
     expect(computeLocationCentroid(locations[2]!)).toEqual({ lat: -34.95, lng: -54.95 });
+  });
+
+  it("builds structured Lead Explorer links from granular keys", () => {
+    expect(parseGranularLocationKey(locations[0]!.location_key)).toEqual({
+      parentLocationKey: "montevideo-centro",
+      gridLocationKey: "a",
+    });
+    expect(buildLeadExplorerGeoHref(locations[0]!)).toBe(
+      "/admin/leads?parent_location_keys=montevideo-centro&grid_location_keys=a"
+    );
   });
 });

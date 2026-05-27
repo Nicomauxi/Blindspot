@@ -10,6 +10,7 @@ import type {
   ZoneLead,
 } from "@/lib/api";
 import {
+  buildLeadExplorerGeoHref,
   computeLocationCentroid,
   countLocationPoints,
   filterAndSortLocations,
@@ -43,7 +44,10 @@ const TIER_BADGE_CLASSES: Record<string, string> = {
   X: "bg-rose-100 text-rose-700",
 };
 
-function extractGpsPoint(gps: unknown): { lat: number; lng: number } | null {
+function extractGpsPoint(gps: unknown, mapPoint?: { lat: number; lng: number } | null): { lat: number; lng: number } | null {
+  if (mapPoint && Number.isFinite(mapPoint.lat) && Number.isFinite(mapPoint.lng)) {
+    return mapPoint;
+  }
   if (!gps || typeof gps !== "object") return null;
   const obj = gps as Record<string, unknown>;
   if (typeof obj["lat"] === "number" && typeof obj["lng"] === "number") {
@@ -174,6 +178,10 @@ export function LocationDensityMap({
   }
 
   const hasMore = (zoneLeadsTotal ?? 0) > (zoneLeads?.length ?? 0);
+  const selectedLocation = selectedLocationKey
+    ? locations.find((location) => location.location_key === selectedLocationKey) ?? null
+    : null;
+  const selectedLocationHref = selectedLocation ? buildLeadExplorerGeoHref(selectedLocation) : null;
 
   return (
     <div className="grid gap-4 xl:grid-cols-[1.2fr,0.8fr]">
@@ -224,6 +232,10 @@ export function LocationDensityMap({
           ) : mode === "individual" && zoneLeadsLoading ? (
             <div className="flex h-full items-center justify-center rounded-[24px] border border-white/10 bg-black/20 text-sm text-slate-300">
               Cargando leads...
+            </div>
+          ) : mode === "individual" && selectedLocationKey && (zoneLeads?.length ?? 0) === 0 ? (
+            <div className="flex h-full items-center justify-center rounded-[24px] border border-dashed border-white/15 px-6 text-center text-sm text-slate-300">
+              No hay leads posicionables en esta cuadrícula con los filtros actuales.
             </div>
           ) : !mounted ? (
             <div className="flex h-full items-center justify-center rounded-[24px] border border-white/10 bg-black/20 text-sm text-slate-300">
@@ -279,7 +291,7 @@ export function LocationDensityMap({
               })}
 
               {mode === "individual" && (zoneLeads ?? []).map((lead) => {
-                const point = extractGpsPoint(lead.gps);
+                const point = extractGpsPoint(lead.gps, lead.map_point ?? null);
                 if (!point) return null;
                 const tier = lead.contact_tier?.toUpperCase() ?? "D";
                 const tierColors = TIER_COLORS[tier] ?? TIER_COLORS["D"];
@@ -327,7 +339,7 @@ export function LocationDensityMap({
           {mode === "individual" && hasMore && !zoneLeadsLoading && (zoneLeads?.length ?? 0) > 0 ? (
             <div className="absolute bottom-2 left-1/2 -translate-x-1/2 z-[1000] rounded-full border border-amber-300/40 bg-amber-900/80 px-4 py-1.5 text-xs text-amber-100 backdrop-blur-sm">
               Mostrando {zoneLeads?.length} de {zoneLeadsTotal} leads ·{" "}
-              <a href={`/admin/leads?location_key=${selectedLocationKey}`} className="underline">
+              <a href={selectedLocationHref ?? "/admin/leads"} className="underline">
                 Ver todos
               </a>
             </div>

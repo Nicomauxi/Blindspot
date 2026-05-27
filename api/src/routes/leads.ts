@@ -9,6 +9,13 @@ import { startFilterEnrichmentJob } from "../../../src/cli/commands/enrich.js";
 import { startReDiscoveryJob } from "../../../src/cli/commands/re-discover.js";
 import { summarizeFeedbackRows, computeFeedbackAdjustedConfidence } from "../../../src/modules/feedback/summary.js";
 import { buildCommercialOfferings } from "../../../src/modules/scoring/offerings.js";
+import { createLeadGeocodingService } from "../services/lead-geocoding.js";
+import {
+  buildGridCell,
+  buildLeadLocationKey,
+  getPrimaryCoordinate,
+  parseGranularLocationKey,
+} from "./discovery-insights.js";
 
 const permissiveUuid = z
   .string()
@@ -156,6 +163,31 @@ const listQuerySchema = z.object({
   source: z.string().optional(),
   primary_offer: z.string().optional(),
   q: z.string().optional(),
+  location_key: z.string().trim().min(1).optional(),
+  parent_location_key: z.string().trim().min(1).optional(),
+  grid_location_key: z.string().trim().min(1).optional(),
+  parent_location_keys: z
+    .string()
+    .optional()
+    .transform((value) =>
+      value
+        ? value
+            .split(",")
+            .map((entry) => entry.trim())
+            .filter(Boolean)
+        : []
+    ),
+  grid_location_keys: z
+    .string()
+    .optional()
+    .transform((value) =>
+      value
+        ? value
+            .split(",")
+            .map((entry) => entry.trim())
+            .filter(Boolean)
+        : []
+    ),
   sort_by: z.enum(["created_at", "prospect_score"]).optional().default("created_at"),
   sort_direction: z.enum(["asc", "desc"]).optional().default("desc"),
   cursor: z.string().min(1).optional(),
@@ -212,6 +244,40 @@ type LeadCursorPayload = {
   prospect_score: number | null;
 };
 
+type GeoSelection = {
+  parentLocationKeys: string[];
+  gridLocationKeys: string[];
+};
+
+function buildGeoSelection(params: {
+  location_key?: string;
+  parent_location_key?: string;
+  grid_location_key?: string;
+  parent_location_keys?: string[];
+  grid_location_keys?: string[];
+}): GeoSelection {
+  const parentLocationKeys = new Set((params.parent_location_keys ?? []).filter(Boolean));
+  const gridLocationKeys = new Set((params.grid_location_keys ?? []).filter(Boolean));
+
+  if (params.parent_location_key) parentLocationKeys.add(params.parent_location_key);
+  if (params.grid_location_key) gridLocationKeys.add(params.grid_location_key);
+
+  if (params.location_key) {
+    const parsed = parseGranularLocationKey(params.location_key);
+    if (parsed) {
+      parentLocationKeys.add(parsed.parentLocationKey);
+      gridLocationKeys.add(parsed.gridKey);
+    } else {
+      parentLocationKeys.add(params.location_key);
+    }
+  }
+
+  return {
+    parentLocationKeys: [...parentLocationKeys],
+    gridLocationKeys: [...gridLocationKeys],
+  };
+}
+
 function encodeLeadCursor(payload: LeadCursorPayload): string {
   return Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
 }
@@ -263,6 +329,112 @@ async function resolveLeadCursor(
     created_at: asNullableString(data["created_at"]) ?? new Date(0).toISOString(),
     prospect_score: asNullableNumber(data["prospect_score"]),
   };
+}
+
+function compareLeadRows(
+  left: JsonRecord,
+  right: JsonRecord,
+  sortBy: LeadSortBy,
+  sortDirection: LeadSortDirection
+): number {
+  const ascending = sortDirection === "asc";
+
+  if (sortBy === "prospect_score") {
+    const leftScore = asNullableNumber(left["prospect_score"]);
+    const rightScore = asNullableNumber(right["prospect_score"]);
+    if (leftScore !== rightScore) {
+      if (leftScore == null) return 1;
+      if (rightScore == null) return -1;
+      return ascending ? leftScore - rightScore : rightScore - leftScore;
+    }
+  }
+
+  const leftCreatedAt = asNullableString(left["created_at"]) ?? "";
+  const rightCreatedAt = asNullableString(right["created_at"]) ?? "";
+  if (leftCreatedAt !== rightCreatedAt) {
+    return ascending
+      ? leftCreatedAt.localeCompare(rightCreatedAt)
+      : rightCreatedAt.localeCompare(leftCreatedAt);
+  }
+
+  const leftId = asNullableString(left["id"]) ?? "";
+  const rightId = asNullableString(right["id"]) ?? "";
+  return ascending ? leftId.localeCompare(rightId) : rightId.localeCompare(leftId);
+}
+
+function isLeadRowAfterCursor(
+  row: JsonRecord,
+  cursor: LeadCursorPayload,
+  sortBy: LeadSortBy,
+  sortDirection: LeadSortDirection
+): boolean {
+  const ascending = sortDirection === "asc";
+
+  if (sortBy === "prospect_score") {
+    const rowScore = asNullableNumber(row["prospect_score"]);
+    const cursorScore = cursor.prospect_score;
+    if (rowScore !== cursorScore) {
+      if (rowScore == null) return false;
+      if (cursorScore == null) return true;
+      return ascending ? rowScore > cursorScore : rowScore < cursorScore;
+    }
+  }
+
+  const rowCreatedAt = asNullableString(row["created_at"]) ?? "";
+  if (rowCreatedAt !== cursor.created_at) {
+    return ascending ? rowCreatedAt > cursor.created_at : rowCreatedAt < cursor.created_at;
+  }
+
+  const rowId = asNullableString(row["id"]) ?? "";
+  return ascending ? rowId > cursor.id : rowId < cursor.id;
+}
+
+async function matchesGeoSelection(
+  lead: JsonRecord,
+  selection: GeoSelection,
+  geocodeAddress: (address: string) => Promise<{ lat: number; lng: number } | null>
+): Promise<boolean> {
+  if (selection.parentLocationKeys.length === 0 && selection.gridLocationKeys.length === 0) {
+    return true;
+  }
+
+  const parentLocationKey = buildLeadLocationKey(asNullableString(lead["address"]));
+  if (selection.parentLocationKeys.length > 0 && !selection.parentLocationKeys.includes(parentLocationKey)) {
+    return false;
+  }
+
+  if (selection.gridLocationKeys.length === 0) {
+    return true;
+  }
+
+  const rawCoordinate = getPrimaryCoordinate({
+    id: asNullableString(lead["id"]) ?? "",
+    source: asNullableString(lead["source"]),
+    niche: asNullableString(lead["niche"]),
+    address: asNullableString(lead["address"]),
+    prospect_score: asNullableNumber(lead["prospect_score"]),
+    contact_tier: asNullableString(lead["contact_tier"]),
+    gps: lead["gps"],
+    corroborating_sources: lead["corroborating_sources"] ?? [],
+  });
+
+  const geocodedCoordinate = !rawCoordinate && asNullableString(lead["address"])
+    ? await geocodeAddress(asNullableString(lead["address"]) ?? "")
+    : null;
+  const coordinate = rawCoordinate ?? (geocodedCoordinate ? { ...geocodedCoordinate, source: "geocoded" as const } : null);
+  if (!coordinate) return false;
+
+  const cell = buildGridCell(coordinate);
+  return selection.gridLocationKeys.includes(cell.gridKey);
+}
+
+function describeGeoSelection(selection: GeoSelection): string | null {
+  if (selection.gridLocationKeys.length > 0 && selection.parentLocationKeys.length > 0) {
+    return `${selection.parentLocationKeys[0]}::${selection.gridLocationKeys[0]}`;
+  }
+  if (selection.parentLocationKeys.length > 0) return selection.parentLocationKeys.join(",");
+  if (selection.gridLocationKeys.length > 0) return selection.gridLocationKeys.join(",");
+  return null;
 }
 
 function isRecord(value: unknown): value is JsonRecord {
@@ -817,6 +989,8 @@ async function getCmActiveTrackedLeadIds(userId: string, leadIds: string[]): Pro
 }
 
 export async function leadsRoutes(app: FastifyInstance): Promise<void> {
+  const leadGeocodingService = createLeadGeocodingService();
+
   app.get(
     "/leads",
     { preHandler: requireAuth },
@@ -838,11 +1012,24 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
         source,
         primary_offer,
         q,
+        location_key,
+        parent_location_key,
+        grid_location_key,
+        parent_location_keys,
+        grid_location_keys,
         sort_by,
         sort_direction,
         cursor,
         limit,
       } = parseResult.data;
+      const geoSelection = buildGeoSelection({
+        location_key,
+        parent_location_key,
+        grid_location_key,
+        parent_location_keys,
+        grid_location_keys,
+      });
+      const geoSelectionActive = geoSelection.parentLocationKeys.length > 0 || geoSelection.gridLocationKeys.length > 0;
 
       const db = getDb();
 
@@ -886,6 +1073,79 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
       }
       if (q) {
         query = query.textSearch("search_vector", q, { type: "plain", config: "spanish" });
+      }
+
+      if (geoSelectionActive) {
+        const fallbackQuery = query
+          .order("created_at", { ascending: false })
+          .order("id", { ascending: false })
+          .limit(5000);
+        const { data, error } = await fallbackQuery;
+
+        if (error) {
+          request.log.error({ error, geoSelection: describeGeoSelection(geoSelection) }, "leads geo query error");
+          return reply.status(500).send({ error: "Database error", error_code: "db_error" });
+        }
+
+        const normalizedRows = (data ?? []).map((row) => normalizeLeadRow(row as JsonRecord));
+        const cmLeadFilter = authUser.role === "cm" ? authUser.lead_filter : null;
+        const scopedRows = cmLeadFilter
+          ? normalizedRows.filter((row) => passesLeadFilter(row, cmLeadFilter))
+          : normalizedRows;
+
+        const matchingRows: JsonRecord[] = [];
+        for (const row of scopedRows) {
+          if (await matchesGeoSelection(row, geoSelection, leadGeocodingService.geocodeAddress)) {
+            matchingRows.push(row);
+          }
+        }
+
+        const sortedRows = [...matchingRows].sort((left, right) => compareLeadRows(left, right, sort_by, sort_direction));
+        const resolvedCursor = cursor
+          ? await resolveLeadCursor(db, cursor, sort_by, sort_direction)
+          : null;
+        const afterCursorRows = resolvedCursor
+          ? sortedRows.filter((row) => isLeadRowAfterCursor(row, resolvedCursor, sort_by, sort_direction))
+          : sortedRows;
+
+        let cmTrackedIds: Set<string> | null = null;
+        const maxVisible =
+          authUser.role === "cm" &&
+          typeof authUser.lead_filter?.["max_leads_visible"] === "number" &&
+          Number.isFinite(authUser.lead_filter["max_leads_visible"])
+            ? Math.max(0, authUser.lead_filter["max_leads_visible"] as number)
+            : null;
+        const cappedRows = maxVisible === null ? afterCursorRows : afterCursorRows.slice(0, maxVisible);
+        const hasMore = cappedRows.length > limit;
+        const rawPage = hasMore ? cappedRows.slice(0, limit) : cappedRows;
+
+        if (authUser.role === "cm") {
+          cmTrackedIds = await getCmActiveTrackedLeadIds(
+            authUser.id,
+            rawPage.map((row) => asNullableString(row["id"])).filter((id): id is string => Boolean(id))
+          );
+        }
+
+        const page = cmTrackedIds
+          ? rawPage.map((row) => (cmTrackedIds?.has(asNullableString(row["id"]) ?? "") ? row : redactContactFields(row)))
+          : rawPage;
+        const lastRow = rawPage[rawPage.length - 1];
+        const nextCursor =
+          hasMore && lastRow
+            ? encodeLeadCursor({
+                sort_by,
+                sort_direction,
+                id: asNullableString(lastRow["id"]) ?? "",
+                created_at: asNullableString(lastRow["created_at"]) ?? new Date(0).toISOString(),
+                prospect_score: asNullableNumber(lastRow["prospect_score"]),
+              })
+            : null;
+
+        return reply.status(200).send({
+          data: page,
+          next_cursor: nextCursor,
+          total: matchingRows.length,
+        });
       }
 
       const resolvedCursor = cursor

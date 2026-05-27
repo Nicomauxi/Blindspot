@@ -26,7 +26,13 @@ import {
   type ZoneLead,
 } from "@/lib/api";
 import { useAuthStore } from "@/lib/auth-store";
-import { buildNicheSuggestionTooltip, DISCOVERY_COMPOSER_STORAGE_KEY, parseDiscoveryComposerDraft, type DiscoveryComposerDraft } from "@/lib/discovery-workspace";
+import {
+  buildNicheSuggestionTooltip,
+  DISCOVERY_COMPOSER_STORAGE_KEY,
+  parseDiscoveryComposerDraft,
+  type DiscoveryComposerDraft,
+  type DiscoveryComposerGeoSelection,
+} from "@/lib/discovery-workspace";
 import { cn, formatDate, formatRelative } from "@/lib/utils";
 import { AdminPageLayout, SectionCard, StatCard } from "@/components/admin-shell";
 import { LocationDensityMap } from "@/components/location-density-map";
@@ -62,7 +68,24 @@ const EMPTY_COMPOSER: DiscoveryComposerDraft = {
   google_concurrency: "5",
   google_cost_cap_usd: "",
   enrich_after_discovery: true,
+  geo_selection: undefined,
 };
+
+function buildComposerGeoSelection(location: DiscoveryMapDensityLocation): DiscoveryComposerGeoSelection {
+  const [, gridLocationKey] = location.location_key.split("::", 2);
+  return {
+    label: location.location_label,
+    parent_location_keys: [location.parent_location_key],
+    ...(gridLocationKey ? { grid_location_keys: [gridLocationKey] } : {}),
+  };
+}
+
+function buildSelectedLocationKeyFromComposer(composer: DiscoveryComposerDraft): string | null {
+  const parentLocationKey = composer.geo_selection?.parent_location_keys?.[0];
+  const gridLocationKey = composer.geo_selection?.grid_location_keys?.[0];
+  if (!parentLocationKey || !gridLocationKey) return null;
+  return `${parentLocationKey}::${gridLocationKey}`;
+}
 
 function estimateGoogleCost(maxResults: number): number {
   const safe = Math.max(1, maxResults);
@@ -551,7 +574,9 @@ export default function DiscoveryPage() {
   useEffect(() => {
     if (typeof window === "undefined") return;
     const saved = window.localStorage.getItem(DISCOVERY_COMPOSER_STORAGE_KEY);
-    setComposer(parseDiscoveryComposerDraft(saved, EMPTY_COMPOSER));
+    const draft = parseDiscoveryComposerDraft(saved, EMPTY_COMPOSER);
+    setComposer(draft);
+    setSelectedLocationKey(buildSelectedLocationKeyFromComposer(draft));
     setComposerHydrated(true);
   }, []);
 
@@ -646,13 +671,18 @@ export default function DiscoveryPage() {
       location: gap.location_label,
       niche: gap.niche,
       sources: Array.from(new Set([...gap.present_sources, ...gap.missing_sources])),
+      geo_selection: undefined,
     }));
     setSelectedLocationKey(null);
     setPrefillNote(`Gap ${gap.location_label} · ${gap.niche}`);
   }
 
   function applyLocationPrefill(location: DiscoveryMapDensityLocation) {
-    setComposer((current) => ({ ...current, location: location.parent_location_label }));
+    setComposer((current) => ({
+      ...current,
+      location: location.parent_location_label,
+      geo_selection: buildComposerGeoSelection(location),
+    }));
     setSelectedLocationKey(location.location_key);
     setPrefillNote(`Zona ${location.location_label}`);
   }
@@ -662,7 +692,13 @@ export default function DiscoveryPage() {
     setSelectedLocationKey(location.location_key);
     setZoneLeadsLoading(true);
     try {
-      const res = await getZoneLeads(token, { location_key: location.location_key, limit: 200 });
+      const [_, gridLocationKey] = location.location_key.split("::", 2);
+      const res = await getZoneLeads(token, {
+        location_key: location.location_key,
+        parent_location_key: location.parent_location_key,
+        ...(gridLocationKey ? { grid_location_key: gridLocationKey } : {}),
+        limit: 200,
+      });
       setZoneLeads(res.data);
       setZoneLeadsTotal(res.total);
     } catch {
@@ -709,6 +745,26 @@ export default function DiscoveryPage() {
         <StatCard label="Presupuesto restante" value={recommendations?.google_places_budget ? `USD ${recommendations.google_places_budget.budget_remaining.toFixed(2)}` : "..."} hint={recommendations?.google_places_budget?.over_alert ? "Debajo del umbral de alerta" : "Budget disponible para jobs pagos"} tone={recommendations?.google_places_budget?.over_alert ? "warn" : "good"} />
       </div>
 
+      <SectionCard title="Contexto y mapa" description="La carga de contexto arranca acá: elegí una cuadrícula desde el mapa y eso baja al Composer como ubicación visible más filtro geográfico estructurado persistido.">
+        <div className="space-y-4">
+          <SectionWarning message={sectionErrors.density} />
+          <LocationDensityMap
+            locations={density}
+            meta={densityMeta}
+            selectedLocationKey={selectedLocationKey}
+            onSelect={applyLocationPrefill}
+            onSelectWithDrill={handleDrillDown}
+            filters={densityFilters}
+            onFiltersChange={setDensityFilters}
+            nicheSuggestions={densityNicheSuggestions}
+            loading={densityLoading}
+            zoneLeads={zoneLeads}
+            zoneLeadsTotal={zoneLeadsTotal}
+            zoneLeadsLoading={zoneLeadsLoading}
+          />
+        </div>
+      </SectionCard>
+
       <SectionCard title="Composer" description="Un submit crea un batch y un job hijo por fuente seleccionada.">
           <div className="space-y-5">
             <div>
@@ -737,7 +793,7 @@ export default function DiscoveryPage() {
             <div className="grid gap-4 md:grid-cols-2">
               <div>
                 <label className="mb-1 block text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Ubicación</label>
-                <input value={composer.location} onChange={(event) => setComposer((current) => ({ ...current, location: event.target.value }))} className="w-full rounded-2xl border border-slate-200 px-3 py-2.5 text-sm" placeholder="Montevideo" />
+                <input value={composer.location} onChange={(event) => { setComposer((current) => ({ ...current, location: event.target.value, geo_selection: undefined })); setSelectedLocationKey(null); setPrefillNote(null); }} className="w-full rounded-2xl border border-slate-200 px-3 py-2.5 text-sm" placeholder="Montevideo" />
               </div>
               <div>
                 <label className="mb-1 block text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Niche</label>
@@ -814,14 +870,32 @@ export default function DiscoveryPage() {
                 <div><span className="text-slate-500">Fuentes:</span> <span className="font-medium text-slate-900">{composer.sources.join(", ") || "—"}</span></div>
                 <div><span className="text-slate-500">Costo estimado:</span> <span className="font-medium text-slate-900">USD {estimatedBatchCost.toFixed(2)}</span></div>
                 <div><span className="text-slate-500">Cap máximo:</span> <span className="font-medium text-slate-900">{effectiveGoogleCap != null && Number.isFinite(effectiveGoogleCap) ? `USD ${effectiveGoogleCap.toFixed(2)}` : "—"}</span></div>
-                <div><span className="text-slate-500">Origen:</span> <span className="font-medium text-slate-900">{prefillNote ?? "manual"}</span></div>
-                <div><span className="text-slate-500">Modo:</span> <span className="font-medium text-slate-900">{composer.enrich_after_discovery ? "discovery + enrich" : "solo discovery"}</span></div>
+              <div><span className="text-slate-500">Origen:</span> <span className="font-medium text-slate-900">{prefillNote ?? "manual"}</span></div>
+              <div><span className="text-slate-500">Mapa:</span> <span className="font-medium text-slate-900">{composer.geo_selection?.label ?? "sin zona seleccionada"}</span></div>
+              <div><span className="text-slate-500">Modo:</span> <span className="font-medium text-slate-900">{composer.enrich_after_discovery ? "discovery + enrich" : "solo discovery"}</span></div>
               </div>
               <div className="mt-4 flex flex-wrap gap-2">
                 <PrefillBadge label="Ubicación prefill" active={Boolean(prefillNote && composer.location)} />
                 <PrefillBadge label="Niche prefill" active={Boolean(prefillNote && composer.niche)} />
                 <PrefillBadge label="Fuentes sugeridas" active={Boolean(prefillNote && composer.sources.length > 0)} />
+                <PrefillBadge label="Zona del mapa" active={Boolean(composer.geo_selection?.label)} />
               </div>
+              {composer.geo_selection?.label ? (
+                <div className="mt-4 rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-800">
+                  Zona activa desde el mapa: <span className="font-semibold">{composer.geo_selection.label}</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setComposer((current) => ({ ...current, geo_selection: undefined }));
+                      setSelectedLocationKey(null);
+                      setPrefillNote(null);
+                    }}
+                    className="ml-3 font-medium underline underline-offset-2"
+                  >
+                    Quitar zona
+                  </button>
+                </div>
+              ) : null}
               {batchWarnings.length > 0 ? (
                 <div className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
                   {batchWarnings.map((warning) => <div key={warning}>{warning}</div>)}
@@ -830,7 +904,7 @@ export default function DiscoveryPage() {
             </div>
 
             <div className="flex justify-end gap-2">
-              <button onClick={() => { setComposer(EMPTY_COMPOSER); setPrefillNote(null); if (typeof window !== "undefined") window.localStorage.removeItem(DISCOVERY_COMPOSER_STORAGE_KEY); }} className="rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">Reset</button>
+              <button onClick={() => { setComposer(EMPTY_COMPOSER); setSelectedLocationKey(null); setPrefillNote(null); if (typeof window !== "undefined") window.localStorage.removeItem(DISCOVERY_COMPOSER_STORAGE_KEY); }} className="rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">Reset</button>
               <button onClick={() => void handleCreateBatch()} disabled={creating || batchWarnings.length > 0} className="rounded-lg bg-sky-600 px-4 py-2 text-sm font-medium text-white hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-50">
                 {creating ? "Creando…" : "Crear batch"}
               </button>
@@ -927,7 +1001,7 @@ export default function DiscoveryPage() {
         </div>
       </SectionCard>
 
-      <CatalogSection onPrefill={(location) => setComposer((current) => ({ ...current, location }))} />
+      <CatalogSection onPrefill={(location) => { setComposer((current) => ({ ...current, location, geo_selection: undefined })); setSelectedLocationKey(null); setPrefillNote(`Catálogo ${location}`); }} />
 
       <RefreshMasivoSection />
 
@@ -955,7 +1029,7 @@ export default function DiscoveryPage() {
               <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Por ubicación</p>
               <div className="mt-3 space-y-3">
                 {recommendations?.coverage_gaps_by_location.length ? recommendations.coverage_gaps_by_location.map((group) => (
-                  <button key={group.location_key} type="button" onClick={() => { setComposer((current) => ({ ...current, location: group.location_label })); setSelectedLocationKey(null); setPrefillNote(`Ubicación ${group.location_label}`); }} className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-left hover:border-sky-200 hover:bg-sky-50/40">
+                  <button key={group.location_key} type="button" onClick={() => { setComposer((current) => ({ ...current, location: group.location_label, geo_selection: undefined })); setSelectedLocationKey(null); setPrefillNote(`Ubicación ${group.location_label}`); }} className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-left hover:border-sky-200 hover:bg-sky-50/40">
                     <div className="flex items-center justify-between gap-3">
                       <div>
                         <p className="text-sm font-semibold text-slate-900">{group.location_label}</p>
@@ -987,26 +1061,6 @@ export default function DiscoveryPage() {
               <p className="mt-2 text-xs text-slate-500">Hover sobre el contador para ver el breakdown por fuente cuando haya señal suficiente.</p>
             </div>
           </div>
-      </SectionCard>
-
-      <SectionCard title="Contexto y mapa" description="Vista granular por cuadrículas. Tocar una zona precarga la ubicación padre en el composer y recalcula recomendaciones.">
-        <div className="space-y-4">
-          <SectionWarning message={sectionErrors.density} />
-          <LocationDensityMap
-            locations={density}
-            meta={densityMeta}
-            selectedLocationKey={selectedLocationKey}
-            onSelect={applyLocationPrefill}
-            onSelectWithDrill={handleDrillDown}
-            filters={densityFilters}
-            onFiltersChange={setDensityFilters}
-            nicheSuggestions={densityNicheSuggestions}
-            loading={densityLoading}
-            zoneLeads={zoneLeads}
-            zoneLeadsTotal={zoneLeadsTotal}
-            zoneLeadsLoading={zoneLeadsLoading}
-          />
-        </div>
       </SectionCard>
 
       <div className="grid gap-4 xl:grid-cols-[1.15fr,0.85fr]">
