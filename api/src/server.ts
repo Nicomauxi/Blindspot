@@ -28,6 +28,7 @@ import { alertsRoutes } from "./routes/alerts.js";
 import { nichesRoutes } from "./routes/admin/niches.js";
 import { getBackupScheduler } from "./modules/backups/runtime.js";
 import { startProcessMetricsRecorder, stopProcessMetricsRecorder } from "./modules/process-metrics/recorder.js";
+import { startEmbeddedScheduler, stopEmbeddedScheduler, isSchedulerEmbedded, getSchedulerStatus } from "./modules/scheduler/runtime.js";
 
 const PORT = Number(process.env["PORT"] ?? 3001);
 const CORS_ORIGIN = process.env["CORS_ORIGIN"] ?? "http://localhost:3000";
@@ -75,7 +76,7 @@ export async function buildServer() {
     allowedHeaders: ["Authorization", "Content-Type"],
   });
   await app.register(helmet);
-  await app.register(rateLimit, { max: 100, timeWindow: "1 minute" });
+  await app.register(rateLimit, { max: 600, timeWindow: "1 minute" });
   await app.register(jwt, { secret: jwtSecret });
   await app.register(multipart, { limits: { fileSize: 10 * 1024 * 1024 } });
 
@@ -110,12 +111,23 @@ if (process.argv[1] && process.argv[1].endsWith("server.ts")) {
   await backupScheduler.start();
   startProcessMetricsRecorder();
 
+  // Embed the PipelineScheduler (core worker) when EMBED_SCHEDULER=true.
+  // This allows a single 'pnpm --dir api dev' to handle both API and job processing.
+  // Guard: skip if already running (tsx --watch re-executes this block on hot-reload).
+  if (isSchedulerEmbedded() && getSchedulerStatus() !== "running") {
+    await startEmbeddedScheduler();
+  }
+
   const app = await buildServer();
   const shutdown = () => {
     backupScheduler.stop();
     stopProcessMetricsRecorder();
+    if (isSchedulerEmbedded()) stopEmbeddedScheduler();
   };
 
+  // Use once-per-signal registration to avoid duplicate listeners on tsx hot-reload.
+  process.removeAllListeners("SIGTERM");
+  process.removeAllListeners("SIGINT");
   process.on("SIGTERM", shutdown);
   process.on("SIGINT", shutdown);
 

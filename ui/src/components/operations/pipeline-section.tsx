@@ -223,7 +223,12 @@ export function PipelineSection() {
     try {
       await triggerPipelineRun(token, false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Error al iniciar el run");
+      const apiErr = err instanceof Error && "status" in err ? (err as { status: number; error_code?: string }) : null;
+      if (apiErr?.status === 409 || apiErr?.error_code === "run_already_active") {
+        setError("Ya hay un proceso en ejecución o pendiente. Esperá a que termine o cancelalo antes de iniciar uno nuevo.");
+      } else {
+        setError("No se pudo iniciar el run. Revisá el estado del pipeline e intentá de nuevo.");
+      }
     } finally {
       setTriggeringMode(null);
     }

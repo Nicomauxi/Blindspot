@@ -5,10 +5,12 @@ import { requireAuth, requireAdmin, getAuthUser } from "../auth/middleware.js";
 import {
   buildGridCell,
   buildDiscoveryRecommendations,
+  buildLeadDensityRows,
   buildLeadDensitySnapshot,
   buildLeadLocationKey,
   estimateGooglePlacesBatchCost,
   getPrimaryCoordinate,
+  matchesLeadDensityFilters,
   parseGranularLocationKey,
   supportedDiscoverySources,
   type LeadInsightRow,
@@ -17,7 +19,13 @@ import {
   type CompletedRunInsightRow,
 } from "./discovery-insights.js";
 import { bulkInsertDiscoveryJobs } from "../../../src/storage/discovery-jobs.js";
+import { listDiscoveryPlaces, type DiscoveryPlaceKind } from "../../../src/storage/discovery-places.js";
 import { getGooglePlacesBudgetStatus } from "../../../src/storage/pipeline-config.js";
+import {
+  buildLocationOpportunitySuggestions,
+  type OpportunityDiscoveryJob,
+  type OpportunityLead,
+} from "../../../src/modules/discovery/location-opportunity.js";
 import { createLeadGeocodingService } from "../services/lead-geocoding.js";
 
 const permissiveUuid = z
@@ -30,6 +38,12 @@ const permissiveUuid = z
 const cpuBudgetSchema = z.enum(["conservative", "balanced", "aggressive"]);
 const profileSchema = z.enum(["A", "B", "C", "D"]);
 const sourceSchema = z.enum(["mintur", "osm", "yelu", "pedidosya", "google_places"]);
+
+const predictiveContextSchema = z.object({
+  suggestion_source: z.literal("predictive_location"),
+  location_catalog_entry_id: z.string().min(1),
+  opportunity_score_snapshot: z.unknown().optional(),
+});
 
 const createJobSchema = z
   .object({
@@ -68,11 +82,12 @@ const createBatchSchema = z
       .optional(),
     recommendation_origin: z
       .object({
-        type: z.enum(["coverage_gap", "location_density", "top_niche", "manual"]),
+        type: z.enum(["coverage_gap", "location_density", "top_niche", "manual", "predictive_location"]),
         key: z.string().optional(),
       })
       .optional(),
     enrich_after_discovery: z.boolean().default(true),
+    predictive_context: predictiveContextSchema.optional(),
   })
   .superRefine((value, ctx) => {
     const includesGoogle = value.sources.includes("google_places");
@@ -119,8 +134,9 @@ const recommendationsQuerySchema = z.object({
 
 const LEAD_DENSITY_CONTACT_TIERS = ["A", "B", "C", "D", "X"] as const;
 const LEAD_DENSITY_GPS_SOURCES = ["real", "inferred", "google"] as const;
+const GEO_ZONE_KIND_OPTIONS = ["departamento", "ciudad", "barrio", "zona_turistica", "polo_industrial", "avenida"] as const;
 
-const leadDensityQuerySchema = recommendationsQuerySchema.extend({
+const geoFilterQueryFields = {
   source: z
     .union([z.string(), z.array(z.string())])
     .optional()
@@ -153,10 +169,48 @@ const leadDensityQuerySchema = recommendationsQuerySchema.extend({
       return Number(value);
     })
     .pipe(z.number().min(0).max(100).optional()),
-});
+  zone_id: z.string().trim().min(1).max(120).optional(),
+  zone_ids: z
+    .union([z.string(), z.array(z.string())])
+    .optional()
+    .transform((value) => parseMultiValue(value)),
+  zone: z.string().trim().min(1).max(120).optional(),
+} satisfies z.ZodRawShape;
+
+const leadDensityQuerySchema = recommendationsQuerySchema.extend(geoFilterQueryFields);
 
 const batchActionSchema = z.object({
   action: z.enum(["pause", "resume", "cancel"]),
+});
+
+const locationSuggestionsQuerySchema = z.object({
+  departamento: z.string().trim().min(1).max(120).optional(),
+  ciudad: z.string().trim().min(1).max(120).optional(),
+  barrio: z.string().trim().min(1).max(120).optional(),
+  niche: z.string().trim().min(1).max(80).optional(),
+  limit: z
+    .string()
+    .optional()
+    .transform((v) => Math.min(Number(v ?? "20"), 100))
+    .pipe(z.number().int().min(1).max(100)),
+  min_score: z
+    .string()
+    .optional()
+    .transform((value) => {
+      if (value == null || value.trim() === "") return undefined;
+      return Number(value);
+    })
+    .pipe(z.number().min(0).max(100).optional()),
+});
+
+const geoZonesQuerySchema = z.object({
+  kind: z.enum(GEO_ZONE_KIND_OPTIONS).optional(),
+  q: z.string().trim().min(1).max(120).optional(),
+  limit: z
+    .string()
+    .optional()
+    .transform((v) => Math.min(Number(v ?? "100"), 200))
+    .pipe(z.number().int().min(1).max(200)),
 });
 
 const zoneLeadsQuerySchema = z
@@ -168,6 +222,7 @@ const zoneLeadsQuerySchema = z
       .transform((v) => Math.min(Number(v ?? "200"), 200))
       .pipe(z.number().int().min(1).max(200)),
   })
+  .extend(geoFilterQueryFields)
   .superRefine((value, ctx) => {
     if (!value.location_key && !value.parent_location_key && !value.grid_location_key) {
       ctx.addIssue({
@@ -238,71 +293,141 @@ function isMissingLeadContactTierSchema(error: { code?: string; message?: string
   return combined.includes("42703") && combined.includes("contact_tier");
 }
 
+async function fetchGpsByLeadIds(db: ReturnType<typeof getDb>, leadIds: string[], request: { log: FastifyInstance["log"] }) {
+  const gpsById = new Map<string, unknown>();
+  if (leadIds.length === 0) return gpsById;
+
+  const chunkSize = 100;
+  for (let index = 0; index < leadIds.length; index += chunkSize) {
+    const chunk = leadIds.slice(index, index + chunkSize);
+    const gpsQuery = await db.from("leads").select("id, gps").in("id", chunk);
+    if (gpsQuery.error) {
+      request.log.warn({ error: gpsQuery.error, chunk_size: chunk.length }, "map routes could not enrich gps from leads table");
+      continue;
+    }
+    for (const row of gpsQuery.data ?? []) {
+      const record = row as Record<string, unknown>;
+      const id = typeof record.id === "string" ? record.id : String(record.id ?? "");
+      if (id) gpsById.set(id, record.gps ?? null);
+    }
+  }
+
+  return gpsById;
+}
+
 async function loadLeadDensityRows(request: { log: FastifyInstance["log"] }) {
   const db = getDb();
   const baseQuery = await db
-    .from("leads")
-    .select("id, source, niche, address, prospect_score, contact_tier, gps, corroborating_sources")
+    .from("lead_dashboard")
+    .select("id, source, niche, address, prospect_score, contact_tier, corroborating_sources, created_at")
     .order("created_at", { ascending: false })
     .limit(5000);
 
-  if (!baseQuery.error) {
-    return { data: (baseQuery.data ?? []) as unknown as LeadInsightRow[], schemaFallback: false };
+  if (baseQuery.error) {
+    request.log.warn({ error: baseQuery.error }, "lead density fallback to legacy leads table");
+    const legacyQuery = await db
+      .from("leads")
+      .select("id, source, niche, address, prospect_score, gps, corroborating_sources")
+      .order("created_at", { ascending: false })
+      .limit(5000);
+
+    if (legacyQuery.error) {
+      request.log.error({ error: legacyQuery.error }, "lead density load error");
+      throw new Error("db_error");
+    }
+
+    return {
+      data: (legacyQuery.data ?? []).map((lead) => ({ ...(lead as Record<string, unknown>), contact_tier: null })) as unknown as LeadInsightRow[],
+      schemaFallback: true,
+    };
   }
 
-  if (!isMissingLeadContactTierSchema(baseQuery.error)) {
-    request.log.error({ error: baseQuery.error }, "lead density load error");
-    throw new Error("db_error");
-  }
-
-  request.log.warn({ error: baseQuery.error }, "lead density fallback without contact_tier");
-  const legacyQuery = await db
-    .from("leads")
-    .select("id, source, niche, address, prospect_score, gps, corroborating_sources")
-    .order("created_at", { ascending: false })
-    .limit(5000);
-
-  if (legacyQuery.error) {
-    request.log.error({ error: legacyQuery.error }, "lead density load error");
-    throw new Error("db_error");
-  }
-
+  const leadIds = (baseQuery.data ?? [])
+    .map((lead) => String((lead as Record<string, unknown>).id ?? ""))
+    .filter(Boolean);
+  const gpsById = await fetchGpsByLeadIds(db, leadIds, request);
   return {
-    data: (legacyQuery.data ?? []).map((lead) => ({ ...(lead as Record<string, unknown>), contact_tier: null })) as unknown as LeadInsightRow[],
-    schemaFallback: true,
+    data: (baseQuery.data ?? []).map((lead) => ({
+      ...(lead as Record<string, unknown>),
+      gps: gpsById.get(String((lead as Record<string, unknown>).id)) ?? null,
+    })) as unknown as LeadInsightRow[],
+    schemaFallback: false,
   };
 }
+
+type GeoZoneLeadRow = LeadInsightRow & {
+  name?: string | null;
+  created_at?: string | null;
+  website?: string | null;
+  phone?: string | null;
+  whatsapp?: string | null;
+  email?: string | null;
+  rating?: number | null;
+  review_count?: number | null;
+  primary_offer?: string | null;
+  pitch_hook?: string | null;
+  contact_ready?: boolean | null;
+  tags?: string[] | null;
+};
+
+type AdminGeoZoneOption = {
+  zone_id: string;
+  departamento: string | null;
+  ciudad: string | null;
+  barrio: string | null;
+  label: string;
+  kind: DiscoveryPlaceKind;
+  lead_count: number;
+  last_seen_at: string | null;
+};
 
 async function loadZoneLeadRows(request: { log: FastifyInstance["log"] }) {
   const db = getDb();
   const baseQuery = await db
-    .from("leads")
-    .select("id, name, niche, contact_tier, prospect_score, address, gps, source")
-    .order("prospect_score", { ascending: false })
-    .limit(4000);
+    .from("lead_dashboard")
+    .select("id, name, niche, contact_tier, prospect_score, address, source, corroborating_sources, created_at, website, phone, whatsapp, rating, review_count, primary_offer, pitch_hook, contact_ready, tags")
+    .order("created_at", { ascending: false })
+    .limit(5000);
 
-  if (!baseQuery.error) {
-    return (baseQuery.data ?? []) as unknown as LeadInsightRow[];
+  if (baseQuery.error) {
+    request.log.warn({ error: baseQuery.error }, "zone-leads fallback to legacy leads table");
+    const legacyQuery = await db
+      .from("leads")
+      .select("id, name, niche, address, gps, source, corroborating_sources, created_at")
+      .order("created_at", { ascending: false })
+      .limit(5000);
+
+    if (legacyQuery.error) {
+      request.log.error({ error: legacyQuery.error }, "zone-leads load error");
+      throw new Error("db_error");
+    }
+
+    return (legacyQuery.data ?? []).map((lead) => ({
+      ...(lead as Record<string, unknown>),
+      prospect_score: null,
+      contact_tier: null,
+      email: null,
+      website: null,
+      phone: null,
+      whatsapp: null,
+      rating: null,
+      review_count: null,
+      primary_offer: null,
+      pitch_hook: null,
+      contact_ready: null,
+      tags: null,
+    })) as unknown as LeadInsightRow[];
   }
 
-  if (!isMissingLeadContactTierSchema(baseQuery.error)) {
-    request.log.error({ error: baseQuery.error }, "zone-leads load error");
-    throw new Error("db_error");
-  }
-
-  request.log.warn({ error: baseQuery.error }, "zone-leads fallback without contact_tier");
-  const legacyQuery = await db
-    .from("leads")
-    .select("id, name, niche, prospect_score, address, gps, source")
-    .order("prospect_score", { ascending: false })
-    .limit(4000);
-
-  if (legacyQuery.error) {
-    request.log.error({ error: legacyQuery.error }, "zone-leads load error");
-    throw new Error("db_error");
-  }
-
-  return (legacyQuery.data ?? []).map((lead) => ({ ...(lead as Record<string, unknown>), contact_tier: null })) as unknown as LeadInsightRow[];
+  const leadIds = (baseQuery.data ?? [])
+    .map((lead) => String((lead as Record<string, unknown>).id ?? ""))
+    .filter(Boolean);
+  const gpsById = await fetchGpsByLeadIds(db, leadIds, request);
+  return (baseQuery.data ?? []).map((lead) => ({
+    ...(lead as Record<string, unknown>),
+    gps: gpsById.get(String((lead as Record<string, unknown>).id)) ?? null,
+    email: null,
+  })) as unknown as LeadInsightRow[];
 }
 
 
@@ -373,6 +498,126 @@ function parseMultiValue(raw: string | string[] | undefined): string[] | undefin
   const parts = Array.isArray(raw) ? raw : raw.split(",");
   const values = parts.map((part) => part.trim()).filter(Boolean);
   return values.length > 0 ? values : undefined;
+}
+
+type GeoFilterQueryData = z.infer<typeof leadDensityQuerySchema>;
+
+function normalizeZoneId(value: string): string {
+  return buildLocationKey(value);
+}
+
+function resolveZoneIds(query: Pick<GeoFilterQueryData, "zone_id" | "zone_ids" | "zone">): string[] | undefined {
+  const values = [
+    ...(query.zone_ids ?? []),
+    ...(query.zone_id ? [query.zone_id] : []),
+    ...(query.zone ? [query.zone] : []),
+  ]
+    .map((value) => normalizeZoneId(value))
+    .filter(Boolean);
+
+  return values.length > 0 ? Array.from(new Set(values)) : undefined;
+}
+
+function buildLeadDensityFiltersFromQuery(query: GeoFilterQueryData) {
+  return {
+    filters: {
+      sources: query.source,
+      niche: query.niche ?? null,
+      prospect_score_gte: query.prospect_score_gte ?? null,
+      contact_tiers: query.contact_tier,
+      gps_sources: query.gps_source as Array<"real" | "inferred" | "google"> | undefined,
+    },
+    zoneIds: resolveZoneIds(query),
+  };
+}
+
+function matchesZoneIdsFilter(lead: LeadInsightRow, zoneIds: string[] | undefined): boolean {
+  if (!zoneIds || zoneIds.length === 0) return true;
+  const parentLocationKey = buildLeadLocationKey((lead.address ?? "").trim());
+  return parentLocationKey !== "" && zoneIds.includes(parentLocationKey);
+}
+
+function buildDerivedGeoZones(leads: GeoZoneLeadRow[], query: z.infer<typeof geoZonesQuerySchema>): AdminGeoZoneOption[] {
+  if (query.kind && query.kind !== "ciudad") return [];
+
+  const normalizedQuery = buildLocationKey(query.q ?? "");
+  const densityRows = buildLeadDensityRows(leads);
+  const lastSeenByZone = new Map<string, string | null>();
+  for (const lead of leads) {
+    const key = buildLeadLocationKey((lead.address ?? "").trim());
+    if (!key) continue;
+    const createdAt = typeof lead.created_at === "string" ? lead.created_at : null;
+    const current = lastSeenByZone.get(key) ?? null;
+    if (!current || (createdAt && createdAt > current)) {
+      lastSeenByZone.set(key, createdAt);
+    }
+  }
+
+  return densityRows
+    .filter((row) => !normalizedQuery || normalizeZoneId(row.location_label).includes(normalizedQuery) || row.location_key.includes(normalizedQuery))
+    .slice(0, query.limit)
+    .map((row) => ({
+      zone_id: row.location_key,
+      departamento: null,
+      ciudad: row.location_label,
+      barrio: null,
+      label: row.location_label,
+      kind: "ciudad",
+      lead_count: row.lead_count,
+      last_seen_at: lastSeenByZone.get(row.location_key) ?? null,
+    }));
+}
+
+function buildCatalogGeoZone(place: Awaited<ReturnType<typeof listDiscoveryPlaces>>[number], leadStats: Map<string, { lead_count: number; last_seen_at: string | null }>): AdminGeoZoneOption {
+  const stats = leadStats.get(place.location_key) ?? { lead_count: 0, last_seen_at: null };
+  return {
+    zone_id: place.location_key,
+    departamento: place.kind === "departamento" ? place.display_name : null,
+    ciudad: place.kind === "ciudad" ? place.display_name : place.parent_location,
+    barrio: place.kind === "barrio" || place.kind === "zona_turistica" || place.kind === "polo_industrial" || place.kind === "avenida"
+      ? place.display_name
+      : null,
+    label: place.display_name,
+    kind: place.kind,
+    lead_count: stats.lead_count,
+    last_seen_at: stats.last_seen_at,
+  };
+}
+
+async function listAdminGeoZones(request: { log: FastifyInstance["log"] }, query: z.infer<typeof geoZonesQuerySchema>): Promise<AdminGeoZoneOption[]> {
+  let leads: GeoZoneLeadRow[] = [];
+  try {
+    leads = await loadZoneLeadRows(request);
+  } catch {
+    leads = [];
+  }
+
+  const leadStats = new Map<string, { lead_count: number; last_seen_at: string | null }>();
+  for (const lead of leads) {
+    const key = buildLeadLocationKey((lead.address ?? "").trim());
+    if (!key) continue;
+    const current = leadStats.get(key) ?? { lead_count: 0, last_seen_at: null };
+    const createdAt = typeof lead.created_at === "string" ? lead.created_at : null;
+    leadStats.set(key, {
+      lead_count: current.lead_count + 1,
+      last_seen_at: !current.last_seen_at || (createdAt && createdAt > current.last_seen_at) ? createdAt : current.last_seen_at,
+    });
+  }
+
+  try {
+    const places = await listDiscoveryPlaces({
+      ...(query.kind ? { kind: query.kind } : {}),
+      ...(query.q ? { q: query.q } : {}),
+      limit: query.limit,
+    });
+    if (places.length > 0) {
+      return places.map((place) => buildCatalogGeoZone(place, leadStats));
+    }
+  } catch (error) {
+    request.log.warn({ error }, "geo zones catalog unavailable, falling back to derived zones");
+  }
+
+  return buildDerivedGeoZones(leads, query);
 }
 
 export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
@@ -584,7 +829,13 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
         max_results: body.max_results,
         cpu_budget: body.cpu_budget,
         google_places: body.google_places ?? null,
-        recommendation_origin: body.recommendation_origin ?? { type: "manual" },
+        recommendation_origin: body.predictive_context
+          ? {
+              type: body.recommendation_origin?.type ?? "predictive_location",
+              key: body.recommendation_origin?.key ?? buildLocationKey(body.location),
+              ...body.predictive_context,
+            }
+          : body.recommendation_origin ?? { type: "manual" },
         enrich_after_discovery: body.enrich_after_discovery,
         estimated_cost_usd: Number(estimatedCostUsd.toFixed(2)),
         actual_cost_usd: 0,
@@ -609,21 +860,28 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
       max_results: body.max_results,
       cpu_budget: body.cpu_budget,
       status: "queued",
-      triggered_by: body.recommendation_origin?.type === "manual" || !body.recommendation_origin ? "manual" : "gap_analysis",
+      triggered_by:
+        body.predictive_context
+          ? "predictive_location"
+          : body.recommendation_origin?.type === "manual" || !body.recommendation_origin
+            ? "manual"
+            : "gap_analysis",
       user_id: authUser.id,
       enrich_after_discovery: body.enrich_after_discovery,
       enrich_status: body.enrich_after_discovery ? "queued" : "skipped",
       estimated_cost_usd: source === "google_places" ? Number(estimateGooglePlacesBatchCost(body.max_results).toFixed(2)) : 0,
       actual_cost_usd: 0,
       cost_cap_usd: source === "google_places" ? body.google_places?.cost_cap_usd ?? null : null,
-      source_params:
-        source === "google_places"
+      source_params: {
+        ...(source === "google_places"
           ? {
               profile: body.google_places?.profile ?? "B",
               concurrency: body.google_places?.concurrency ?? 5,
               cost_cap_usd: body.google_places?.cost_cap_usd ?? null,
             }
-          : null,
+          : {}),
+        ...(body.predictive_context ?? {}),
+      },
     }));
 
     const { data: jobs, error: jobsError } = await db.from("discovery_jobs").insert(jobsPayload).select();
@@ -849,6 +1107,92 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
     return reply.status(200).send({ data });
   });
 
+  app.get("/discovery/location-suggestions", { preHandler: requireAdmin }, async (request, reply) => {
+    const parsedQuery = locationSuggestionsQuerySchema.safeParse(request.query);
+    if (!parsedQuery.success) {
+      return reply.status(400).send({
+        error: "Invalid query",
+        error_code: "invalid_query",
+        details: parsedQuery.error.flatten().fieldErrors,
+      });
+    }
+
+    const db = getDb();
+    const [catalogResult, jobsRes, leadsRes] = await Promise.allSettled([
+      listDiscoveryPlaces({ limit: 2000 }),
+      db
+        .from("discovery_jobs")
+        .select("source, niche, location, created_at, completed_at, status, leads_found, leads_new, estimated_cost_usd")
+        .order("created_at", { ascending: false })
+        .limit(2000),
+      db
+        .from("lead_dashboard")
+        .select("id, niche, address, prospect_score, created_at")
+        .order("created_at", { ascending: false })
+        .limit(5000),
+    ]);
+
+    const jobsSettled = jobsRes.status === "fulfilled" ? jobsRes.value : null;
+    const leadsSettled = leadsRes.status === "fulfilled" ? leadsRes.value : null;
+
+    if (!jobsSettled || !leadsSettled || jobsSettled.error || leadsSettled.error) {
+      request.log.error({ jobs: jobsSettled?.error, leads: leadsSettled?.error }, "location suggestions history load error");
+      return reply.status(500).send({ error: "Database error", error_code: "db_error" });
+    }
+
+    let catalog;
+    if (catalogResult.status === "fulfilled") {
+      catalog = catalogResult.value;
+    } else {
+      request.log.warn({ error: catalogResult.reason }, "location suggestions catalog unavailable, deriving from current lead density");
+      const fallbackLeads = await loadZoneLeadRows(request);
+      catalog = buildDerivedGeoZones(fallbackLeads, { kind: undefined, q: undefined, limit: 2000 }).map((zone) => ({
+        id: 'derived-' + zone.zone_id,
+        location_key: zone.zone_id,
+        display_name: zone.label,
+        parent_location: zone.departamento,
+        kind: zone.kind,
+        commercial_score: null,
+        lat_approx: null,
+        lng_approx: null,
+        notes: 'derived_from_leads',
+        source: 'derived_from_leads',
+        imported_at: new Date(0).toISOString(),
+        imported_by_user_id: null,
+      }));
+    }
+
+    const data = buildLocationOpportunitySuggestions({
+      catalog,
+      discoveryJobs: (jobsSettled.data ?? []) as OpportunityDiscoveryJob[],
+      leads: (leadsSettled.data ?? []) as OpportunityLead[],
+      filters: {
+        departamento: parsedQuery.data.departamento ?? null,
+        ciudad: parsedQuery.data.ciudad ?? null,
+        barrio: parsedQuery.data.barrio ?? null,
+        niche: parsedQuery.data.niche ?? null,
+        limit: parsedQuery.data.limit,
+        min_score: parsedQuery.data.min_score,
+      },
+    });
+
+    return reply.status(200).send({ data, total: data.length });
+  });
+
+  app.get("/admin/geo/zones", { preHandler: requireAdmin }, async (request, reply) => {
+    const parsedQuery = geoZonesQuerySchema.safeParse(request.query);
+    if (!parsedQuery.success) {
+      return reply.status(400).send({
+        error: "Invalid query",
+        error_code: "invalid_query",
+        details: parsedQuery.error.flatten().fieldErrors,
+      });
+    }
+
+    const zones = await listAdminGeoZones(request, parsedQuery.data);
+    return reply.status(200).send({ data: zones, total: zones.length });
+  });
+
   app.get("/admin/geo/lead-density", { preHandler: requireAdmin }, async (request, reply) => {
     const parsedQuery = leadDensityQuerySchema.safeParse(request.query);
     if (!parsedQuery.success) {
@@ -866,18 +1210,22 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
       return reply.status(500).send({ error: "Database error", error_code: "db_error" });
     }
 
-    const density = await buildLeadDensitySnapshot(leads, {
-      locationFilter: parsedQuery.data.location ?? null,
-      filters: {
-        sources: parsedQuery.data.source,
-        niche: parsedQuery.data.niche ?? null,
-        prospect_score_gte: parsedQuery.data.prospect_score_gte ?? null,
-        contact_tiers: parsedQuery.data.contact_tier,
-        gps_sources: parsedQuery.data.gps_source as Array<"real" | "inferred" | "google"> | undefined,
-      },
-      geocodeAddress: leadGeocodingService.geocodeAddress,
-      maxGeocodes: Math.min(160, Math.max(parsedQuery.data.limit * 8, 40)),
-    });
+    const { filters: densityFilters, zoneIds } = buildLeadDensityFiltersFromQuery(parsedQuery.data);
+    let density;
+    try {
+      density = await buildLeadDensitySnapshot(
+        zoneIds && zoneIds.length > 0 ? leads.filter((lead) => matchesZoneIdsFilter(lead, zoneIds)) : leads,
+        {
+          locationFilter: parsedQuery.data.location ?? null,
+          filters: densityFilters,
+          geocodeAddress: leadGeocodingService.geocodeAddress,
+          maxGeocodes: Math.min(160, Math.max(parsedQuery.data.limit * 8, 40)),
+        }
+      );
+    } catch (err) {
+      request.log.error({ err }, "lead density snapshot build error");
+      return reply.status(500).send({ error: "Error al procesar el mapa de densidad", error_code: "density_build_error" });
+    }
 
     return reply.status(200).send({
       data: {
@@ -905,6 +1253,7 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
         niche: z.string().min(1),
         max_results: z.number().int().min(1).max(1000).default(200),
         cost_cap_usd: z.number().positive().optional(),
+        predictive_context: predictiveContextSchema.optional(),
       })
       .superRefine((value, ctx) => {
         if (value.source === "google_places" && value.cost_cap_usd == null) {
@@ -935,6 +1284,7 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
       max_results: j.max_results,
       cost_cap_usd: j.cost_cap_usd ?? null,
       estimated_cost_usd: j.source === "google_places" ? estimateGooglePlacesBatchCost(j.max_results) : null,
+      source_params: j.predictive_context ?? null,
     }));
 
     const totalGpCostUsd = jobDefs.reduce((sum, j) => sum + (j.estimated_cost_usd ?? 0), 0);
@@ -956,7 +1306,7 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
 
     let rows;
     try {
-      rows = await bulkInsertDiscoveryJobs(jobDefs, "manual");
+      rows = await bulkInsertDiscoveryJobs(jobDefs, parsed.data.jobs.some((job) => job.predictive_context) ? "predictive_location" : "manual");
     } catch (err) {
       request.log.error({ err }, "bulk discovery job insert failed");
       return reply.status(500).send({ error: "Database error", error_code: "db_error" });
@@ -966,9 +1316,10 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
       (sum, j) => sum + (j.estimated_cost_usd ?? 0),
       0
     );
+    const insertedRows = rows ?? [];
 
     return reply.status(201).send({
-      data: { ids: rows.map((r) => r.id), count: rows.length, total_estimated_cost_usd },
+      data: { ids: insertedRows.map((r) => r.id), count: insertedRows.length, total_estimated_cost_usd },
     });
   });
 
@@ -1001,6 +1352,7 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
       return reply.status(400).send({ error: "Invalid query", error_code: "invalid_query", details: parsed.error.flatten().fieldErrors });
     }
     const { location_key, parent_location_key, grid_location_key, limit } = parsed.data;
+    const { filters: densityFilters, zoneIds } = buildLeadDensityFiltersFromQuery(parsed.data);
     const parsedLocationKey = location_key ? parseGranularLocationKey(location_key) : null;
     const requestedParentLocationKey = parent_location_key ?? parsedLocationKey?.parent_location_key ?? "";
     const requestedGridLocationKey = grid_location_key ?? parsedLocationKey?.grid_location_key ?? null;
@@ -1013,16 +1365,19 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
       });
     }
 
-    let all: LeadInsightRow[];
+    let all: GeoZoneLeadRow[];
     try {
       all = await loadZoneLeadRows(request);
     } catch {
       return reply.status(500).send({ error: "Database error", error_code: "db_error" });
     }
-    const scoped = all.filter((lead) => buildLeadLocationKey((lead as { address?: string | null }).address ?? "") === requestedParentLocationKey);
+    const scoped = all.filter((lead) => buildLeadLocationKey((lead.address ?? "").trim()) === requestedParentLocationKey);
     const matching = [];
     for (const lead of scoped) {
-      const mapPoint = await resolveZoneLocationMatch(lead as LeadInsightRow, requestedParentLocationKey, requestedGridLocationKey);
+      if (!matchesZoneIdsFilter(lead, zoneIds)) continue;
+      const rawCoordinate = getPrimaryCoordinate(lead);
+      if (!matchesLeadDensityFilters(lead, densityFilters, rawCoordinate)) continue;
+      const mapPoint = await resolveZoneLocationMatch(lead, requestedParentLocationKey, requestedGridLocationKey);
       if (mapPoint) {
         matching.push({ ...lead, map_point: mapPoint });
       }

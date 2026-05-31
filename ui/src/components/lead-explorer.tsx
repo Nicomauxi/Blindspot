@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { EmptyPanel, HelpTip, SectionCard } from "@/components/admin-shell";
-import { listLeads, type LeadDashboard, type LeadGeoSelection } from "@/lib/api";
+import { listLeads, type CommercialOfferType, type LeadDashboard, type LeadGeoSelection } from "@/lib/api";
 import { useAuthStore } from "@/lib/auth-store";
 import { cn } from "@/lib/utils";
 
@@ -26,6 +26,7 @@ type LeadExplorerProps = {
     tier: string;
     minScore: string;
     primaryOffer: string;
+    commercialOfferType: CommercialOfferType | "";
     sortValue: string;
   }>;
   pageSize?: number;
@@ -55,10 +56,21 @@ const TIER_OPTIONS = [
   { value: "X", label: "Tier X" },
 ] as const;
 
+const COMMERCIAL_OFFER_TYPE_OPTIONS: Array<{ value: CommercialOfferType | ""; label: string }> = [
+  { value: "", label: "Todas" },
+  { value: "marketing", label: "Marketing" },
+  { value: "software", label: "Software" },
+  { value: "both", label: "Marketing + Software" },
+  { value: "unknown", label: "Sin señal suficiente" },
+];
+
 const SORT_OPTIONS = [
   { value: "created_at:desc", label: "Más nuevos" },
   { value: "prospect_score:desc", label: "Score alto primero" },
   { value: "prospect_score:asc", label: "Score bajo primero" },
+  { value: "marketing_score:desc", label: "Marketing alto primero" },
+  { value: "software_score:desc", label: "Software alto primero" },
+  { value: "offer_balance:desc", label: "Mayor diferencia de señal" },
 ] as const;
 
 const PRESETS = [
@@ -66,6 +78,8 @@ const PRESETS = [
   { id: "tier_a", label: "Tier A", description: "Mejor base de contacto", apply: () => ({ tier: "A" }) },
   { id: "google", label: "Google Places", description: "Barrido por fuente", apply: () => ({ source: "google_places" }) },
   { id: "offer", label: "Oferta sugerida", description: "Ordenar por score", apply: () => ({ sortValue: "prospect_score:desc" }) },
+  { id: "software", label: "Software", description: "Priorizar oportunidad operativa", apply: () => ({ commercialOfferType: "software", sortValue: "software_score:desc" }) },
+  { id: "marketing", label: "Marketing", description: "Priorizar señal de visibilidad", apply: () => ({ commercialOfferType: "marketing", sortValue: "marketing_score:desc" }) },
 ] as const;
 
 const TIER_COLORS: Record<string, string> = {
@@ -105,10 +119,16 @@ function readCsvSearchParam(searchParams: ReturnType<typeof useSearchParams>, ke
     .filter(Boolean);
 }
 
-function parseSortValue(value: string): { sort_by: "created_at" | "prospect_score"; sort_direction: "asc" | "desc" } {
+function parseSortValue(value: string): { sort_by: "created_at" | "prospect_score" | "marketing_score" | "software_score" | "offer_balance"; sort_direction: "asc" | "desc" } {
   const [sortBy, sortDirection] = value.split(":");
   return {
-    sort_by: sortBy === "prospect_score" ? "prospect_score" : "created_at",
+    sort_by:
+      sortBy === "prospect_score" ||
+      sortBy === "marketing_score" ||
+      sortBy === "software_score" ||
+      sortBy === "offer_balance"
+        ? sortBy
+        : "created_at",
     sort_direction: sortDirection === "asc" ? "asc" : "desc",
   };
 }
@@ -154,6 +174,23 @@ function ActiveFilterPill({ label, value, onClear }: { label: string; value: str
       <span aria-hidden>×</span>
     </button>
   );
+}
+
+function getCommercialOfferTypeLabel(type: CommercialOfferType | ""): string {
+  return COMMERCIAL_OFFER_TYPE_OPTIONS.find((option) => option.value === type)?.label ?? "Sin señal suficiente";
+}
+
+function getCommercialOfferTypeBadgeClass(type: CommercialOfferType | "unknown") {
+  if (type === "marketing") return "bg-fuchsia-100 text-fuchsia-700";
+  if (type === "software") return "bg-emerald-100 text-emerald-700";
+  if (type === "both") return "bg-violet-100 text-violet-700";
+  return "bg-slate-100 text-slate-600";
+}
+
+function formatCommercialScores(lead: LeadDashboard) {
+  const summary = lead.commercial_offers_summary;
+  if (!summary) return "Sin score comercial derivado";
+  return "MKT " + summary.marketing_score + " · SW " + summary.software_score;
 }
 
 function LeadRow({ lead }: { lead: LeadDashboard }) {
@@ -207,7 +244,15 @@ function LeadRow({ lead }: { lead: LeadDashboard }) {
             <span>Oferta sugerida</span>
             {lead.primary_offer ? <SmallPill className="bg-sky-100 text-sky-700">Filtro clave</SmallPill> : null}
           </div>
-          <p className="mt-2 text-sm font-semibold text-slate-800">{lead.primary_offer ?? "Sin oferta principal"}</p>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <p className="text-sm font-semibold text-slate-800">{lead.primary_offer ?? "Sin oferta principal"}</p>
+            {lead.commercial_offers_summary ? (
+              <SmallPill className={getCommercialOfferTypeBadgeClass(lead.commercial_offers_summary.primary_offer_type)}>
+                {getCommercialOfferTypeLabel(lead.commercial_offers_summary.primary_offer_type)}
+              </SmallPill>
+            ) : null}
+          </div>
+          <p className="mt-1 text-xs text-slate-500">{formatCommercialScores(lead)}</p>
           <p className="mt-1 text-xs text-slate-500">
             {lead.contact_ready ? "Listo para pasar a una propuesta o contacto inicial." : "Conviene validar datos de contacto antes de salir a prospectar."}
           </p>
@@ -237,6 +282,7 @@ export function LeadExplorer({ mode, initialFilters, pageSize, geoSelection, onG
   const initialTier = isFull ? readSearchParam(searchParams, "contact_tier") : initialFilters?.tier ?? "";
   const initialMinScore = isFull ? readSearchParam(searchParams, "prospect_score_gte") : initialFilters?.minScore ?? "";
   const initialOffer = isFull ? readSearchParam(searchParams, "primary_offer") : initialFilters?.primaryOffer ?? "";
+  const initialCommercialOfferType = isFull ? (readSearchParam(searchParams, "commercial_offer_type") as CommercialOfferType | "") : initialFilters?.commercialOfferType ?? "";
   const initialParentLocationKeys = isFull ? readCsvSearchParam(searchParams, "parent_location_keys") : (geoSelection?.parent_location_keys ?? []);
   const initialGridLocationKeys = isFull ? readCsvSearchParam(searchParams, "grid_location_keys") : (geoSelection?.grid_location_keys ?? []);
   const initialSortValue = isFull
@@ -254,6 +300,7 @@ export function LeadExplorer({ mode, initialFilters, pageSize, geoSelection, onG
   const [tier, setTier] = useState(initialTier);
   const [minScore, setMinScore] = useState(initialMinScore);
   const [primaryOffer, setPrimaryOffer] = useState(initialOffer);
+  const [commercialOfferType, setCommercialOfferType] = useState<CommercialOfferType | "">(initialCommercialOfferType);
   const [parentLocationKeys, setParentLocationKeys] = useState(initialParentLocationKeys);
   const [gridLocationKeys, setGridLocationKeys] = useState(initialGridLocationKeys);
   const [sortValue, setSortValue] = useState(initialSortValue || DEFAULT_SORT);
@@ -272,7 +319,7 @@ export function LeadExplorer({ mode, initialFilters, pageSize, geoSelection, onG
   const isPaging = loadingPhase === "page";
   const currentStart = total === 0 ? 0 : pageIndex * effectivePageSize + 1;
   const currentEnd = total === 0 ? 0 : pageIndex * effectivePageSize + leads.length;
-  const showLargeDatasetHint = isFull && total >= 500 && !q && !niche && !source && !tier && !minScore && !primaryOffer;
+  const showLargeDatasetHint = isFull && total >= 500 && !q && !niche && !source && !tier && !minScore && !primaryOffer && !commercialOfferType;
   const sortParams = useMemo(() => parseSortValue(sortValue), [sortValue]);
   const externalParentLocationKeysKey = (geoSelection?.parent_location_keys ?? []).join(",");
   const externalGridLocationKeysKey = (geoSelection?.grid_location_keys ?? []).join(",");
@@ -306,6 +353,7 @@ export function LeadExplorer({ mode, initialFilters, pageSize, geoSelection, onG
       if (tier) params.set("contact_tier", tier);
       if (minScore.trim()) params.set("prospect_score_gte", minScore.trim());
       if (primaryOffer.trim()) params.set("primary_offer", primaryOffer.trim());
+      if (commercialOfferType) params.set("commercial_offer_type", commercialOfferType);
       if (parentLocationKeys.length > 0) params.set("parent_location_keys", parentLocationKeys.join(","));
       if (gridLocationKeys.length > 0) params.set("grid_location_keys", gridLocationKeys.join(","));
       if (sortValue !== DEFAULT_SORT) {
@@ -318,7 +366,7 @@ export function LeadExplorer({ mode, initialFilters, pageSize, geoSelection, onG
       latestUrlRef.current = nextUrl;
       router.replace(nextUrl, { scroll: false });
     },
-    [gridLocationKeys, isFull, minScore, niche, parentLocationKeys, pathname, primaryOffer, q, router, sortParams.sort_by, sortParams.sort_direction, sortValue, source, tier]
+    [commercialOfferType, gridLocationKeys, isFull, minScore, niche, parentLocationKeys, pathname, primaryOffer, q, router, sortParams.sort_by, sortParams.sort_direction, sortValue, source, tier]
   );
 
   const load = useCallback(
@@ -335,6 +383,7 @@ export function LeadExplorer({ mode, initialFilters, pageSize, geoSelection, onG
           contact_tier: tier || undefined,
           prospect_score_gte: minScore ? Number(minScore) : undefined,
           primary_offer: primaryOffer.trim() || undefined,
+          commercial_offer_type: commercialOfferType || undefined,
           parent_location_keys: parentLocationKeys.length > 0 ? parentLocationKeys : undefined,
           grid_location_keys: gridLocationKeys.length > 0 ? gridLocationKeys : undefined,
           sort_by: sortParams.sort_by,
@@ -353,7 +402,7 @@ export function LeadExplorer({ mode, initialFilters, pageSize, geoSelection, onG
         setLoadingPhase(null);
       }
     },
-    [debouncedQ, effectivePageSize, gridLocationKeys, minScore, niche, parentLocationKeys, primaryOffer, sortParams.sort_by, sortParams.sort_direction, source, tier, token]
+    [commercialOfferType, debouncedQ, effectivePageSize, gridLocationKeys, minScore, niche, parentLocationKeys, primaryOffer, sortParams.sort_by, sortParams.sort_direction, source, tier, token]
   );
 
   useEffect(() => {
@@ -367,6 +416,7 @@ export function LeadExplorer({ mode, initialFilters, pageSize, geoSelection, onG
     const urlTier = readSearchParam(searchParams, "contact_tier");
     const urlMinScore = readSearchParam(searchParams, "prospect_score_gte");
     const urlOffer = readSearchParam(searchParams, "primary_offer");
+    const urlCommercialOfferType = readSearchParam(searchParams, "commercial_offer_type") as CommercialOfferType | "";
     const urlParentLocationKeys = readCsvSearchParam(searchParams, "parent_location_keys");
     const urlGridLocationKeys = readCsvSearchParam(searchParams, "grid_location_keys");
     const urlSortBy = readSearchParam(searchParams, "sort_by") || "created_at";
@@ -380,6 +430,7 @@ export function LeadExplorer({ mode, initialFilters, pageSize, geoSelection, onG
     if (urlTier !== tier) setTier(urlTier);
     if (urlMinScore !== minScore) setMinScore(urlMinScore);
     if (urlOffer !== primaryOffer) setPrimaryOffer(urlOffer);
+    if (urlCommercialOfferType !== commercialOfferType) setCommercialOfferType(urlCommercialOfferType);
     if (urlParentLocationKeys.join(",") !== parentLocationKeys.join(",")) setParentLocationKeys(urlParentLocationKeys);
     if (urlGridLocationKeys.join(",") !== gridLocationKeys.join(",")) setGridLocationKeys(urlGridLocationKeys);
     if (urlSort !== sortValue) setSortValue(urlSort);
@@ -387,7 +438,7 @@ export function LeadExplorer({ mode, initialFilters, pageSize, geoSelection, onG
       setPageCursors([urlCursor]);
       setPageIndex(0);
     }
-  }, [currentCursor, gridLocationKeys, isFull, minScore, niche, parentLocationKeys, pathname, primaryOffer, q, searchParams, sortValue, source, tier]);
+  }, [commercialOfferType, currentCursor, gridLocationKeys, isFull, minScore, niche, parentLocationKeys, pathname, primaryOffer, q, searchParams, sortValue, source, tier]);
 
   useEffect(() => {
     updateUrl(currentCursor);
@@ -403,6 +454,7 @@ export function LeadExplorer({ mode, initialFilters, pageSize, geoSelection, onG
       tier,
       minScore: minScore.trim(),
       primaryOffer: primaryOffer.trim(),
+      commercialOfferType,
       parentLocationKeys: parentLocationKeys.join(","),
       gridLocationKeys: gridLocationKeys.join(","),
       sortValue,
@@ -422,7 +474,7 @@ export function LeadExplorer({ mode, initialFilters, pageSize, geoSelection, onG
           : "refresh";
 
     void load(currentCursor, phase);
-  }, [currentCursor, debouncedQ, gridLocationKeys, load, minScore, niche, parentLocationKeys, primaryOffer, sortValue, source, tier, token]);
+  }, [commercialOfferType, currentCursor, debouncedQ, gridLocationKeys, load, minScore, niche, parentLocationKeys, primaryOffer, sortValue, source, tier, token]);
 
   const activeFilters: ActiveFilter[] = [
     q.trim() ? { key: "q", label: "Buscar", value: q.trim(), clear: () => setQ("") } : null,
@@ -431,6 +483,7 @@ export function LeadExplorer({ mode, initialFilters, pageSize, geoSelection, onG
     tier ? { key: "tier", label: "Tier", value: TIER_OPTIONS.find((option) => option.value === tier)?.label ?? tier, clear: () => setTier("") } : null,
     minScore.trim() ? { key: "score", label: "Score mín.", value: minScore.trim(), clear: () => setMinScore("") } : null,
     primaryOffer.trim() ? { key: "offer", label: "Oferta", value: primaryOffer.trim(), clear: () => setPrimaryOffer("") } : null,
+    commercialOfferType ? { key: "commercial-offer-type", label: "Tipo comercial", value: getCommercialOfferTypeLabel(commercialOfferType), clear: () => setCommercialOfferType("") } : null,
     parentLocationKeys.length > 0 || gridLocationKeys.length > 0
       ? {
           key: "geo",
@@ -453,6 +506,7 @@ export function LeadExplorer({ mode, initialFilters, pageSize, geoSelection, onG
     setTier("");
     setMinScore("");
     setPrimaryOffer("");
+    setCommercialOfferType("");
     setParentLocationKeys([]);
     setGridLocationKeys([]);
     onGeoSelectionClear?.();
@@ -463,10 +517,11 @@ export function LeadExplorer({ mode, initialFilters, pageSize, geoSelection, onG
   function applyPreset(presetId: string) {
     const preset = PRESETS.find((entry) => entry.id === presetId);
     if (!preset) return;
-    const values = preset.apply() as Partial<{ minScore: string; tier: string; source: string; sortValue: string }>;
+    const values = preset.apply() as Partial<{ minScore: string; tier: string; source: string; commercialOfferType: CommercialOfferType; sortValue: string }>;
     if (values.minScore !== undefined) setMinScore(values.minScore);
     if (values.tier !== undefined) setTier(values.tier);
     if (values.source !== undefined) setSource(values.source);
+    if (values.commercialOfferType !== undefined) setCommercialOfferType(values.commercialOfferType);
     if (values.sortValue !== undefined) setSortValue(values.sortValue);
     resetToFirstPage();
   }
@@ -488,7 +543,7 @@ export function LeadExplorer({ mode, initialFilters, pageSize, geoSelection, onG
 
   const filtersContent = (
     <div className="space-y-4">
-      <div className={cn("grid gap-3", isFull ? "xl:grid-cols-[1.4fr,1fr,1fr,1fr]" : "md:grid-cols-2 xl:grid-cols-4")}>
+      <div className={cn("grid gap-3", isFull ? "xl:grid-cols-[1.4fr,1fr,1fr,1fr,1fr]" : "md:grid-cols-2 xl:grid-cols-5")}>
         <div>
           <div className="mb-1.5 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
             Buscar
@@ -530,6 +585,21 @@ export function LeadExplorer({ mode, initialFilters, pageSize, geoSelection, onG
             }}
             className="w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500"
           />
+        </div>
+        <div>
+          <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Tipo de oferta comercial</div>
+          <select
+            value={commercialOfferType}
+            onChange={(event) => {
+              setCommercialOfferType(event.target.value as CommercialOfferType | "");
+              resetToFirstPage();
+            }}
+            className="w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500"
+          >
+            {COMMERCIAL_OFFER_TYPE_OPTIONS.map((option) => (
+              <option key={option.value || "all-commercial"} value={option.value}>{option.label}</option>
+            ))}
+          </select>
         </div>
         <div>
           <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Ordenar por</div>
@@ -624,7 +694,7 @@ export function LeadExplorer({ mode, initialFilters, pageSize, geoSelection, onG
   ) : leads.length === 0 ? (
     <EmptyPanel
       title={activeFilters.length > 0 ? "No hay leads para esta combinación de filtros" : "Todavía no hay leads para explorar"}
-      description={activeFilters.length > 0 ? "Probá bajar el score mínimo, cambiar la fuente o volver a todos los tiers." : "Cuando entren registros, esta vista va a convertirse en la cola principal de trabajo."}
+      description={activeFilters.length > 0 ? "Probá bajar el score mínimo, cambiar la fuente, ajustar el tipo comercial o volver a todos los tiers." : "Cuando entren registros, esta vista va a convertirse en la cola principal de trabajo."}
       action={activeFilters.length > 0 ? <button type="button" onClick={clearAllFilters} className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-sm font-medium text-sky-700">Limpiar filtros</button> : undefined}
     />
   ) : (
@@ -684,7 +754,7 @@ export function LeadExplorer({ mode, initialFilters, pageSize, geoSelection, onG
 
       {showLargeDatasetHint ? (
         <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-          Dataset grande. Empezá por una cola sugerida o filtrá por fuente, tier, score u oferta para acelerar el barrido operativo.
+          Dataset grande. Empezá por una cola sugerida o filtrá por fuente, tier, score, oferta o tipo comercial para acelerar el barrido operativo.
         </div>
       ) : null}
 

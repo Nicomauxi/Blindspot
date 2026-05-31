@@ -9,6 +9,7 @@
   "main": "./dist/index.js",
   "scripts": {
     "dev": "node --env-file=.env --import tsx/esm src/cli/index.ts",
+    "start:core": "node --env-file=.env --import tsx/esm src/start.ts",
     "build": "tsup",
     "start": "node dist/index.js",
     "test": "vitest run",

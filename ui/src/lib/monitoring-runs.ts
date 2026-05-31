@@ -36,6 +36,8 @@ function humanizePhaseKey(value: string): string {
 
 function inferPhaseStatus(result: Record<string, unknown>): string {
   const explicitStatus = asString(result["status"]);
+  // Normalize "ok" (used by the pipeline executor) to "completed" for UI consistency
+  if (explicitStatus === "ok") return "completed";
   if (explicitStatus) return explicitStatus;
   if (asString(result["completed_at"])) return "completed";
   if (asString(result["started_at"])) return "running";

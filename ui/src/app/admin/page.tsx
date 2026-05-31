@@ -8,9 +8,13 @@ import {
   getOutreachStats,
   getStatsOverview,
   listDiscoveryJobs,
+  listGeoZones,
+  listNicheAliasGroups,
   listPipelineRuns,
+  type DiscoveryGeoZone,
   type DiscoveryJob,
   type DiscoveryLeadDensityFilters,
+  type NicheAliasGroup,
   type DiscoveryMapDensityLocation,
   type PipelineRun,
   type StatsOverview,
@@ -21,7 +25,10 @@ import { useAuthStore } from "@/lib/auth-store";
 import { formatRelative } from "@/lib/utils";
 import { AdminPageLayout, SectionCard, StatCard } from "@/components/admin-shell";
 import { LeadExplorer } from "@/components/lead-explorer";
-import { LocationDensityMap } from "@/components/location-density-map";
+import { LeadReviewMap } from "@/components/lead-review-map";
+import { areLeadDensityFiltersEqual, buildLeadExplorerGeoSelection, buildZoneLeadRequest } from "@/lib/location-density-map";
+
+const DEFAULT_DENSITY_FILTERS: DiscoveryLeadDensityFilters = { prospect_score_gte: 0, limit: 4000 };
 
 function aggregateOutreach(rows: StatsOutreachRow[]) {
   return rows.reduce(
@@ -31,6 +38,13 @@ function aggregateOutreach(rows: StatsOutreachRow[]) {
     },
     {} as Record<string, number>
   );
+}
+
+function describeZoneSelection(zoneIds: string[] | undefined, zones: DiscoveryGeoZone[]): string | null {
+  if (!zoneIds || zoneIds.length === 0) return null;
+  const labels = zoneIds.map((zoneId) => zones.find((zone) => zone.zone_id === zoneId)?.label ?? zoneId);
+  if (labels.length === 1) return labels[0] ?? null;
+  return `${labels.length} zonas`;
 }
 
 export default function AdminHomePage() {
@@ -45,11 +59,22 @@ export default function AdminHomePage() {
   const [loading, setLoading] = useState(true);
   const [densityLocations, setDensityLocations] = useState<DiscoveryMapDensityLocation[]>([]);
   const [densityLoading, setDensityLoading] = useState(false);
-  const [densityFilters, setDensityFilters] = useState<DiscoveryLeadDensityFilters>({ prospect_score_gte: 0, limit: 4000 });
-  const [selectedLocationKey, setSelectedLocationKey] = useState<string | null>(null);
+  const [densityError, setDensityError] = useState<string | null>(null);
+  const [draftDensityFilters, setDraftDensityFilters] = useState<DiscoveryLeadDensityFilters>(DEFAULT_DENSITY_FILTERS);
+  const [appliedDensityFilters, setAppliedDensityFilters] = useState<DiscoveryLeadDensityFilters>(DEFAULT_DENSITY_FILTERS);
+  const [draftSelectedLocationKey, setDraftSelectedLocationKey] = useState<string | null>(null);
+  const [appliedSelectedLocationKey, setAppliedSelectedLocationKey] = useState<string | null>(null);
+  const [appliedLocationSelection, setAppliedLocationSelection] = useState<Pick<DiscoveryMapDensityLocation, "location_key" | "location_label" | "parent_location_key"> | null>(null);
+  const [zoneOptions, setZoneOptions] = useState<DiscoveryGeoZone[]>([]);
+  const [zoneSearch, setZoneSearch] = useState("");
+  const [zoneOptionsLoading, setZoneOptionsLoading] = useState(false);
+  const [nicheGroups, setNicheGroups] = useState<NicheAliasGroup[]>([]);
+  const [nicheGroupsError, setNicheGroupsError] = useState<string | null>(null);
+  const [zoneOptionsError, setZoneOptionsError] = useState<string | null>(null);
   const [zoneLeads, setZoneLeads] = useState<ZoneLead[] | null>(null);
   const [zoneLeadsTotal, setZoneLeadsTotal] = useState(0);
   const [zoneLeadsLoading, setZoneLeadsLoading] = useState(false);
+  const [zoneLeadsError, setZoneLeadsError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!token) return;
@@ -75,45 +100,125 @@ export default function AdminHomePage() {
   useEffect(() => {
     if (!token || role !== "admin") return;
     setDensityLoading(true);
-    getLeadDensity(token, densityFilters)
-      .then((res) => setDensityLocations(res.data.locations))
-      .catch(() => {})
+    getLeadDensity(token, draftDensityFilters)
+      .then((res) => {
+        setDensityLocations(res.data.locations);
+        setDensityError(null);
+        setDraftSelectedLocationKey((current) => res.data.locations.some((location) => location.location_key === current) ? current : null);
+      })
+      .catch((err) => {
+        setDensityLocations([]);
+        setDensityError(err instanceof Error ? err.message : "No se pudo cargar el mapa de leads.");
+        setDraftSelectedLocationKey(null);
+      })
       .finally(() => setDensityLoading(false));
-  }, [densityFilters, token, role]);
+  }, [draftDensityFilters, token, role]);
 
-  async function handleDrillDown(location: DiscoveryMapDensityLocation) {
+  useEffect(() => {
     if (!token) return;
-    setSelectedLocationKey(location.location_key);
-    setZoneLeadsLoading(true);
-    try {
-      const [, gridLocationKey] = location.location_key.split("::", 2);
-      const response = await getZoneLeads(token, {
-        location_key: location.location_key,
-        parent_location_key: location.parent_location_key,
-        ...(gridLocationKey ? { grid_location_key: gridLocationKey } : {}),
-        limit: 200,
-      });
-      setZoneLeads(response.data);
-      setZoneLeadsTotal(response.total);
-    } catch {
-      setZoneLeads([]);
+    void listNicheAliasGroups(token)
+      .then((response) => { setNicheGroups(response.data); setNicheGroupsError(null); })
+      .catch(() => { setNicheGroups([]); setNicheGroupsError("No se pudo cargar la configuración de nichos. Algunos filtros pueden no estar disponibles."); });
+  }, [token]);
+
+  useEffect(() => {
+    if (!token) return;
+    setZoneOptionsLoading(true);
+    const timeout = window.setTimeout(() => {
+      void listGeoZones(token, { q: zoneSearch || undefined, limit: 60 })
+        .then((response) => {
+          setZoneOptions(response.data);
+          setZoneOptionsError(null);
+        })
+        .catch((err) => {
+          setZoneOptions([]);
+          setZoneOptionsError(err instanceof Error ? err.message : "No se pudieron cargar las zonas.");
+        })
+        .finally(() => setZoneOptionsLoading(false));
+    }, 180);
+
+    return () => {
+      window.clearTimeout(timeout);
+      setZoneOptionsLoading(false);
+    };
+  }, [token, zoneSearch]);
+
+  const selectedLocation = draftSelectedLocationKey
+    ? densityLocations.find((location) => location.location_key === draftSelectedLocationKey) ?? null
+    : null;
+  useEffect(() => {
+    if (!token || !selectedLocation) {
+      setZoneLeads(null);
       setZoneLeadsTotal(0);
-    } finally {
-      setZoneLeadsLoading(false);
+      return;
     }
+
+    setZoneLeads([]);
+    setZoneLeadsTotal(0);
+    setZoneLeadsLoading(true);
+    void getZoneLeads(token, { ...buildZoneLeadRequest(selectedLocation), ...draftDensityFilters })
+      .then((response) => {
+        setZoneLeads(response.data);
+        setZoneLeadsTotal(response.total);
+        setZoneLeadsError(null);
+      })
+      .catch((err) => {
+        setZoneLeads([]);
+        setZoneLeadsTotal(0);
+        setZoneLeadsError(err instanceof Error ? err.message : "No se pudieron cargar los leads de la zona seleccionada.");
+      })
+      .finally(() => setZoneLeadsLoading(false));
+  }, [draftDensityFilters, selectedLocation, token]);
+
+  function handleDrillDown(location: DiscoveryMapDensityLocation) {
+    setDraftSelectedLocationKey(location.location_key);
   }
 
-  const selectedLocation = selectedLocationKey
-    ? densityLocations.find((location) => location.location_key === selectedLocationKey) ?? null
-    : null;
-  const selectedGridLocationKey = selectedLocationKey?.split("::", 2)[1] ?? null;
-  const geoSelection = selectedLocation && selectedGridLocationKey
-    ? {
-        label: selectedLocation.location_label,
-        parent_location_keys: [selectedLocation.parent_location_key],
-        grid_location_keys: [selectedGridLocationKey],
-      }
-    : undefined;
+  function applyMapSelection() {
+    setAppliedDensityFilters(draftDensityFilters);
+    setAppliedSelectedLocationKey(draftSelectedLocationKey);
+    setAppliedLocationSelection(selectedLocation
+      ? {
+          location_key: selectedLocation.location_key,
+          location_label: selectedLocation.location_label,
+          parent_location_key: selectedLocation.parent_location_key,
+        }
+      : null);
+  }
+
+  function cancelMapSelection() {
+    setDraftDensityFilters(appliedDensityFilters);
+    setDraftSelectedLocationKey(appliedSelectedLocationKey);
+  }
+
+  function clearAppliedAndDraftSelection() {
+    setDraftSelectedLocationKey(null);
+    setAppliedSelectedLocationKey(null);
+    setAppliedLocationSelection(null);
+    setDraftDensityFilters((current) => ({ ...current, zone_ids: undefined }));
+    setAppliedDensityFilters((current) => ({ ...current, zone_ids: undefined }));
+    setZoneLeads(null);
+    setZoneLeadsTotal(0);
+  }
+
+  function clearMapSelection() {
+    setDraftDensityFilters(DEFAULT_DENSITY_FILTERS);
+    setAppliedDensityFilters(DEFAULT_DENSITY_FILTERS);
+    clearAppliedAndDraftSelection();
+    setZoneSearch("");
+  }
+
+  const appliedZoneLabel = describeZoneSelection(appliedDensityFilters.zone_ids, zoneOptions);
+  const draftZoneLabel = describeZoneSelection(draftDensityFilters.zone_ids, zoneOptions);
+  const geoSelection = appliedLocationSelection
+    ? buildLeadExplorerGeoSelection(appliedLocationSelection)
+    : appliedDensityFilters.zone_ids?.length
+      ? {
+          label: appliedZoneLabel ?? "Zona geográfica",
+          parent_location_keys: appliedDensityFilters.zone_ids,
+        }
+      : undefined;
+  const hasPendingMapChanges = !areLeadDensityFiltersEqual(draftDensityFilters, appliedDensityFilters) || draftSelectedLocationKey !== appliedSelectedLocationKey;
 
   const responses = (outreachStats.responded ?? 0) + (outreachStats.interested ?? 0) + (outreachStats.closed_won ?? 0);
 
@@ -121,7 +226,7 @@ export default function AdminHomePage() {
     <AdminPageLayout
       eyebrow="Centro de mando"
       title="Inicio"
-      description="Entrá por prioridades comerciales: leads accionables y alertas técnicas visibles sin cambiar de pantalla."
+      description="Entrá por prioridades comerciales: leads accionables y contexto operativo sin salir de Inicio."
       actions={
         <>
           <Link href="/admin/leads?prospect_score_gte=70" className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-sm font-medium text-sky-700 transition-colors hover:bg-sky-100">
@@ -134,6 +239,9 @@ export default function AdminHomePage() {
       }
     >
       {error ? <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</div> : null}
+      {nicheGroupsError ? (
+        <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm text-amber-700">{nicheGroupsError}</div>
+      ) : null}
 
       <div className="grid gap-4 md:grid-cols-2">
         <StatCard label="Leads visibles" value={loading ? "..." : stats?.total_leads.toLocaleString("es-UY") ?? 0} hint="Inventario actual del usuario en el panel" />
@@ -144,35 +252,37 @@ export default function AdminHomePage() {
         <SectionCard
           title="Mapa de leads"
           description="Mismo mapa y mismos controles que Discovery. Acá la selección sirve para acotar el universo comercial que trabajás en Inicio."
-          actions={
-            <Link href="/admin/discovery" className="text-xs font-medium text-sky-600 hover:underline">
-              Vista completa →
-            </Link>
-          }
         >
-          <LocationDensityMap
+          <LeadReviewMap
             locations={densityLocations}
-            selectedLocationKey={selectedLocationKey}
-            onSelect={(location) => setSelectedLocationKey(location.location_key)}
+            loadError={densityError}
+            selectedLocationKey={draftSelectedLocationKey}
+            onSelect={(location) => setDraftSelectedLocationKey(location.location_key)}
             onSelectWithDrill={handleDrillDown}
-            filters={densityFilters}
-            onFiltersChange={setDensityFilters}
+            filters={draftDensityFilters}
+            onFiltersChange={setDraftDensityFilters}
             loading={densityLoading}
+            zones={zoneOptions}
+            zoneSearch={zoneSearch}
+            onZoneSearchChange={setZoneSearch}
+            zonesLoading={zoneOptionsLoading}
+            zonesError={zoneOptionsError}
             zoneLeads={zoneLeads}
             zoneLeadsTotal={zoneLeadsTotal}
             zoneLeadsLoading={zoneLeadsLoading}
+            zoneLeadsError={zoneLeadsError}
+            nicheGroups={nicheGroups}
+            allowIconEditing={role === "admin"}
+            pendingChanges={hasPendingMapChanges}
+            pendingSelectionLabel={selectedLocation?.location_label ?? draftZoneLabel}
+            appliedSelectionLabel={appliedLocationSelection?.location_label ?? appliedZoneLabel}
+            onApplySelection={applyMapSelection}
+            onCancelSelection={cancelMapSelection}
+            onClearSelection={clearMapSelection}
           />
         </SectionCard>
       ) : null}
 
-      {(runs.some((run) => run.status === "failed" || run.status === "partial") || jobs.some((job) => job.status === "failed")) ? (
-        <SectionCard title="Alertas" description="Solo lo que cambia decisión o requiere intervención.">
-          <div className="space-y-3 text-sm">
-            {runs.some((run) => run.status === "failed" || run.status === "partial") ? <AlertRow tone="warn" title="Runs recientes con incidencias" description="Revisá Automatizaciones o Calidad antes de confiar en todo el dataset." /> : null}
-            {jobs.some((job) => job.status === "failed") ? <AlertRow tone="warn" title="Discovery con fallas" description="Hay jobs de captación que no terminaron correctamente." /> : null}
-          </div>
-        </SectionCard>
-      ) : null}
 
       <div className="grid gap-4 xl:grid-cols-[1.35fr,0.65fr]">
         <SectionCard title="Leads para revisar" description="La misma lógica del Lead Explorer, embebida para abrir y filtrar sin salir de Inicio.">
@@ -180,11 +290,7 @@ export default function AdminHomePage() {
             mode="embedded"
             initialFilters={{ minScore: "55", sortValue: "prospect_score:desc" }}
             geoSelection={geoSelection}
-            onGeoSelectionClear={() => {
-              setSelectedLocationKey(null);
-              setZoneLeads(null);
-              setZoneLeadsTotal(0);
-            }}
+            onGeoSelectionClear={clearAppliedAndDraftSelection}
             pageSize={10}
           />
         </SectionCard>
@@ -227,11 +333,3 @@ export default function AdminHomePage() {
   );
 }
 
-function AlertRow({ tone, title, description }: { tone: "warn" | "info"; title: string; description: string }) {
-  return (
-    <div className={`rounded-xl border px-3 py-3 ${tone === "warn" ? "border-amber-200 bg-amber-50" : "border-sky-200 bg-sky-50"}`}>
-      <div className="text-sm font-medium text-slate-900">{title}</div>
-      <p className="mt-1 text-sm text-slate-600">{description}</p>
-    </div>
-  );
-}

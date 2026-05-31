@@ -90,7 +90,7 @@ export async function costsRoutes(app: FastifyInstance): Promise<void> {
   app.get("/admin/costs/overview", { preHandler: requireAdmin }, async (request, reply) => {
     const db = getDb();
     const { month, start, end } = parseMonthRange((request.query as CostQuery | undefined)?.month);
-
+    try {
     const [configRes, llmRes, runsRes, leadsRes] = await Promise.all([
       db
         .from("pipeline_config")
@@ -295,11 +295,15 @@ export async function costsRoutes(app: FastifyInstance): Promise<void> {
         ts: new Date().toISOString(),
       },
     });
+    } catch (err) {
+      request.log.error({ err }, "Failed to build costs overview");
+      return reply.status(500).send({ error: "Database error", error_code: "db_error" });
+    }
   });
 
-  app.get("/admin/costs/history", { preHandler: requireAdmin }, async (_request, reply) => {
+  app.get("/admin/costs/history", { preHandler: requireAdmin }, async (request, reply) => {
     const db = getDb();
-
+    try {
     const [configRes, llmRes, runsRes, leadsRes] = await Promise.all([
       db
         .from("pipeline_config")
@@ -376,5 +380,9 @@ export async function costsRoutes(app: FastifyInstance): Promise<void> {
         monthly,
       },
     });
+    } catch (err) {
+      request.log.error({ err }, "Failed to build costs history");
+      return reply.status(500).send({ error: "Database error", error_code: "db_error" });
+    }
   });
 }

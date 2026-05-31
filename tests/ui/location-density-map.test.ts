@@ -1,12 +1,26 @@
+import fs from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { buildDiscoveryGeoFilterQuery } from "../../ui/src/lib/api";
 import {
+  NICHE_MARKER_ICON_OPTIONS,
+  buildComposerGeoSelection,
   buildLeadExplorerGeoHref,
+  buildZoneLeadRequest,
   computeLocationCentroid,
   countLocationPoints,
   filterAndSortLocations,
   parseGranularLocationKey,
+  resolveCanonicalNiche,
+  resolveLeadMarkerIcon,
 } from "../../ui/src/lib/location-density-map";
-import type { DiscoveryMapDensityLocation } from "../../ui/src/lib/api";
+import type { DiscoveryMapDensityLocation, NicheAliasGroup } from "../../ui/src/lib/api";
+
+const repoRoot = path.resolve(__dirname, "../..");
+
+const nicheGroups: NicheAliasGroup[] = [
+  { id: "niche-1", canonical: "restaurant", aliases: ["restaurante", "parrilla"], created_at: "2026-05-27T00:00:00Z", updated_at: "2026-05-27T00:00:00Z" },
+];
 
 const locations: DiscoveryMapDensityLocation[] = [
   {
@@ -91,5 +105,58 @@ describe("location density map helpers", () => {
     expect(buildLeadExplorerGeoHref(locations[0]!)).toBe(
       "/admin/leads?parent_location_keys=montevideo-centro&grid_location_keys=a"
     );
+  });
+
+  it("serializes the shared geo filter contract consistently for density and zone drilldown requests", () => {
+    const query = buildDiscoveryGeoFilterQuery({
+      source: ["yelu", "osm"],
+      niche: "restaurant",
+      prospect_score_gte: 70,
+      contact_tier: ["A", "B"],
+      gps_source: ["google"],
+      zone_ids: ["montevideo", "pocitos"],
+      limit: 30,
+    });
+
+    expect(query.toString()).toBe("source=yelu%2Cosm&niche=restaurant&prospect_score_gte=70&contact_tier=A%2CB&gps_source=google&zone_ids=montevideo%2Cpocitos&limit=30");
+  });
+
+  it("reuses the same shared geo contracts for composer prefill and zone drilldown", () => {
+    expect(buildComposerGeoSelection(locations[0]!)).toEqual({
+      label: "Montevideo Centro · Cuadrícula -34.91 / -56.19",
+      parent_location_keys: ["montevideo-centro"],
+      grid_location_keys: ["a"],
+    });
+    expect(buildZoneLeadRequest(locations[0]!)).toEqual({
+      location_key: "montevideo-centro::a",
+      parent_location_key: "montevideo-centro",
+      grid_location_key: "a",
+      limit: 200,
+    });
+  });
+
+  it("resolves canonical niches and marker icons consistently", () => {
+    expect(resolveCanonicalNiche("restaurante", nicheGroups)).toBe("restaurant");
+    expect(resolveLeadMarkerIcon({ niche: "restaurante" }, nicheGroups, {}).key).toBe("food");
+    expect(resolveLeadMarkerIcon({ niche: "restaurante" }, nicheGroups, { restaurant: "beauty" }).key).toBe("beauty");
+    expect(NICHE_MARKER_ICON_OPTIONS.some((option) => option.key === "automotive")).toBe(true);
+  });
+
+  it("keeps both screens mounted on the same shared cartographic base via thin wrappers", () => {
+    const leadPage = fs.readFileSync(path.join(repoRoot, "ui/src/app/admin/page.tsx"), "utf8");
+    const discoveryPage = fs.readFileSync(path.join(repoRoot, "ui/src/app/admin/discovery/page.tsx"), "utf8");
+    const leadWrapper = fs.readFileSync(path.join(repoRoot, "ui/src/components/lead-review-map.tsx"), "utf8");
+    const discoveryWrapper = fs.readFileSync(path.join(repoRoot, "ui/src/components/discovery-context-map.tsx"), "utf8");
+
+    expect(leadPage).toContain('import { LeadReviewMap } from "@/components/lead-review-map";');
+    expect(leadPage).toContain("<LeadReviewMap");
+    expect(discoveryPage).toContain('import { DiscoveryContextMap } from "@/components/discovery-context-map";');
+    expect(discoveryPage).toContain("<DiscoveryContextMap");
+    expect(leadWrapper).toContain('module.LocationDensityMapBase');
+    expect(leadWrapper).toContain('ssr: false');
+    expect(leadWrapper).toContain('variant="lead-review"');
+    expect(discoveryWrapper).toContain('module.LocationDensityMapBase');
+    expect(discoveryWrapper).toContain('ssr: false');
+    expect(discoveryWrapper).toContain('variant="discovery-context"');
   });
 });

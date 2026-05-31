@@ -34,6 +34,8 @@ function resolveAllowedDevOrigins(): string[] {
 }
 
 const nextConfig: NextConfig = {
+  // Keep dev and prod outputs isolated so `next build` cannot break a running `next dev` session.
+  distDir: process.env["NODE_ENV"] === "development" ? ".next-dev" : ".next",
   // Allow dev asset requests from localhost and the machine's LAN IPv4 addresses.
   allowedDevOrigins: resolveAllowedDevOrigins(),
   async rewrites() {
