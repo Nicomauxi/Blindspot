@@ -11,16 +11,16 @@ const modules = [
     text: "Es el espacio principal para entender, filtrar, priorizar y abrir oportunidades antes de contactar.",
   },
   {
-    title: "Acciones",
-    text: "Concentra el seguimiento comercial: outreach, respuestas y outcomes por lead.",
+    title: "CRM",
+    text: "Concentra el seguimiento comercial vigente por etapas, owner y timeline de cada oportunidad.",
   },
   {
-    title: "Captación",
-    text: "Controla cómo entran nuevos leads al sistema y cómo corre la automatización detrás del inventario.",
+    title: "Discovery",
+    text: "Controla cómo entran nuevos leads al sistema y cómo se preparan jobs, recomendaciones y refresh del inventario.",
   },
   {
-    title: "Admin",
-    text: "Agrupa salud, costos, calidad, usuarios y auditoría. Es soporte operativo, no la entrada principal al trabajo comercial.",
+    title: "Operaciones y Plataforma",
+    text: "Agrupa pipeline, monitoreo, procesos, costos, calidad, usuarios, auditoría e importaciones. Es soporte operativo, no la entrada principal al trabajo comercial.",
   },
 ];
 
@@ -55,8 +55,8 @@ export default function HelpPage() {
             <li><span className="font-medium text-slate-900">1. Captar:</span> usar Discovery o el pipeline para sumar y refrescar leads.</li>
             <li><span className="font-medium text-slate-900">2. Entender:</span> abrir Leads para ver score, tier, urgencia, owner group y estado inferido.</li>
             <li><span className="font-medium text-slate-900">3. Priorizar:</span> empezar por hot leads, tiers altos y casos con contacto listo.</li>
-            <li><span className="font-medium text-slate-900">4. Accionar:</span> generar propuesta, registrar outreach y seguir outcomes desde Acciones.</li>
-            <li><span className="font-medium text-slate-900">5. Corregir:</span> si baja la calidad de datos o falla la automatización, revisar Admin.</li>
+            <li><span className="font-medium text-slate-900">4. Accionar:</span> iniciar seguimiento, mover etapas y registrar notas/outcomes desde CRM.</li>
+            <li><span className="font-medium text-slate-900">5. Corregir:</span> si baja la calidad de datos o falla la automatización, revisar Discovery, Operaciones o Plataforma según el caso.</li>
           </ol>
         </SectionCard>
 
@@ -67,8 +67,8 @@ export default function HelpPage() {
           <div className="space-y-3 text-sm text-slate-600">
             <ShortcutRow href="/admin/leads?prospect_score_gte=70" label="Hot leads" text="Priorizar oportunidades con score alto." />
             <ShortcutRow href="/admin/leads?contact_tier=A" label="Tier A" text="Trabajar contactos más fuertes primero." />
-            <ShortcutRow href="/admin/crm" label="Acciones" text="Seguir respuestas, outcomes y ventas." />
-            <ShortcutRow href="/admin/discovery" label="Captación" text="Ver si están entrando leads nuevos o si hay jobs fallidos." />
+            <ShortcutRow href="/admin/crm" label="CRM" text="Seguir etapas, notas, outcomes y ownership comercial." />
+            <ShortcutRow href="/admin/discovery" label="Discovery" text="Ver si están entrando leads nuevos o si hay jobs fallidos." />
           </div>
         </SectionCard>
       </div>

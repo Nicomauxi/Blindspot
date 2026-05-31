@@ -8,6 +8,14 @@ Blindspot detecta negocios locales con reputación offline fuerte y brechas digi
 
 El stack real usa Supabase/Postgres local, discovery multi-source, enriquecimiento heurístico/social, scoring v2, buyer scores, campañas y panel admin.
 
+## Estructura del repositorio
+
+- `src/`: CLI y pipeline principal
+- `api/`: API Fastify y scheduler embebible
+- `ui/`: panel Next.js
+- `supabase/`: migraciones y configuración local
+- `tests/`: pruebas de API y discovery
+
 ## Requisitos
 
 - Node.js 20+
@@ -85,16 +93,16 @@ CLI / comandos manuales:
 pnpm dev -- --help
 ```
 
-API:
+API local:
 
 ```bash
-API_JWT_SECRET=tu_secreto_largo pnpm --dir api start
+pnpm --dir api dev
 ```
 
-UI:
+UI local:
 
 ```bash
-NEXT_PUBLIC_API_URL=http://127.0.0.1:3001 pnpm --dir ui dev
+pnpm --dir ui dev
 ```
 
 URLs locales:
@@ -212,12 +220,15 @@ El `health` valida también que `lead_dashboard` tenga el schema esperado. Si `i
 
 ## Levantar el entorno local
 
-Procesos que viven por separado:
+Modo real por defecto:
 
 1. Supabase local
-2. API HTTP (`api/`)
+2. API HTTP (`api/`) con scheduler embebido
 3. UI Next (`ui/`)
-4. Core pipeline persistente (`src/start.ts`): scheduler, polling y `pg_notify`
+
+El scheduler/pipeline corre embebido en la API cuando `EMBED_SCHEDULER=true` (modo operativo normal).
+`src/start.ts` sigue existiendo como modo opcional/manual para correr el core separado, pero no es el
+flujo principal de desarrollo local.
 
 Secuencia recomendada desde la raíz del repo:
 

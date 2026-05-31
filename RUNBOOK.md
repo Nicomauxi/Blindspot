@@ -2,49 +2,42 @@
 
 ## Arquitectura de procesos
 
-Blindspot requiere **tres procesos** corriendo simultáneamente:
+El modo operativo por defecto es **single-process**: el PipelineScheduler corre **embebido**
+en la API (`EMBED_SCHEDULER=true`, ya presente en `.env.example`). Solo hacen falta **dos procesos**:
 
 | Proceso | Comando | Responsabilidad |
 |---------|---------|----------------|
-| **core** | `pnpm dev` (raíz) → `src/start.ts` | PipelineScheduler (drena `pending` runs y `queued` discovery jobs), pg_notify listener |
-| **api** | `pnpm --dir api dev` → `api/src/server.ts` | HTTP API, backup scheduler |
-| **ui** | `pnpm --dir ui dev` → Next.js dev server | Frontend |
+| **api** | `pnpm --dir api dev` → `api/src/server.ts` (puerto 3001) | HTTP API + PipelineScheduler embebido (drena `pending` runs y `queued` discovery jobs, pg_notify listener) + backup scheduler |
+| **ui** | `pnpm --dir ui dev` → Next.js dev server (puerto 3000) | Frontend |
 
-> **Importante**: si solo corre la API sin el core, los pipeline runs quedan en `pending` para siempre y los discovery jobs no se procesan. Esto genera el error "A pipeline run is already in progress" indefinidamente.
+El scheduler se inicia/reinicia desde la UI en **Operaciones → Procesos**.
+
+> **Importante**: si la API arranca sin `EMBED_SCHEDULER=true` y no hay un proceso core
+> aparte, los pipeline runs quedan en `pending` y los discovery jobs no se procesan,
+> generando el error "A pipeline run is already in progress" indefinidamente.
 
 ## Arranque para demo / desarrollo
 
 ```bash
-# Opción 1 — Script todo-en-uno (recomendado para demo)
-./scripts/dev-all.sh
-
-# Opción 2 — Terminales separadas
-# Terminal 1 (core — PipelineScheduler):
-pnpm start:core       # equivalente a: node --env-file=.env --import tsx/esm src/start.ts
-# ⚠️  NO usar 'pnpm dev' para el core — eso arranca la CLI (src/cli/index.ts), no el scheduler.
-
-# Terminal 2 (api):
-pnpm --dir api dev
-
-# Terminal 3 (ui):
-pnpm --dir ui dev
-```
-
-### Modo single-process (recomendado para demo)
-
-Agregar `EMBED_SCHEDULER=true` al `.env`:
-
-```bash
-echo "EMBED_SCHEDULER=true" >> .env
-```
-
-Con eso, solo necesitás:
-```bash
+# Recomendado: dos terminales con scheduler embebido
 pnpm --dir api dev   # API + PipelineScheduler embebido
 pnpm --dir ui dev    # UI
+
+# Alternativa: script todo-en-uno
+./scripts/dev-all.sh
 ```
 
-El scheduler se puede iniciar/reiniciar desde la UI en **Operaciones → Procesos → Core (Scheduler)**.
+### Modo legacy — core como proceso separado (opcional)
+
+Si se quiere correr el scheduler fuera de la API, poner `EMBED_SCHEDULER=false` y levantar
+el core aparte:
+
+```bash
+pnpm start:core       # node --env-file=.env --import tsx/esm src/start.ts
+# ⚠️  NO usar 'pnpm dev' para el core — eso arranca la CLI (src/cli/index.ts), no el scheduler.
+pnpm --dir api dev
+pnpm --dir ui dev
+```
 
 ### Variables de entorno requeridas (`.env`)
 
@@ -71,14 +64,14 @@ docker exec -i supabase_db_gap-radar psql -U postgres -d postgres \
 ## Troubleshooting
 
 ### "A pipeline run is already in progress" (409)
-- **Causa**: hay un run en estado `pending` colgado (el worker no estaba corriendo).
-- **Solución**: arrancar el proceso **core** (`pnpm dev`). Al iniciar, `recoverOrphanedRuns()` aborta automáticamente runs `pending` con más de 1 hora de antigüedad. El scheduler luego drena los runs nuevos.
+- **Causa**: hay un run en estado `pending` colgado porque el scheduler no estaba corriendo.
+- **Solución**: confirmar que la API arrancó con `EMBED_SCHEDULER=true` (o reiniciar el scheduler desde **Operaciones → Procesos**). Al iniciar, `recoverOrphanedRuns()` aborta automáticamente runs `running` colgados y `pending` con más de 1 hora. El scheduler luego drena los runs nuevos.
 - **Verificar**: `logs/api.log` debe mostrar *"Pipeline scheduler started"* y *"Picked up pending run"*.
 
 ### Discovery jobs se crean pero no se ejecutan
-- **Causa**: el proceso **core** no está corriendo.
-- **Solución**: levantar `pnpm dev` (core).
-- **Verificar**: `logs/api.log` debe mostrar *"Discovery jobs processed"* cada 30s.
+- **Causa**: el scheduler no está corriendo.
+- **Solución**: verificar `EMBED_SCHEDULER=true` y reiniciar el scheduler desde **Operaciones → Procesos** (o relanzar `pnpm --dir api dev`).
+- **Verificar**: `logs/api.log` debe mostrar *"Discovery jobs processed"* periódicamente.
 
 ### 500 "Database error" al crear jobs con sugerencias predictivas
 - **Causa original** (corregida en migración `20260528120000`): el constraint `triggered_by` de `discovery_jobs` no incluía `predictive_location`.

@@ -1,4 +1,6 @@
 .env
+.env.*
+!.env.example
 node_modules/
 dist/
 *.log
@@ -7,3 +9,23 @@ coverage/
 reports/
 .playwright-mcp/
 .pnpmfile-allowed-builds.json
+.next/
+ui/.next/
+ui/.next-dev/
+
+# Private agent and AI-development context
+AGENTS.md
+.claude/
+.codex/
+.agents/
+context/
+skills/
+graphify-out/
+
+# Local-only artifacts
+sqlite_mcp_server.db
+config/enrichment.yaml.orig
+heuristic_discovery-
+selected-
+ops-full.png
+ops-monitoreo.png
