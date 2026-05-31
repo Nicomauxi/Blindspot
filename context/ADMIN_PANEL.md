@@ -34,6 +34,7 @@ operativo para seguimiento comercial.
   - Outreach
   - Segmentos
 - Plataforma
+  - Importación
   - Backups
   - Monitoreo
   - Usuarios
@@ -97,6 +98,48 @@ Estado actual (`DISC-2` cerrado):
 - composer con toggle persistente `discovery + enrich` y trazabilidad por runs en cada job hijo
 - Lead Explorer puede lanzar enrichment de la colección filtrada actual con guardrails de volumen, concurrencia y trazabilidad por run
 
+### Ciclo 4
+
+- Estado actual (`MAP-5` cerrado): `Contexto y mapa` comparte base con `Mapa de leads` vía `LocationDensityMapBase`; no se mantienen dos implementaciones cartográficas paralelas.
+- Estado actual (`MAP-6` cerrado): `Filtrar zona` consume `GET /api/v1/admin/geo/zones`, no texto libre primario; el selector muestra jerarquía y conteo.
+- Estado actual (`MAP-6` cerrado): `lead-density` y `zone-leads` comparten parser/serializador de filtros y ya tienen validación E2E de combinaciones sobre la UI compartida de mapas.
+- Composer y Creación masiva pueden activar sugerencias predictivas basadas en catálogo importado e histórico de discoverys.
+- Las sugerencias predictivas son revisables y explicables; nunca crean jobs sin confirmación humana.
+- Estado actual (`DISC-14` cerrado): Composer y Creación masiva ya pueden activar sugerencias predictivas, revisar/deseleccionar lugares sugeridos y crear jobs/batches con trazabilidad predictiva persistida en metadata.
+- Estado actual: la selección de locación de todo el Workspace de discovery se unificó en una sola superficie compartida (`DiscoveryLocationPicker`) pensada para el operador: tabs `Catálogo` (busca/elige lugares reales del catálogo importado, con jerarquía y score visibles) y `Predictivo`, más fallback de texto libre en el Composer. `Creación masiva` dejó de usar la grilla fija de ciudades y ahora combina ubicaciones del catálogo × nichos; la sección `Catálogo de lugares` standalone quedó plegada dentro del picker. Con catálogo vacío el fallback es explícito (mensaje + link a Importación). No hay lógica de selección duplicada entre pantallas.
+
+## Plataforma > Importación
+
+### Rol de la pantalla
+
+Permitir que el admin cargue XLS de lugares/zonas para alimentar filtros geográficos, Composer, Creación masiva y ranking predictivo de Discovery.
+
+### Capacidades objetivo
+
+- upload `.xls`/`.xlsx` con preview antes de confirmar
+- validación de columnas y errores por fila
+- deduplicación por ubicación/lugar/tipo
+- historial de import batches
+- catálogo activo consultable y filtrable
+- auditoría de carga, confirmación y errores
+- Estado actual (`DISC-15` cerrado): `/admin/imports` ya tiene un seed reproducible (`uruguay-location-seed.xlsx`) compatible con preview/commit; la trazabilidad de origen vive en `notes` y en `context/research/location-seed-sources.md`.
+
+### Guardrails
+
+- importar catálogo no dispara Google Places ni discovery automáticamente
+- fuentes externas deben quedar trazadas con `source_name` y `source_url` cuando aplique
+- si la dependencia `xlsx` no existe, pedir aprobación antes de importarla
+- filas inválidas no deben contaminar el catálogo activo
+
+## Inicio
+
+### Limpieza ciclo 4
+
+- remover la sección `Alertas: Solo lo que cambia decisión o requiere intervención`
+- mantener la campanita, contador y página `/admin/alerts` como mecanismo oficial de alertas
+- no reemplazar la sección removida por alertas hardcoded nuevas
+- Estado actual (`UI-8` cerrado): el bloque ya fue removido de `Inicio`; la campanita sigue siendo la única entrada resumida a alertas persistidas.
+
 ## Leads y feedback
 
 La ficha del lead debe volverse también punto de validación humana.
@@ -112,6 +155,21 @@ Estado actual:
 - ya existe feedback persistido por lead/campo en backend con auditoría
 - `RBAC-1` cerrado: usuarios `cm` ven contacto redactado en Lead Detail hasta iniciar seguimiento propio
 - la siguiente gran línea pendiente sobre la ficha comercial queda en `LEAD-*` y `CRM-9`
+
+### Leads para revisar
+
+- Estado actual (`LEAD-6` cerrado): soporta filtro `commercial_offer_type` y orden server-side por `marketing_score`, `software_score` y `offer_balance`.
+- Tipos activos: `Marketing`, `Software`, `Marketing + Software` y `Sin señal suficiente`.
+- El filtro se aplica en backend para mantener consistencia con exportaciones, mapas y otros listados que reutilicen `listLeads`.
+- Las cards muestran badge derivado y score resumido (`MKT/SW`) cuando existe `commercial_offers_summary`.
+
+### Mapa de leads
+
+- estado actual (`MAP-5` cerrado): mapa embebido con base compartida con `Contexto y mapa`
+- Estado actual (`MAP-7` cerrado): `Mapa de leads` ya no cambia `Leads para revisar` hasta confirmar; `Aplicar al listado`, `Cancelar` y `Limpiar` viven en la variante compartida `LeadReviewMap`.
+- la geografía aplicada puede venir de una cuadrícula puntual o de `zone_ids` sin seleccionar marker individual
+- Estado actual (`MAP-8` cerrado): leads individuales se muestran con iconos configurables por niche/canonical niche y card comercial rediseñada; `Vista completa` ya no aparece en el flujo embebido
+- Estado actual (`MAP-9` cerrado): la auditoría integral vive en `context/research/map-flow-audit.md`; Inicio y Discovery muestran errores de red del mapa como tales y la base compartida ya no rompe `next start` por SSR.
 
 ## CRM
 

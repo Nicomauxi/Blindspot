@@ -85,6 +85,14 @@ const mockLeadViewRow = {
     primary_offer: "software_pos",
     pitch_hook: "POS sin contrato",
     urgency_signal: "high",
+    sub_scores: {
+      software: 62,
+      marketing: 24,
+      web_nuevo: 0,
+      rediseno: 0,
+      catalogo: 0,
+      primary_offer: "software",
+    },
   },
   notes: "Lead de prueba",
   lead_company_data: {
@@ -226,6 +234,12 @@ vi.mock("../../api/src/db/client.js", () => ({
                 val === mockRejectedLeadRow.id
                   ? { data: mockRejectedLeadRow, error: null }
                   : { data: null, error: { code: "PGRST116" } },
+            }),
+            in: (_col: string, values: string[]) => Promise.resolve({
+              data: _mockLeadQueryRows
+                .filter((row) => values.includes(String(row.id)))
+                .map((row) => ({ id: row.id, gps: row.gps ?? null })),
+              error: null,
             }),
           }),
         };
@@ -437,6 +451,144 @@ describe("GET /api/v1/leads", () => {
     await app.close();
   });
 
+  it("includes a derived commercial offer summary in lead list responses", async () => {
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/leads",
+      headers: { authorization: `Bearer ${token}` },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().data[0].commercial_offers_summary).toMatchObject({
+      primary_offer_type: "both",
+      software_score: 62,
+      marketing_score: 24,
+      top_software_offer: "software",
+      top_marketing_offer: "marketing",
+    });
+    await app.close();
+  });
+
+  it("filters leads by derived commercial offer type on the backend", async () => {
+    _mockLeadQueryRows = [
+      {
+        ...mockLeadViewRow,
+        id: "00000000-0000-0000-0000-000000000011",
+        name: "Lead marketing",
+        created_at: "2026-01-04T00:00:00Z",
+        score_breakdown: {
+          ...mockLeadViewRow.score_breakdown,
+          sub_scores: { software: 0, marketing: 55, web_nuevo: 0, rediseno: 0, catalogo: 0, primary_offer: "marketing" },
+        },
+        tags: ["web-only-no-social"],
+      },
+      {
+        ...mockLeadViewRow,
+        id: "00000000-0000-0000-0000-000000000012",
+        name: "Lead software",
+        created_at: "2026-01-03T00:00:00Z",
+        score_breakdown: {
+          ...mockLeadViewRow.score_breakdown,
+          sub_scores: { software: 71, marketing: 0, web_nuevo: 0, rediseno: 0, catalogo: 0, primary_offer: "software" },
+        },
+        tags: ["whatsapp-missing"],
+      },
+      {
+        ...mockLeadViewRow,
+        id: "00000000-0000-0000-0000-000000000013",
+        name: "Lead mixto",
+        created_at: "2026-01-02T00:00:00Z",
+        score_breakdown: {
+          ...mockLeadViewRow.score_breakdown,
+          sub_scores: { software: 45, marketing: 38, web_nuevo: 0, rediseno: 0, catalogo: 0, primary_offer: "software" },
+        },
+        tags: ["web-only-no-social", "whatsapp-missing"],
+      },
+      {
+        ...mockLeadViewRow,
+        id: "00000000-0000-0000-0000-000000000014",
+        name: "Lead sin señal",
+        created_at: "2026-01-01T00:00:00Z",
+        score_breakdown: {
+          ...mockLeadViewRow.score_breakdown,
+          sub_scores: { software: 0, marketing: 0, web_nuevo: 0, rediseno: 0, catalogo: 0, primary_offer: "none" },
+        },
+        tags: [],
+      },
+    ];
+
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/leads?commercial_offer_type=marketing",
+      headers: { authorization: `Bearer ${token}` },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().data.map((lead: { name: string }) => lead.name)).toEqual(["Lead marketing"]);
+    await app.close();
+  });
+
+  it("sorts leads by derived software score on the backend", async () => {
+    _mockLeadQueryRows = [
+      {
+        ...mockLeadViewRow,
+        id: "00000000-0000-0000-0000-000000000021",
+        name: "Lead software medio",
+        created_at: "2026-01-02T00:00:00Z",
+        score_breakdown: {
+          ...mockLeadViewRow.score_breakdown,
+          sub_scores: { software: 41, marketing: 10, web_nuevo: 0, rediseno: 0, catalogo: 0, primary_offer: "software" },
+        },
+      },
+      {
+        ...mockLeadViewRow,
+        id: "00000000-0000-0000-0000-000000000022",
+        name: "Lead software alto",
+        created_at: "2026-01-03T00:00:00Z",
+        score_breakdown: {
+          ...mockLeadViewRow.score_breakdown,
+          sub_scores: { software: 88, marketing: 5, web_nuevo: 0, rediseno: 0, catalogo: 0, primary_offer: "software" },
+        },
+      },
+      {
+        ...mockLeadViewRow,
+        id: "00000000-0000-0000-0000-000000000023",
+        name: "Lead software bajo",
+        created_at: "2026-01-01T00:00:00Z",
+        score_breakdown: {
+          ...mockLeadViewRow.score_breakdown,
+          sub_scores: { software: 12, marketing: 22, web_nuevo: 0, rediseno: 0, catalogo: 0, primary_offer: "marketing" },
+        },
+      },
+    ];
+
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/leads?sort_by=software_score&sort_direction=desc",
+      headers: { authorization: `Bearer ${token}` },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().data.map((lead: { name: string }) => lead.name)).toEqual([
+      "Lead software alto",
+      "Lead software medio",
+      "Lead software bajo",
+    ]);
+    await app.close();
+  });
+
   it("respects sort_direction=asc for created_at ordering", async () => {
     const { buildServer } = await import("../../api/src/server.js");
     const app = await buildServer();
@@ -555,7 +707,9 @@ describe("GET /api/v1/leads", () => {
       address: "Benito Blanco 900, Montevideo",
       gps: null,
     };
-    _mockLeadQueryRows = [mockLeadViewRow, geocodedRow];
+    // Put the first lead's GPS in a completely different cell so it doesn't match the target grid zone.
+    const otherCityRow = { ...mockLeadViewRow, gps: { lat: -33.0, lng: -56.0 } };
+    _mockLeadQueryRows = [otherCityRow, geocodedRow];
     geocodeAddress.mockImplementation(async (address: string) =>
       address.includes("Benito Blanco") ? { lat: -34.904, lng: -56.19 } : null
     );
@@ -579,6 +733,43 @@ describe("GET /api/v1/leads", () => {
     ]);
     expect(res.json().total).toBe(1);
     expect(geocodeAddress).toHaveBeenCalled();
+    await app.close();
+  });
+
+  it("filters leads by location_key using the same parent/grid contract", async () => {
+    const { buildGridCell, buildLeadLocationKey } = await import("../../api/src/routes/discovery-insights.js");
+    const geocodedRow = {
+      ...mockLeadViewRow,
+      id: "00000000-0000-0000-0000-000000000002",
+      name: "Cafe Pocitos",
+      address: "Benito Blanco 900, Montevideo",
+      gps: null,
+    };
+    // Put the first lead's GPS in a completely different cell so it doesn't match the target grid zone.
+    const otherCityRow = { ...mockLeadViewRow, gps: { lat: -33.0, lng: -56.0 } };
+    _mockLeadQueryRows = [otherCityRow, geocodedRow];
+    geocodeAddress.mockImplementation(async (address: string) =>
+      address.includes("Benito Blanco") ? { lat: -34.904, lng: -56.19 } : null
+    );
+
+    const cell = buildGridCell({ lat: -34.904, lng: -56.19, source: "geocoded" });
+    const parentLocationKey = buildLeadLocationKey(geocodedRow.address);
+
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/v1/leads?location_key=${encodeURIComponent(`${parentLocationKey}::${cell.gridKey}`)}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().data.map((lead: { id: string }) => lead.id)).toEqual([
+      "00000000-0000-0000-0000-000000000002",
+    ]);
+    expect(res.json().total).toBe(1);
     await app.close();
   });
 });

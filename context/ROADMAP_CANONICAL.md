@@ -120,6 +120,22 @@
 | 65 | Calidad | QUAL-1 | autonomous | Apartado "Nichos" en Calidad con aliasing/sinónimos; filtros expanden automáticamente al grupo. |
 | 66 | Responsive | UI-RESP-1 | autonomous | Contenedor global responsive; smoke Playwright en 3 viewports por pantallas clave; partir en sub-paquetes si excede límites. |
 
+### Ciclo 4 — Mapas, discovery predictivo y filtros comerciales (abierto 2026-05-27)
+
+| Orden | Bloque | Fase | Modo | Definición de listo |
+|---:|---|---|---|---|
+| 67 | Geografía | MAP-5 | autonomous | `Mapa de leads` y `Contexto y mapa` usan un componente/base cartográfica compartida con variantes por contexto, sin duplicación funcional. |
+| 68 | Geografía | MAP-6 | autonomous | `Filtrar zona` consume zonas registradas dinámicamente y los filtros combinados del mapa aplican lógica correcta con cobertura Playwright exhaustiva. |
+| 69 | Geografía UX | MAP-7 | autonomous | En `Mapa de leads`, la selección del mapa queda como borrador y solo afecta `Leads para revisar` al confirmar con botón `Aplicar`. |
+| 70 | Geografía UI | MAP-8 | autonomous | Modo de leads individuales reemplaza heatmap visual por iconos configurables por nicho, elimina `Vista completa` y rediseña la card con resumen comercial. |
+| 71 | Geografía QA | MAP-9 | manual-input | Auditoría integral de mapas completada con checklist QA, comercial y desarrollador; errores ocultos quedan corregidos o convertidos en fases explícitas. |
+| 72 | UI limpieza | UI-8 | autonomous | La sección `Alertas: Solo lo que cambia decisión o requiere intervención` desaparece de `Inicio` sin romper la campanita/página de alertas. |
+| 73 | Plataforma | DISC-12 | dependency-approval | `Plataforma > Importación` permite cargar XLS de lugares/zonas, valida columnas y crea un catálogo reusable por discovery. |
+| 74 | Discovery | DISC-13 | autonomous | Modelo predictivo cruza Departamento > Ciudad > Barrio con histórico de discoverys para puntuar zonas/lugares con probabilidad de leads nuevos. |
+| 75 | Discovery UX | DISC-14 | autonomous | `Creación masiva` y `Composer` pueden activar sugerencias predictivas y prellenar lugares desde el catálogo importado con explicación del score. |
+| 76 | Discovery Data | DISC-15 | manual-input | XLS semilla inicial documentado, con fuentes de internet trazables y datos útiles para probar importación y ranking predictivo. |
+| 77 | Comercial | LEAD-6 | autonomous | `Leads para revisar` y filtros de leads soportan filtrado y ordenamiento por `Tipo de oferta comercial` (`Marketing` vs `Software`). |
+
 ## Dependencias entre fases
 
 - `NAV-1` antes de `THEME-1`, `MON-2`, `DISC-1` y `CRM-3`.
@@ -160,6 +176,20 @@
 - `MAP-2` requiere aprobación si se usa Mapbox/Google Geocoding pagos; con Nominatim queda autónomo bajo rate-limit estricto.
 - `MAP-4` requiere aprobación de `leaflet.markercluster` si no está en deps.
 
+### Dependencias del ciclo 4
+
+- `MAP-5` antes de `MAP-6`, `MAP-7`, `MAP-8` y `MAP-9`.
+- `MAP-6` antes de cerrar `MAP-7` o `MAP-8`, porque ambas variantes deben consumir el mismo contrato de filtros.
+- `MAP-7` depende de `MAP-6` para que el botón `Aplicar` confirme filtros/selección ya corregidos.
+- `MAP-8` depende de `LEAD-6` si la card de lead individual muestra `Tipo de oferta comercial`; si solo muestra resumen score existente, puede ejecutarse antes.
+- `MAP-9` debe ejecutarse después de `MAP-5` a `MAP-8` y no puede cerrarse sin revisión humana o evidencia equivalente para QA, comercial y desarrollador.
+- `DISC-12` antes de `DISC-13`, `DISC-14` y `DISC-15`.
+- `DISC-13` antes de `DISC-14`, porque el Composer solo debe exponer sugerencias si el scoring predictivo está definido y testeado.
+- `DISC-15` puede arrancar en paralelo como investigación, pero no cierra hasta que `DISC-12` valide que el XLS semilla importa correctamente.
+- `LEAD-6` debe cerrar antes de considerar completa cualquier optimización comercial de `Leads para revisar`.
+- `DISC-12` requiere aprobación de dependencia `xlsx` si no está en deps; si ya existe parser XLS en el repo, queda autónoma.
+- `DISC-15` no debe hacer scraping agresivo ni usar fuentes pagas; si requiere costo externo o credenciales, detenerse.
+
 ## Criterios globales de validación por tipo de fase
 
 ### UI only
@@ -168,6 +198,7 @@
 - `pnpm --dir ui build`
 - tests UI/RTL o equivalentes si existen
 - smoke manual/Playwright si la fase toca navegación, formularios o boards
+- Playwright obligatorio para flujos de mapa que combinen filtros, selección o actualización de listas derivadas
 
 ### API/core/schema
 
@@ -205,6 +236,18 @@
 - Los procesos del pipeline se observan en tiempo real desde la nueva pantalla `Operaciones > Procesos`, con métricas físicas y logs en vivo. Si la dependencia de charts requiere aprobación, el agente debe detenerse antes de importar.
 - La auditoría de la ficha rediseñada (LEAD-5) es **triple y obligatoria**: técnico, UX, vendedor. Sin las tres aprobadas, la fase no cierra.
 - La responsividad global (UI-RESP-1) se ejecuta como cierre del ciclo. No tiene sentido auditar responsive de pantallas que aún están en rediseño.
+
+### Decisiones del ciclo 4 (2026-05-27)
+
+- `Mapa de leads` y `Contexto y mapa` no deben evolucionar como implementaciones separadas. Deben compartir motor cartográfico, normalización de filtros, capas base, markers, popups, bounds, estado de loading/error y contratos de datos.
+- La diferencia entre mapas es contextual: `Mapa de leads` opera como selector/filtro de `Leads para revisar`; `Contexto y mapa` opera como soporte de discovery y recomendaciones. La base técnica es la misma.
+- `Filtrar zona` deja de aceptar texto libre como fuente primaria. Debe consumir zonas registradas, con ids estables y labels compuestos por Departamento > Ciudad > Barrio cuando aplique.
+- La selección visual en `Mapa de leads` no aplica cambios destructivos ni filtra listas automáticamente. El usuario confirma con `Aplicar` y puede cancelar/limpiar el borrador.
+- El modo individual abandona la lectura tipo heatmap para leads puntuales. La representación default es un icono de punto de interés y cada lead/nicho puede tener icono específico configurable.
+- `Vista completa` se elimina porque ambos mapas deben tener paridad funcional y responsiva dentro de sus pantallas.
+- La importación de lugares/zonas vive en `Plataforma > Importación`, no dispersa dentro de Discovery. Discovery consume el catálogo como input operativo.
+- El algoritmo predictivo no decide de forma opaca: cada sugerencia debe mostrar señales principales, histórico usado, probabilidad estimada, riesgo de duplicados y costo esperado aproximado.
+- `Tipo de oferta comercial` es una dimensión comercial transversal. Debe poder filtrarse y ordenarse en listados de leads sin duplicar lógica entre UI y backend.
 
 ## Histórico
 

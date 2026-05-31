@@ -15,12 +15,17 @@ const groupBodySchema = z.object({
 });
 
 export async function nichesRoutes(app: FastifyInstance): Promise<void> {
-  app.get("/admin/niches/groups", { preHandler: requireAdmin }, async (_request, reply) => {
-    const groups = await listNicheAliasGroups();
-    return reply.status(200).send({ data: groups });
+  app.get("/admin/niches/groups", { preHandler: requireAdmin }, async (request, reply) => {
+    try {
+      const groups = await listNicheAliasGroups();
+      return reply.status(200).send({ data: groups });
+    } catch (err) {
+      request.log.error({ err }, "Failed to list niche alias groups");
+      return reply.status(500).send({ error: "Database error", error_code: "db_error" });
+    }
   });
 
-  app.get("/admin/niches/distinct", { preHandler: requireAdmin }, async (_request, reply) => {
+  app.get("/admin/niches/distinct", { preHandler: requireAdmin }, async (request, reply) => {
     const db = getDb();
     const { data, error } = await db
       .from("leads")
@@ -49,8 +54,13 @@ export async function nichesRoutes(app: FastifyInstance): Promise<void> {
     if (!parsed.success) {
       return reply.status(400).send({ error: "Validation error", details: parsed.error.flatten().fieldErrors });
     }
-    const group = await createNicheAliasGroup(parsed.data.canonical, parsed.data.aliases);
-    return reply.status(201).send({ data: group });
+    try {
+      const group = await createNicheAliasGroup(parsed.data.canonical, parsed.data.aliases);
+      return reply.status(201).send({ data: group });
+    } catch (err) {
+      request.log.error({ err }, "Failed to create niche alias group");
+      return reply.status(500).send({ error: "Database error", error_code: "db_error" });
+    }
   });
 
   app.put("/admin/niches/groups/:id", { preHandler: requireAdmin }, async (request, reply) => {
@@ -59,13 +69,23 @@ export async function nichesRoutes(app: FastifyInstance): Promise<void> {
     if (!parsed.success) {
       return reply.status(400).send({ error: "Validation error", details: parsed.error.flatten().fieldErrors });
     }
-    const group = await updateNicheAliasGroup(id, parsed.data.canonical, parsed.data.aliases);
-    return reply.status(200).send({ data: group });
+    try {
+      const group = await updateNicheAliasGroup(id, parsed.data.canonical, parsed.data.aliases);
+      return reply.status(200).send({ data: group });
+    } catch (err) {
+      request.log.error({ err }, "Failed to update niche alias group");
+      return reply.status(500).send({ error: "Database error", error_code: "db_error" });
+    }
   });
 
   app.delete("/admin/niches/groups/:id", { preHandler: requireAdmin }, async (request, reply) => {
     const { id } = request.params as { id: string };
-    await deleteNicheAliasGroup(id);
-    return reply.status(200).send({ data: { deleted: id } });
+    try {
+      await deleteNicheAliasGroup(id);
+      return reply.status(200).send({ data: { deleted: id } });
+    } catch (err) {
+      request.log.error({ err }, "Failed to delete niche alias group");
+      return reply.status(500).send({ error: "Database error", error_code: "db_error" });
+    }
   });
 }

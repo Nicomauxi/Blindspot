@@ -76,8 +76,22 @@
 - `LEAD-3` — done (2026-05-25)
 - `LEAD-4` — done (2026-05-25)
 - `LEAD-5` — done (2026-05-25)
-- `QUAL-1` — pending
-- `UI-RESP-1` — pending
+- `QUAL-1` — done (2026-05-25)
+- `UI-RESP-1` — done (2026-05-25)
+
+### Ciclo 4 — Mapas, discovery predictivo y filtros comerciales (abierto 2026-05-27)
+
+- `MAP-5` — done (2026-05-26)
+- `MAP-6` — done (2026-05-27)
+- `MAP-7` — done (2026-05-27)
+- `MAP-8` — done (2026-05-27)
+- `MAP-9` — done (2026-05-27)
+- `UI-8` — done (2026-05-27)
+- `DISC-12` — done (2026-05-27)
+- `DISC-13` — done (2026-05-27)
+- `DISC-14` — done (2026-05-27)
+- `DISC-15` — done (2026-05-27)
+- `LEAD-6` — done (2026-05-27)
 
 ## Gates globales
 
@@ -718,7 +732,7 @@
 
 ## UI-2 — Eliminar función Campañas/Outreach (deprecated)
 
-**Status:** `pending`
+**Status:** `done`
 
 **Objetivo**
 - Retirar la experiencia de Campañas/Outreach de la UI ya que el CRM reemplaza ese flujo comercial.
@@ -753,7 +767,7 @@
 
 ## UI-1 — Scrollbar en lista de batches recientes (Discovery)
 
-**Status:** `pending`
+**Status:** `done`
 
 **Objetivo**
 - La sección "Batches recientes" en Discovery puede crecer sin límite visual. Necesita altura máxima y scroll.
@@ -780,7 +794,7 @@
 
 ## NAV-2 — Auto-colapso del sidebar al navegar
 
-**Status:** `pending`
+**Status:** `done`
 
 **Objetivo**
 - Cuando el usuario hace clic en una opción de navegación perteneciente a una sección distinta a la activa, las secciones previamente abiertas deben colapsarse automáticamente. Solo la sección que contiene la ruta activa permanece expandida.
@@ -807,7 +821,7 @@
 
 ## THEME-2 — Botón flotante de cambio de tema
 
-**Status:** `pending`
+**Status:** `done`
 
 **Objetivo**
 - Reemplazar el control actual de tema (sea donde sea que esté: header, settings, etc.) por un botón flotante fijo en la esquina inferior derecha del viewport. Solo ícono (sol/luna), sin texto.
@@ -835,7 +849,7 @@
 
 ## MON-3 — Estado del run en Monitoreo + logs en vivo
 
-**Status:** `pending`
+**Status:** `done`
 
 **Objetivo**
 - Mover la sección "Estado del run" de Pipeline a Monitoreo, con polling de 5 s y logs en vivo del run activo.
@@ -869,7 +883,7 @@
 
 ## MON-4 — Lista de jobs por estado en Monitoreo
 
-**Status:** `pending`
+**Status:** `done`
 
 **Objetivo**
 - Monitoreo debe mostrar una vista operativa de los discovery jobs agrupados por estado (queued/running/completed/failed) con conteos y lista básica.
@@ -901,7 +915,7 @@
 
 ## OPS-1 — Botones de acciones del sistema en Monitoreo
 
-**Status:** `pending`
+**Status:** `done`
 
 **Objetivo**
 - Permitir reiniciar los procesos API/core desde Monitoreo sin tener que abrir terminal. El reset de DB solo para admin con confirmación explícita doble.
@@ -940,7 +954,7 @@
 
 ## PIPE-1 — Budget GP configurable desde Pipeline UI
 
-**Status:** `pending`
+**Status:** `done`
 
 **Objetivo**
 - El presupuesto mensual de Google Places (`google_places_budget_total`) debe poder verse y editarse desde la UI de Pipeline sin tocar el CLI.
@@ -975,7 +989,7 @@
 
 ## PIPE-3 — max_jobs configurable desde Pipeline UI
 
-**Status:** `pending`
+**Status:** `done`
 
 **Objetivo**
 - El parámetro `max_jobs` de la fase de discovery del pipeline debe poder verse y modificarse desde la UI.
@@ -1294,7 +1308,7 @@
 
 ## OPS-4 — Apartado "Variables" en Operaciones
 
-**Status:** `pending`
+**Status:** `done`
 
 **Resultado esperado**
 - Una sección colapsable `Variables` dentro de `/admin/operations` lista todas las variables runtime configurables del pipeline en formato key-value con descripción, tipo, default y valor actual.
@@ -1320,7 +1334,7 @@
 
 ## OPS-5 — Apartado "Procesos" con métricas en vivo y gráficos
 
-**Status:** `pending`
+**Status:** `done`
 
 **Resultado esperado**
 - Una sección `Procesos` dentro de `/admin/operations` muestra:
@@ -1357,7 +1371,7 @@
 
 ## DISC-7 — Reordenar Discovery: Creación masiva debajo de Composer
 
-**Status:** `pending`
+**Status:** `done`
 
 **Resultado esperado**
 - En `ui/src/app/admin/discovery/page.tsx`, el bloque `Creación masiva` (hoy al final) queda inmediatamente debajo del bloque `Composer`. Orden vertical resultante: Stats → Composer → Creación masiva → (espacio para Refresh masivo de DISC-8) → Recomendaciones → Mapa → Batches recientes → Legacy jobs.
@@ -1374,7 +1388,7 @@
 
 ## DISC-8 — Refresh masivo de leads desde Discovery (filtros incluyendo missing_*)
 
-**Status:** `pending`
+**Status:** `done`
 
 **Resultado esperado**
 - Existe nueva sección "Refresh masivo" debajo de Creación masiva en `/admin/discovery`.
@@ -1407,7 +1421,7 @@
 
 ## DISC-9 — Refresh debe permitir re-discovery (no solo enrichment)
 
-**Status:** `pending`
+**Status:** `done`
 
 **Resultado esperado**
 - El refresh masivo de DISC-8 ofrece dos modos:
@@ -1438,7 +1452,7 @@
 
 ## DISC-10 — Importación XLS de lugares de discovery
 
-**Status:** `pending`
+**Status:** `done`
 
 **Resultado esperado**
 - Existe `POST /api/v1/admin/discovery/places/import` que acepta multipart con un `.xlsx` y carga las filas en una nueva tabla `discovery_places_catalog` (location_key, display_name, parent_location, kind, lat_approx, lng_approx, commercial_score, notes, source = "xls_import", imported_at, imported_by_user_id).
@@ -1465,7 +1479,7 @@
 
 ## DISC-11 — Optimizar discovery de Google Places (reducir descartes)
 
-**Status:** `pending`
+**Status:** `done`
 
 **Resultado esperado**
 - Análisis previo (auditoría): identificar la tasa actual de descartes por run y las causas más comunes (duplicados por placeId, fuera de zona, niche incorrecto, etc.). Dejar el reporte en `context/research/disc-11-analysis.md`.
@@ -1643,7 +1657,7 @@
 
 ## UI-3 — Limpiar referencias UI a "Campañas" deprecated
 
-**Status:** `pending`
+**Status:** `done`
 
 **Resultado esperado**
 - En `/admin` (home) NO hay StatCard "Campañas activas", alert "Sin campañas activas" ni section "Campañas" en activity.
@@ -1904,7 +1918,7 @@
 
 ## CRM-9 — Datos de contacto embebidos en popup CRM
 
-**Status:** `pending`
+**Status:** `done`
 
 **Resultado esperado**
 - El popup de la columna `contact` del board CRM (estado `contact`) muestra los datos de contacto del lead (phone, whatsapp, email, website) inline, sin tener que abrir la ficha del lead.
@@ -1984,7 +1998,7 @@
 
 ## LEAD-3 — Feedback por variable en contacto/datos, quitar Feedback humano deprecated
 
-**Status:** `pending`
+**Status:** `done`
 
 **Resultado esperado**
 - Cada dato individual en el bloque de contacto/datos (LEAD-2) tiene un botón inline (thumbs up / thumbs down) para marcarlo como verdadero o falso positivo.
@@ -2007,7 +2021,7 @@
 
 ## LEAD-4 — Traza de evidencia comercial integrada al Resumen comercial
 
-**Status:** `pending`
+**Status:** `done`
 
 **Resultado esperado**
 - El SectionCard "Traza de evidencia comercial" actual (línea ~684) desaparece como bloque separado.
@@ -2027,7 +2041,7 @@
 
 ## LEAD-5 — Rediseño global de la ficha de Lead con auditoría triple
 
-**Status:** `pending`
+**Status:** `done`
 
 **Resultado esperado**
 - La ficha de lead `/admin/leads/:id` queda rediseñada con UX moderna, intuitiva y NO técnica para vendedores. Estructura propuesta:
@@ -2115,6 +2129,765 @@
 
 ---
 
+
+
+## MAP-5 — Base cartográfica compartida para Mapa de leads y Contexto y mapa
+
+**Status:** `done`
+
+**Objetivo**
+- Unificar `Mapa de leads` y `Contexto y mapa` sobre el mismo componente/base cartográfica, evitando divergencias de filtros, markers, clustering, bounds, loading, errores y contratos de datos.
+- Mantener diferencias de comportamiento como variantes declarativas, no como copias de implementación.
+
+**Alcance**
+- Definir un componente compartido, por ejemplo `LeadGeoMap` o `CommercialMap`, con props explícitas para:
+  - `variant`: `lead-review` | `discovery-context`.
+  - `mode`: `density` | `individual` | `hybrid` si aplica.
+  - `selectionMode`: `none` | `single` | `multi` | `bounds`.
+  - `filters`: contrato normalizado, independiente de la pantalla.
+  - `onDraftSelectionChange` y `onApplySelection` cuando la pantalla requiera confirmación.
+  - `layers`: heatmap/grid, leads individuales, zonas, backlog geocoding, sugerencias.
+- Extraer lógica común de:
+  - inicialización Leaflet/OSM y atribución.
+  - cálculo de bounds y fit de viewport.
+  - normalización de coordenadas reales vs inferidas.
+  - estados vacíos, loading, error, partial data y conteos.
+  - popups/cards de marker con slots por contexto.
+  - serialización de filtros hacia API.
+- Mantener cada pantalla como contenedora: la pantalla decide qué datos pedir, qué filtros mostrar y qué acciones permitir, pero no reimplementa el motor del mapa.
+
+**Modelo de datos / contratos**
+- No se agregan tablas en esta fase salvo que el código actual no tenga contrato estable para zonas o markers.
+- Definir un tipo de DTO compartido para punto geográfico de lead:
+  - `lead_id`, `name`, `niche`, `source`, `prospect_score`, `contact_tier`.
+  - `lat`, `lng`, `gps_source`, `geo_confidence`, `zone_id` opcional.
+  - `commercial_offer_type` opcional para futuras fases.
+  - `marker_kind` opcional para iconografía de MAP-8.
+- Definir un DTO de capa agregada:
+  - `cell_id` o `zone_id`, bounds/centro, count, avg_score, real_gps_count, inferred_gps_count, backlog_count.
+- El backend debe poder servir ambos mapas sin shapes divergentes; si existen endpoints separados, la respuesta debe pasar por un normalizador común.
+
+**UI/UX**
+- `Mapa de leads` debe preservar su rol de filtro operativo de `Leads para revisar`.
+- `Contexto y mapa` debe preservar su rol de contexto para discovery/composer.
+- El usuario no debe notar una pérdida de funcionalidad por la unificación. Cualquier diferencia visible debe estar documentada como variante intencional.
+- La atribución de OSM debe seguir visible en ambas superficies.
+
+**No hacer en esta fase**
+- No cambiar todavía la semántica de `Aplicar` de `Mapa de leads`; eso es `MAP-7`.
+- No rediseñar iconos/cards de leads individuales; eso es `MAP-8`.
+- No introducir dependencias nuevas de mapas sin aprobación.
+- No eliminar endpoints legacy hasta tener compatibilidad comprobada.
+
+**Áreas/archivos probables**
+- `ui/src/components/**/map*` o componente nuevo bajo `ui/src/components/maps/`.
+- `ui/src/app/admin/leads/**` para embebido de `Mapa de leads`.
+- `ui/src/app/admin/discovery/**` para embebido de `Contexto y mapa`.
+- `ui/src/lib/api.ts` y tipos compartidos de mapas.
+- `api/src/routes/**` si hace falta normalizar DTOs.
+
+**Validación mínima**
+- `pnpm --dir ui typecheck`.
+- `pnpm --dir ui build`.
+- Smoke Playwright de carga de ambos mapas.
+- Test de componente o integración que confirme que ambas pantallas renderizan el mismo componente base con variantes distintas.
+
+**Criterios de aceptación**
+- No queda lógica cartográfica duplicada relevante entre ambas pantallas.
+- Ambos mapas muestran datos equivalentes para el mismo set de filtros base.
+- Los estados vacíos/error/loading se ven consistentes.
+- Las diferencias de interacción están encapsuladas por props/variant y documentadas en el código o contexto.
+
+**Cierre**
+- `LocationDensityMapBase` concentra el motor cartográfico compartido y ambas superficies montan wrappers finos por `variant` (`lead-review` / `discovery-context`).
+- La serialización de selección geográfica y drilldown por cuadrícula queda centralizada en `ui/src/lib/location-density-map.ts`.
+- Validación ejecutada: `pnpm exec vitest run tests/ui/location-density-map.test.ts`, `pnpm --dir ui build` y `pnpm --dir ui typecheck` con `.next` regenerado por build.
+
+---
+
+## MAP-6 — Zonas dinámicas y corrección de filtros combinados
+
+**Status:** `done` (2026-05-27)
+
+**Objetivo**
+- Reemplazar el filtro manual `Filtrar zona` por un selector alimentado por zonas registradas.
+- Corregir la lógica actual donde los filtros combinados solo devuelven datos cuando están vacíos.
+- Exigir cobertura E2E de combinaciones reales con Playwright.
+
+**Alcance**
+- Identificar la fuente canónica de zonas existentes. Prioridad:
+  1. tabla/modelo de zonas ya registrada si existe.
+  2. catálogo importado de `DISC-12` cuando esté disponible.
+  3. derivación temporal desde leads geocodificados solo como fallback documentado.
+- Exponer zonas como opciones estructuradas:
+  - `zone_id`, `departamento`, `ciudad`, `barrio`, `label`, `kind`, `lead_count`, `last_seen_at`.
+- Cambiar `Filtrar zona` de input libre a combobox/select con búsqueda por label.
+- Definir semántica de combinación:
+  - filtros de dimensiones distintas aplican con `AND`.
+  - filtros multi-select dentro de la misma dimensión aplican con `OR`.
+  - valores vacíos significan `sin restricción`, nunca `match vacío`.
+  - rangos de score aplican por comparación numérica, no string.
+  - `gps_source` distingue real/inferido/sin GPS de forma explícita.
+- Corregir frontend y backend para usar una función única de serialización/parsing de filtros.
+
+**Modelo de datos / contratos**
+- Si ya existe entidad de zonas, documentar su uso y no duplicarla.
+- Si no existe, planificar una tabla aditiva posterior o dentro de esta fase si el tamaño lo permite:
+  - `geo_zones`: `id`, `country`, `departamento`, `ciudad`, `barrio`, `kind`, `label`, `normalized_key`, `source`, `active`, `created_at`, `updated_at`.
+- Contrato de API sugerido:
+  - `GET /api/v1/admin/geo/zones?kind=&q=` para opciones.
+  - endpoints de mapa aceptan `zone_id` o `zone_ids`, no texto libre primario.
+- Mantener compatibilidad temporal con `zone` string si hay URLs existentes, resolviendo a `zone_id` cuando sea posible.
+
+**UI/UX**
+- El selector debe mostrar jerarquía legible: `Departamento > Ciudad > Barrio`.
+- Si una zona no tiene barrios, mostrar el nivel más específico disponible sin placeholders raros.
+- Mostrar conteo de leads por zona cuando esté disponible para orientar al usuario.
+- Botón `Limpiar filtros` debe resetear zona y demás filtros a estado realmente vacío.
+
+**QA / Playwright obligatorio**
+- Cubrir combinaciones mínimas:
+  - sin filtros.
+  - solo zona.
+  - zona + source.
+  - zona + niche.
+  - zona + score mínimo.
+  - zona + tier.
+  - zona + gps_source.
+  - source + niche + score + tier.
+  - todos los filtros activos con un fixture que debe devolver resultados.
+  - todos los filtros activos con un fixture que debe devolver cero resultados y estado vacío correcto.
+- Cada test debe validar contador, markers/celdas visibles y lista derivada cuando aplique.
+
+**No hacer en esta fase**
+- No implementar el botón `Aplicar`; solo dejar la lógica correcta.
+- No depender del XLS semilla para que el filtro funcione si ya hay zonas registradas.
+- No esconder errores de API como mapas vacíos.
+
+**Áreas/archivos probables**
+- `api/src/routes/leads.ts`, `api/src/routes/discovery.ts` o rutas de mapas.
+- `src/storage/leads.ts` / helpers de filtros.
+- `ui/src/components/maps/*`.
+- `ui/tests` o `tests/e2e` Playwright.
+
+**Validación mínima**
+- `pnpm test`.
+- `pnpm --dir ui typecheck`.
+- `pnpm --dir ui build`.
+- Playwright E2E con matriz de filtros.
+- `pnpm smoke:api` si cambia shape de endpoint.
+
+**Cierre 2026-05-27**
+- `GET /api/v1/admin/geo/zones` quedó activo con prioridad catálogo `discovery_places_catalog` y fallback derivado desde leads cuando no hay catálogo usable.
+- `lead-density` y `zone-leads` ahora parsean el mismo contrato (`source`, `niche`, `prospect_score_gte`, `contact_tier`, `gps_source`, `zone_ids`) y aplican semántica `AND` entre dimensiones / `OR` intra-dimensión.
+- `LocationDensityMapBase` reemplazó el input libre de zona por selector estructurado con búsqueda, conteo y jerarquía; Inicio y Discovery consumen el mismo contrato y refetch de drilldown al cambiar filtros.
+- Validado con `pnpm test`, `pnpm typecheck`, `pnpm --dir ui typecheck`, `pnpm --dir ui build`, `pnpm smoke:api` y `node --import tsx/esm tests/e2e/map-filter-matrix.playwright.ts` sobre la app servida localmente.
+
+**Criterios de aceptación**
+- Combinar filtros ya no vacía resultados incorrectamente.
+- `Filtrar zona` no requiere escritura manual.
+- La misma lógica de filtros se usa en `Mapa de leads` y `Contexto y mapa`.
+- Hay evidencia automatizada de combinaciones, no solo smoke manual.
+
+---
+
+## MAP-7 — Botón Aplicar para selección en Mapa de leads
+
+**Status:** `done` (2026-05-27)
+
+**Objetivo**
+- Evitar que la selección en el `Mapa de leads` filtre automáticamente la lista `Leads para revisar`.
+- Introducir un flujo confirmable con botón `Aplicar`, además de `Cancelar`/`Limpiar` cuando corresponda.
+
+**Alcance**
+- Separar estado de filtros/selección en dos niveles:
+  - `draft`: lo que el usuario está explorando en el mapa.
+  - `applied`: lo que realmente filtra `Leads para revisar`.
+- Mostrar indicador claro cuando hay cambios sin aplicar.
+- `Aplicar` actualiza query params/lista/mapa derivado de forma consistente.
+- `Cancelar` descarta cambios draft y vuelve al estado aplicado.
+- `Limpiar` elimina draft y aplicado, dejando el listado completo permitido por RBAC.
+- Si el usuario navega con cambios sin aplicar, no bloquear con modal salvo que el patrón del repo ya exista; preferir indicador y persistencia controlada.
+
+**Modelo de datos / contratos**
+- No requiere cambios de DB.
+- El contrato API recibe solo filtros aplicados.
+- El frontend puede guardar draft en estado local; no persistir draft en backend.
+
+**UI/UX**
+- El botón `Aplicar` debe estar cerca de los filtros del mapa y visible después de seleccionar zona/bounds/marker.
+- Texto sugerido: `Aplicar al listado` para evitar ambigüedad.
+- Mostrar resumen breve: `3 filtros sin aplicar` o `Zona seleccionada sin aplicar`.
+- La lista `Leads para revisar` no debe parpadear ni recargar hasta aplicar.
+- En mobile, controles sticky o en drawer si el mapa ocupa mucha altura.
+
+**No hacer en esta fase**
+- No cambiar la lógica comercial de scoring.
+- No tocar `Contexto y mapa` salvo para mantener la API del componente compartido.
+
+**Áreas/archivos probables**
+- pantalla de leads/admin home donde vive `Mapa de leads`.
+- componente compartido creado en `MAP-5`.
+- tests Playwright de interacción mapa-lista.
+
+**Validación mínima**
+- `pnpm --dir ui typecheck`.
+- `pnpm --dir ui build`.
+- Playwright:
+  - seleccionar zona no cambia lista.
+  - click `Aplicar` cambia lista.
+  - `Cancelar` restaura estado anterior.
+  - `Limpiar` vuelve al universo inicial.
+
+**Criterios de aceptación**
+- La lista solo cambia después de `Aplicar`.
+- El usuario puede explorar mapa sin perder el contexto de revisión.
+- Query params, counters y badges reflejan solo filtros aplicados o diferencian claramente draft/applied.
+
+**Cierre**
+- `Inicio` separa estado `draft` y `applied` para filtros/selección del `Mapa de leads`; `LeadExplorer` sólo recibe geografía aplicada.
+- `LocationDensityMapBase` expone controles `Aplicar al listado`, `Cancelar` y `Limpiar` sólo para la variante `lead-review`, manteniendo `Contexto y mapa` en modo inmediato.
+- La selección de zona aplicada ya restringe `Leads para revisar` aun sin seleccionar una cuadrícula individual; `Cancelar` restaura el estado aplicado previo y `Limpiar` vuelve al universo inicial.
+- Validación ejecutada: `pnpm --dir ui typecheck`, `pnpm --dir ui build` y `MAP7_BASE_URL=http://127.0.0.1:3002 node --import tsx/esm tests/e2e/map-apply-flow.playwright.ts`.
+
+---
+
+## MAP-8 — Leads individuales con iconos, sin Vista completa y card comercial
+
+**Status:** `done`
+
+**Objetivo**
+- Reemplazar la lectura tipo heatmap para leads individuales por un sistema de iconos.
+- Permitir que el usuario elija icono específico para el nicho desde la card del lead.
+- Eliminar el botón `Vista completa`.
+- Rediseñar la card de leads individuales para que sea estética, consistente y comercialmente útil.
+
+**Alcance**
+- Definir set inicial de iconos por nicho:
+  - default: punto de interés genérico.
+  - específicos: gastronomía, hotelería, salud, retail, servicios profesionales, educación, belleza, automotor, otros si ya existen nichos frecuentes.
+- Desde la card del lead, permitir seleccionar icono para ese nicho o grupo de nichos.
+- Persistir la preferencia a nivel de nicho/canonical niche, no solo por lead individual, salvo que producto decida lo contrario.
+- El mapa individual usa markers/iconos; el heatmap queda para densidad agregada, no para lead puntual.
+- Eliminar `Vista completa` porque ambos mapas deben tener la misma vista/funcionalidad embebida.
+- Rediseñar card:
+  - nombre con capitalización correcta.
+  - dirección/zona legible.
+  - niche/canonical niche como badge sobrio.
+  - score comercial visible con explicación corta.
+  - resumen de variables principales: presencia web, redes, rating/reviews, contacto, señales de software, señales de marketing.
+  - evitar colores planos saturados; usar tokens del tema y jerarquía visual.
+
+**Modelo de datos / contratos**
+- Tabla sugerida si no existe configuración equivalente:
+  - `niche_icon_preferences`: `id`, `canonical_niche`, `icon_key`, `color_token`, `updated_by`, `updated_at`.
+- Alternativa si ya existe `niche_aliases`: extender metadatos del canonical group con `icon_key`, solo si no rompe separación de responsabilidades.
+- DTO de marker debe incluir:
+  - `icon_key`, `icon_label`, `icon_source` (`default` | `niche_preference` | `lead_override`).
+- La card consume el resumen comercial de `LEAD-1`/`LEAD-6` cuando esté disponible.
+
+**UI/UX**
+- Selector de iconos compacto dentro de la card o popover.
+- Confirmar visualmente que el cambio aplica al nicho: `Este icono se usará para leads de Restaurante`.
+- Si el usuario no tiene permisos de edición, mostrar icono pero no selector.
+- La card debe ser usable en desktop y mobile sin desbordar el mapa.
+- Minúsculas/capitalización: normalizar labels para mostrar, sin mutar datos crudos.
+
+**No hacer en esta fase**
+- No crear editor avanzado de taxonomía; eso sigue en Calidad/Nichos.
+- No borrar datos de score ni evidencia.
+- No introducir librería nueva de iconos si ya existe una solución en UI.
+
+**Áreas/archivos probables**
+- `ui/src/components/maps/*`.
+- `ui/src/components/lead/*` si se reutiliza resumen comercial.
+- `api/src/routes/admin/niches.ts` o nueva ruta de preferencias visuales.
+- `supabase/migrations/*` si se persiste preferencia.
+
+**Validación mínima**
+- `pnpm test` si hay API/schema.
+- `pnpm --dir ui typecheck`.
+- `pnpm --dir ui build`.
+- Playwright: abrir card, cambiar icono, recargar y verificar persistencia.
+
+**Criterios de aceptación**
+- Leads individuales se ven como iconos, no como heatmap.
+- Existe icono default para cualquier nicho sin configuración.
+- Cambiar icono desde la card afecta de forma consistente ese nicho.
+- `Vista completa` ya no aparece en ninguno de los dos mapas.
+- La card muestra resumen comercial claro y estético.
+
+**Cierre**
+- `LocationDensityMapBase` ahora renderiza markers individuales con iconografía por niche/canonical niche y persiste la preferencia por grupo canónico en `localStorage`, sin introducir schema nuevo.
+- La card lateral de leads individuales pasó a un resumen comercial compacto con señales de web, contacto, rating/reviews, software y marketing; el selector de iconos confirma el alcance por niche.
+- `Vista completa` se retiró del flujo embebido de Inicio y del modo individual; la selección de icono se valida con recarga real en Playwright.
+- Validación ejecutada: `pnpm --dir ui typecheck`, `pnpm exec vitest run tests/ui/location-density-map.test.ts tests/api/pipeline-discovery-users.test.ts`, `pnpm --dir ui build`, `MAP7_BASE_URL=http://127.0.0.1:3003 node --import tsx/esm tests/e2e/map-apply-flow.playwright.ts`, `MAP8_BASE_URL=http://127.0.0.1:3003 node --import tsx/esm tests/e2e/map-icon-persistence.playwright.ts`, `pnpm typecheck`, `pnpm smoke:api`, `pnpm test`.
+
+---
+
+## MAP-9 — Auditoría integral del flujo de mapas
+
+**Status:** `done`
+
+**Objetivo**
+- Auditar integralmente la lógica de mapas después de la unificación y rediseño para detectar errores ocultos de datos, UX y arquitectura.
+
+**Alcance**
+- Crear o actualizar `context/research/map-flow-audit.md` con tres revisiones explícitas:
+  - **QA**: combinaciones de filtros, estados vacíos, errores de red, loading, mobile, dark mode, accesibilidad básica, regresiones Playwright.
+  - **Comercial**: utilidad para decidir a quién revisar/contactar, claridad de score, utilidad de zonas, iconos y cards, ausencia de fricción por `Aplicar`.
+  - **Desarrollador**: duplicación remanente, contratos API, performance, memoria/render de Leaflet, separación draft/applied, RBAC, compatibilidad con datos inferidos.
+- Cada hallazgo debe clasificarse:
+  - `blocker`: impide cerrar `MAP-9`.
+  - `fix-now`: corregir dentro de la fase si es pequeño.
+  - `follow-up`: crear fase explícita o issue documentado.
+- Reejecutar Playwright de mapas después de correcciones.
+
+**Modelo de datos / contratos**
+- No debería agregar tablas.
+- Si la auditoría descubre deuda de datos estructural, documentarla como fase futura antes de tocar schema.
+
+**UI/UX**
+- La auditoría comercial debe simular el flujo completo:
+  - abrir inicio/leads.
+  - elegir zona registrada.
+  - combinar filtros.
+  - explorar markers.
+  - aplicar al listado.
+  - abrir lead/card y entender próximo paso.
+
+**No hacer en esta fase**
+- No agregar features nuevas.
+- No relajar tests para cerrar rápido.
+- No cerrar sin evidencia de las tres auditorías.
+
+**Áreas/archivos probables**
+- `context/research/map-flow-audit.md`.
+- tests Playwright de mapas.
+- ajustes menores en componentes/rutas si la auditoría encuentra bugs.
+
+**Validación mínima**
+- Playwright completo de mapas.
+- `pnpm --dir ui typecheck`.
+
+**Cierre**
+- Se documentó la auditoría triple en `context/research/map-flow-audit.md` con revisión QA, comercial y desarrollador.
+- Hallazgos `fix-now` resueltos dentro de la fase: wrappers dinámicos `ssr: false` para la base cartográfica compartida y errores de red visibles en `lead-density` / `zone-leads` en lugar de estados vacíos silenciosos.
+- Hallazgos menores quedaron como follow-up explícito en la auditoría, sin blockers para operar el flujo hoy.
+- Validación ejecutada: `pnpm --dir ui typecheck`, `pnpm typecheck`, `pnpm --dir ui build`, `MAP6_BASE_URL=http://127.0.0.1:3005 node --import tsx/esm tests/e2e/map-filter-matrix.playwright.ts`, `MAP7_BASE_URL=http://127.0.0.1:3005 node --import tsx/esm tests/e2e/map-apply-flow.playwright.ts`, `MAP8_BASE_URL=http://127.0.0.1:3005 node --import tsx/esm tests/e2e/map-icon-persistence.playwright.ts`, `MAP9_BASE_URL=http://127.0.0.1:3005 node --import tsx/esm tests/e2e/map-audit.playwright.ts`, `pnpm exec vitest run tests/ui/location-density-map.test.ts`.
+- `pnpm --dir ui build`.
+- `pnpm test` si se toca API.
+
+**Criterios de aceptación**
+- Auditorías QA, comercial y desarrollador documentadas.
+- No quedan blockers abiertos.
+- Bugs críticos encontrados quedan corregidos y verificados.
+- Follow-ups no críticos quedan convertidos en fases o notas accionables.
+
+---
+
+## UI-8 — Limpieza de Alertas en Inicio
+
+**Status:** `done`
+
+**Objetivo**
+- Eliminar de la pantalla `Inicio` la sección `Alertas: Solo lo que cambia decisión o requiere intervención`.
+
+**Alcance**
+- Remover el bloque visual de Inicio.
+- Mantener intacto el sistema real de alertas persistidas, campanita, contador y página `/admin/alerts`.
+- Si el home queda con hueco visual, redistribuir secciones existentes sin introducir contenido falso.
+
+**Modelo de datos / contratos**
+- No requiere cambios de DB ni API.
+
+**UI/UX**
+- Inicio debe quedar más limpio y orientado a acciones actuales.
+- Las alertas siguen accesibles desde header/campanita.
+- No reemplazar la sección por otro bloque hardcoded.
+
+**Áreas/archivos probables**
+- `ui/src/app/admin/page.tsx` o home admin equivalente.
+- componentes de dashboard/home.
+
+**Validación mínima**
+- `pnpm --dir ui typecheck`.
+- `pnpm --dir ui build`.
+- Smoke Playwright/home: sección ausente, campanita presente.
+
+**Criterios de aceptación**
+- El texto `Alertas: Solo lo que cambia decisión o requiere intervención` ya no aparece en Inicio.
+- No se elimina navegación ni funcionalidad de alertas globales.
+
+**Cierre**
+- `Inicio` removió el bloque hardcoded de alertas sin reemplazarlo por contenido falso; el espacio quedó absorbido por las secciones operativas existentes.
+- Se alineó el copy del header para hablar de contexto operativo, no de alertas visibles en pantalla.
+- La campanita, el contador y `/admin/alerts` permanecen intactos en el shell admin.
+- Validación ejecutada: `pnpm --dir ui typecheck`, `pnpm --dir ui build`, `UI8_BASE_URL=http://127.0.0.1:3006 node --import tsx/esm tests/e2e/home-alerts-cleanup.playwright.ts`.
+
+---
+
+## DISC-12 — Plataforma > Importación de XLS de lugares y zonas
+
+**Status:** `done`
+
+**Cierre (2026-05-27)**
+- `Plataforma > Importación` quedó operativa en `/admin/imports` con upload `.xls/.xlsx`, preview explícito, confirmación y catálogo consultable.
+- Se reutilizó `discovery_places_catalog` como catálogo activo y `audit_log` como historial de importaciones para evitar una migración innecesaria en esta fase.
+- `Discovery` pasó a ser consumidor de solo lectura del catálogo; la carga y trazabilidad viven fuera del workspace operativo.
+- Validación ejecutada: `pnpm typecheck`, `pnpm exec vitest run tests/api/pipeline-discovery-users.test.ts`, `pnpm smoke:api`, `pnpm --dir ui typecheck`, `pnpm --dir ui build`, `DISC12_BASE_URL=http://127.0.0.1:3007 node --import tsx/esm tests/e2e/imports-flow.playwright.ts`.
+
+**Objetivo**
+- Diseñar e implementar un apartado `Importación` dentro de `Plataforma` para cargar XLS con lugares/zonas que funcionen como sugerencias de búsqueda para Discovery.
+
+**Alcance**
+- Nueva sección de navegación bajo `Plataforma > Importación`.
+- Upload de archivo `.xls`/`.xlsx` con preview antes de confirmar.
+- Validación de columnas requeridas y opcionales.
+- Normalización y deduplicación por ubicación/nombre.
+- Registro de import batches con estado y auditoría.
+- Catálogo resultante consumible por `Composer`, `Creación masiva`, filtros de zona y algoritmo predictivo.
+
+**Columnas mínimas del XLS**
+- `departamento` obligatorio.
+- `ciudad` obligatorio si aplica.
+- `barrio` opcional.
+- `lugar` o `zona` obligatorio.
+- `tipo` opcional (`zona`, `barrio`, `atractivo`, `centro_comercial`, `calle`, `punto_interes`).
+- `niche_hint` opcional.
+- `lat` / `lng` opcionales.
+- `source_name` y `source_url` recomendadas para trazabilidad.
+- `notes` opcional.
+
+**Modelo de datos / contratos**
+- Tablas sugeridas aditivas:
+  - `location_import_batches`: `id`, `filename`, `file_sha256`, `uploaded_by`, `status`, `total_rows`, `valid_rows`, `invalid_rows`, `duplicate_rows`, `created_at`, `completed_at`, `error_summary`.
+  - `location_catalog_entries`: `id`, `import_batch_id`, `country`, `departamento`, `ciudad`, `barrio`, `place_name`, `entry_type`, `niche_hint`, `lat`, `lng`, `normalized_zone_key`, `source_name`, `source_url`, `source_confidence`, `active`, `metadata`, `created_at`, `updated_at`.
+  - índice único parcial sugerido por `normalized_zone_key + place_name + entry_type` para evitar duplicados activos.
+- API sugerida:
+  - `POST /api/v1/admin/imports/locations/preview`.
+  - `POST /api/v1/admin/imports/locations/commit`.
+  - `GET /api/v1/admin/imports/locations`.
+  - `GET /api/v1/admin/location-catalog?q=&departamento=&ciudad=&barrio=&type=`.
+- Registrar acciones en `audit_log`.
+
+**UI/UX**
+- Pantalla con tres zonas:
+  - subir archivo y ver requisitos.
+  - preview con filas válidas/invalidas/duplicadas.
+  - historial de importaciones y catálogo activo.
+- Errores por fila deben ser entendibles: columna faltante, coordenada inválida, zona no normalizable, duplicado.
+- Confirmación explícita antes de insertar filas.
+- No bloquear Discovery si una importación queda fallida.
+
+**No hacer en esta fase**
+- No correr discovery automáticamente después de importar.
+- No usar llamadas Google Places durante preview.
+- No aceptar fuentes sin trazabilidad si el archivo declara origen externo.
+- No importar dependencia `xlsx` sin aprobación si no existe.
+
+**Áreas/archivos probables**
+- `supabase/migrations/*_location_imports.sql`.
+- `api/src/routes/admin/imports.ts` o módulo equivalente.
+- `src/storage/location-catalog.ts`.
+- `ui/src/app/admin/imports/page.tsx` o ruta bajo plataforma.
+- `ui/src/lib/api.ts`.
+
+**Validación mínima**
+- `supabase db reset` si hay migración.
+- `pnpm test`.
+- `pnpm smoke:api`.
+- `pnpm --dir ui typecheck`.
+- `pnpm --dir ui build`.
+- Test con fixture XLS válido, inválido y duplicado.
+
+**Criterios de aceptación**
+- Un admin puede cargar XLS, revisar preview y confirmar.
+- El catálogo queda persistido y consultable por API.
+- Errores de filas no tumban todo el proceso sin explicación.
+- La importación queda auditada y trazable.
+
+---
+
+## DISC-13 — Algoritmo predictivo de selección de lugares con potencial
+
+**Status:** `done`
+
+**Cierre (2026-05-27)**
+- Se implementó el motor determinístico `src/modules/discovery/location-opportunity.ts`, que rankea catálogo importado contra histórico de `discovery_jobs` y cobertura actual de `leads`.
+- El histórico usa `leads_found`, `leads_new`, `estimated_cost_usd`, recencia y fallback jerárquico (`direct` / `parent` / `ancestor`) para barrios o zonas sin señal propia.
+- La API `GET /api/v1/discovery/location-suggestions` ya expone `score`, `confidence`, `reasons`, `expected_new_leads`, `duplicate_risk`, `cost_estimate` y `historical_metrics`; la UI queda para `DISC-14`.
+- Validación ejecutada: `pnpm exec vitest run tests/api/location-opportunity.test.ts tests/api/pipeline-discovery-users.test.ts`, `pnpm test`, `pnpm typecheck`, `pnpm smoke:api`.
+
+**Objetivo**
+- Modelar un algoritmo que sugiera lugares con mayor probabilidad de encontrar leads nuevos y no registrados, cruzando catálogo importado con histórico de discoverys previos.
+
+**Alcance**
+- Construir un score predictivo por lugar/zona/nicho basado en:
+  - jerarquía geográfica: Departamento > Ciudad > Barrio.
+  - histórico de jobs de discovery en esa zona o zonas similares.
+  - porcentaje de éxito: leads nuevos / candidatos consultados.
+  - tasa de duplicados: leads ya registrados / candidatos.
+  - costo promedio por lead nuevo.
+  - recencia del último discovery.
+  - cobertura actual de leads en esa zona.
+  - disponibilidad de nichos sugeridos o `niche_hint`.
+- Definir salida explicable, no caja negra.
+- Mantener algoritmo determinístico y testeable antes de considerar ML.
+
+**Modelo de datos / contratos**
+- Read model o vista sugerida:
+  - `discovery_location_performance`: `zone_key`, `departamento`, `ciudad`, `barrio`, `niche`, `jobs_count`, `candidates_seen`, `new_leads_count`, `duplicate_count`, `success_rate`, `duplicate_rate`, `avg_cost_per_new_lead`, `last_discovery_at`.
+- Tabla/cache opcional si calcular on-demand es caro:
+  - `location_opportunity_scores`: `location_catalog_entry_id`, `niche`, `score`, `confidence`, `expected_new_leads`, `duplicate_risk`, `cost_estimate`, `reasons`, `computed_at`.
+- API sugerida:
+  - `GET /api/v1/discovery/location-suggestions?departamento=&ciudad=&niche=&limit=&min_score=`.
+  - respuesta con `score`, `confidence`, `reasons[]`, `historical_metrics`, `catalog_entry`.
+
+**Reglas de scoring iniciales**
+- Favorecer zonas con éxito histórico alto y baja duplicación.
+- Penalizar zonas descubiertas recientemente sin señales nuevas.
+- Penalizar baja confianza si no hay suficiente histórico.
+- Permitir exploración: zonas sin histórico pueden aparecer con score medio si el catálogo/fuente es fuerte, pero marcadas como `confidence: low`.
+- Nunca sugerir como alta prioridad un lugar que ya fue explorado exhaustivamente y produjo duplicados altos.
+
+**UI/UX**
+- Esta fase puede exponer solo API/read model o una vista técnica mínima.
+- La explicación del score debe estar lista para que `DISC-14` la muestre en Composer.
+
+**No hacer en esta fase**
+- No llamar Google Places.
+- No crear jobs automáticamente.
+- No usar modelos LLM para ranking inicial.
+
+**Áreas/archivos probables**
+- `src/modules/discovery/location-opportunity.ts`.
+- `src/storage/discovery.ts`.
+- `api/src/routes/discovery.ts`.
+- tests con fixtures de histórico.
+
+**Validación mínima**
+- `pnpm test` con casos:
+  - alto éxito y baja duplicación sube score.
+  - alta duplicación baja score.
+  - sin histórico devuelve confidence baja.
+  - discovery reciente penaliza.
+- `pnpm typecheck`.
+- `pnpm smoke:api` si se agrega endpoint.
+
+**Criterios de aceptación**
+- El algoritmo produce ranking estable y explicable.
+- La salida incluye razones y métricas históricas.
+- No sugiere lugares ya saturados como prioridad alta.
+- Está desacoplado de UI y de llamadas billable.
+
+---
+
+## DISC-14 — Sugerencias predictivas en Creación masiva y Composer
+
+**Status:** `done`
+
+**Objetivo**
+- Agregar en `Creación masiva` y `Composer` una opción para activar el algoritmo de selección de lugares con potencial.
+
+**Alcance**
+- Toggle: `Usar sugerencias predictivas` o equivalente.
+- Al activarlo, la UI consulta `DISC-13` y prellena lugares desde el catálogo importado.
+- Permitir revisar y deseleccionar sugerencias antes de crear jobs.
+- Mostrar explicación por sugerencia:
+  - score.
+  - probabilidad/confianza.
+  - histórico de éxito.
+  - riesgo de duplicados.
+  - costo estimado.
+  - última exploración.
+- Integrar con estimación de costo y hard cap GP ya existente.
+- Registrar en el job si fue creado por sugerencia predictiva, para medir performance posterior.
+
+**Modelo de datos / contratos**
+- Extender jobs o metadata de batch con campos no disruptivos:
+  - `suggestion_source`: `manual` | `predictive_location`.
+  - `location_catalog_entry_id` opcional.
+  - `opportunity_score_snapshot` JSON opcional para auditar por qué se creó.
+- No depender de recalcular score histórico para explicar un job viejo; guardar snapshot mínimo.
+
+**UI/UX**
+- El usuario sigue teniendo control. El algoritmo sugiere, no dispara.
+- Empty state claro si no hay catálogo importado: CTA a `Plataforma > Importación`.
+- Si el ranking tiene baja confianza, mostrarlo y no sobreactuar con lenguaje de certeza.
+- En `Creación masiva`, las sugerencias deben integrarse con selección ciudad × nicho existente.
+- En `Composer`, las sugerencias deben sentirse como asistencia contextual, no como otra pantalla.
+
+**No hacer en esta fase**
+- No crear jobs sin confirmación humana.
+- No saltarse hard cap de budget.
+- No ocultar sugerencias manuales existentes.
+
+**Áreas/archivos probables**
+- `ui/src/app/admin/discovery/page.tsx`.
+- componentes de Composer/Creación masiva.
+- `api/src/routes/discovery.ts`.
+- `src/storage/discovery-jobs.ts`.
+
+**Validación mínima**
+- `pnpm test`.
+- `pnpm smoke:api`.
+- `pnpm --dir ui typecheck`.
+- `pnpm --dir ui build`.
+- Playwright:
+  - toggle off mantiene flujo manual.
+  - toggle on muestra sugerencias.
+  - deseleccionar sugerencia evita job.
+  - crear batch guarda metadata predictiva.
+
+**Criterios de aceptación**
+- Composer y Creación masiva pueden usar catálogo + score predictivo.
+- El usuario entiende por qué se sugiere cada lugar.
+- No hay llamadas billable antes de confirmar creación de jobs.
+- Los jobs creados quedan trazables como predictivos.
+
+**Cierre 2026-05-27**
+- `ui/src/app/admin/discovery/page.tsx` agregó toggles predictivos en Composer y Creación masiva, con revisión/deselección explícita antes de crear.
+- `ui/src/lib/api.ts` consume `GET /api/v1/discovery/location-suggestions` y tipa `predictive_context` para batch y bulk sin bifurcar contratos.
+- `api/src/routes/discovery.ts` y `src/storage/discovery-jobs.ts` persisten `suggestion_source`, `location_catalog_entry_id` y `opportunity_score_snapshot` en metadata existente, sin migración nueva.
+- Validado con `pnpm test`, `pnpm smoke:api`, `pnpm --dir ui typecheck`, `pnpm --dir ui build` y `tests/e2e/discovery-predictive-flow.playwright.ts`.
+
+---
+
+## DISC-15 — XLS semilla inicial para poblar importación
+
+**Status:** `done`
+
+**Objetivo**
+- Generar o buscar un XLS inicial con datos útiles de lugares/zonas para poblar la base de importación y probar el sistema predictivo.
+
+**Alcance**
+- Definir fuentes permitidas y trazables para Uruguay, priorizando datos públicos o reutilizables.
+- Construir un archivo semilla con al menos:
+  - departamentos clave.
+  - ciudades relevantes.
+  - barrios/zonas comerciales cuando existan.
+  - puntos de interés o zonas de alta densidad comercial/turística.
+  - source_name/source_url por fila o por grupo de filas.
+- Documentar metodología en `context/research/location-seed-sources.md`.
+- Validar el XLS contra `DISC-12` y ajustar columnas.
+
+**Modelo de datos / contratos**
+- No introduce schema.
+- El archivo debe cumplir el contrato de columnas de `DISC-12`.
+- Si se guarda en repo, ubicarlo como fixture/dato semilla de bajo peso o documentar ubicación externa si pesa demasiado.
+
+**Criterios de fuente**
+- Preferir fuentes oficiales o abiertas: intendencias, datos abiertos, turismo, OSM export/manual review, listados públicos.
+- No usar scraping agresivo.
+- No usar datos con licencia incompatible.
+- No usar fuentes pagas ni credenciales sin aprobación explícita.
+
+**UI/UX**
+- No aplica UI nueva, salvo validar que la pantalla de importación pueda cargar el archivo.
+
+**No hacer en esta fase**
+- No correr discovery real sobre el XLS semilla.
+- No asumir que internet es fuente canónica sin registrar origen.
+- No mezclar datos dudosos con alta confianza.
+
+**Áreas/archivos probables**
+- `context/research/location-seed-sources.md`.
+- `context/prompts/` si se crea prompt auxiliar.
+- fixture XLS en ruta acordada, si el repo acepta binarios livianos.
+
+**Validación mínima**
+- Importación preview de `DISC-12` acepta el archivo.
+- Muestreo manual de 20 filas: departamento/ciudad/barrio/lugar/source coherentes.
+- Documentación de fuentes completa.
+
+**Criterios de aceptación**
+- Existe XLS semilla o especificación reproducible para generarlo.
+- Las fuentes quedan trazadas.
+- El archivo sirve para probar importación, filtros de zona y ranking predictivo sin llamadas Google Places.
+
+**Cierre 2026-05-27**
+- Se agregó la fixture tipada `tests/discovery/fixtures/uruguay-location-seed.ts` y su generado `tests/discovery/fixtures/uruguay-location-seed.xlsx`.
+- `scripts/generate-location-seed.ts` deja el XLS reproducible sin depender de fuentes pagas ni jobs billables.
+- `context/research/location-seed-sources.md` documenta metodologia, codigos de fuente y muestreo manual de 20 filas.
+- La preview real del import valida el archivo via `tests/api/pipeline-discovery-users.test.ts`.
+
+---
+
+## LEAD-6 — Filtro y orden por Tipo de oferta comercial
+
+**Status:** `done` (2026-05-27)
+
+**Objetivo**
+- Agregar filtrado y ordenamiento por `Tipo de oferta comercial` en `Leads para revisar` y otros filtros de leads.
+- Los tipos iniciales son `Marketing` y `Software`.
+
+**Alcance**
+- Definir fuente canónica del tipo de oferta:
+  - derivado del resumen comercial dual de `LEAD-1` si ya existe.
+  - materializado en un read model si filtrar/ordenar derivado on-demand es costoso.
+- Agregar filtros API/UI:
+  - `commercial_offer_type`: `marketing` | `software` | `both` | `none/unknown` si aplica.
+  - orden por mejor score de marketing.
+  - orden por mejor score de software.
+  - orden por diferencia entre marketing y software si aporta valor comercial.
+- Incluir dimensión en `Leads para revisar`, Lead Explorer y cualquier listado de leads que ya comparta filtros server-side.
+- Mostrar badge o columna clara para que el usuario entienda por qué un lead aparece bajo Marketing o Software.
+
+**Modelo de datos / contratos**
+- Opción A, derivada: extender respuesta de leads con `commercial_offers_summary`:
+  - `primary_offer_type`, `software_score`, `marketing_score`, `top_software_offer`, `top_marketing_offer`, `evidence_count`.
+- Opción B, materializada si performance lo requiere:
+  - `lead_commercial_offer_summary`: `lead_id`, `primary_offer_type`, `software_score`, `marketing_score`, `top_software_offer`, `top_marketing_offer`, `computed_at`, `source_version`.
+- Evitar enum rígido en DB si se prevé crecer a más tipos; usar constraint/check o catálogo si hace falta.
+- API debe validar valores y devolver error claro ante tipo desconocido.
+
+**UI/UX**
+- Filtro visible con label `Tipo de oferta comercial`.
+- Opciones: `Todas`, `Marketing`, `Software`, `Marketing + Software`, `Sin señal suficiente` si existe.
+- Ordenamiento visible junto al resto de sort controls.
+- En cards/listas, mostrar badge sobrio: `Marketing`, `Software` o `Mixto`, con score breve.
+- No duplicar texto técnico del scoring; mostrar explicación corta y link/expandible a evidencia si ya existe.
+
+**No hacer en esta fase**
+- No recalibrar todo el scoring comercial salvo que haya bug directo.
+- No bloquear leads sin score; deben quedar filtrables como `Sin señal suficiente` o seguir en `Todas`.
+- No esconder leads por RBAC fuera de reglas existentes.
+
+**Áreas/archivos probables**
+- `src/modules/scoring/offerings.ts`.
+- `src/storage/leads.ts`.
+- `api/src/routes/leads.ts`.
+- `ui/src/app/admin/leads/**` y filtros compartidos.
+- tests de filtros y orden.
+
+**Validación mínima**
+- `pnpm test` con fixtures de ofertas marketing/software/mixto/sin señal.
+- `pnpm smoke:api`.
+- `pnpm --dir ui typecheck`.
+- `pnpm --dir ui build`.
+- Playwright: filtrar por Marketing, Software, Mixto y ordenar por score.
+
+**Criterios de aceptación**
+- `Leads para revisar` permite filtrar por Marketing vs Software.
+- El backend aplica el filtro; no es solo filtrado client-side.
+- El ordenamiento es estable y documentado.
+- Otros listados que usan filtros de leads pueden adoptar el parámetro sin lógica duplicada.
+
+**Implementación 2026-05-27**
+- `api/src/routes/leads.ts` ahora soporta `commercial_offer_type`, `marketing_score`, `software_score` y `offer_balance` como filtros/orden server-side, reutilizando el mismo contrato de listados y cursor estable.
+- `src/modules/scoring/offerings.ts` expone `buildCommercialOfferingsSummary` como resumen canónico derivado sin migración nueva.
+- `ui/src/components/lead-explorer.tsx` expone selector `Tipo de oferta comercial`, nuevos órdenes y badge con `MKT/SW` breve por lead.
+- `ui/src/lib/api.ts` comparte el contrato `commercial_offers_summary` y serializa el filtro para cualquier listado que reutilice `listLeads`.
+
+**Validación ejecutada**
+- `pnpm exec vitest run tests/api/leads.test.ts`
+- `pnpm exec vitest run tests/ui/location-density-map.test.ts`
+- `pnpm --dir ui typecheck`
+- `pnpm --dir ui build`
+- `LEAD6_BASE_URL=http://127.0.0.1:3009 node --import tsx/esm tests/e2e/lead-commercial-filters.playwright.ts`
+
+---
 
 
 Actualizar como mínimo:

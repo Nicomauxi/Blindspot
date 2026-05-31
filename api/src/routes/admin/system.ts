@@ -7,6 +7,7 @@ import { getDb } from "../../db/client.js";
 import { getAuthUser, requireAdmin } from "../../auth/middleware.js";
 import { buildBackupOverview, getDefaultBackupSchedulerSnapshot } from "../../modules/backups/service.js";
 import { getBackupScheduler } from "../../modules/backups/runtime.js";
+import { getSchedulerStatus, getSchedulerUptimeSeconds, isSchedulerEmbedded } from "../../modules/scheduler/runtime.js";
 
 type PipelineConfigRow = {
   enabled: boolean;
@@ -264,12 +265,7 @@ export async function systemRoutes(app: FastifyInstance): Promise<void> {
       new Date(config.scheduled_for).getTime() < Date.now() - 15 * 60 * 1000 &&
       (!config.last_completed_at || new Date(config.last_completed_at) < new Date(config.scheduled_for));
 
-    let coreProcess: ProcessSnapshot = {
-      running: false,
-      pid: null,
-      uptime_seconds: null,
-      status: "unavailable",
-    };
+    let coreProcess: ProcessSnapshot;
     let apiProcess: ProcessSnapshot = {
       running: true,
       pid: process.pid,
@@ -278,24 +274,26 @@ export async function systemRoutes(app: FastifyInstance): Promise<void> {
     };
 
     if (process.env["NODE_ENV"] === "production") {
+      coreProcess = { running: false, pid: null, uptime_seconds: null, status: "unavailable" };
       try {
         const processes = await listPm2Processes();
         coreProcess = normalizePm2Process(detectProcess(processes, "blindspot-core"));
         apiProcess = normalizePm2Process(detectProcess(processes, "blindspot-api"));
       } catch {
-        coreProcess = {
-          running: false,
-          pid: null,
-          uptime_seconds: null,
-          status: "pm2_unavailable",
-        };
-        apiProcess = {
-          running: apiProcess.running,
-          pid: apiProcess.pid,
-          uptime_seconds: apiProcess.uptime_seconds,
-          status: "pm2_unavailable",
-        };
+        coreProcess = { running: false, pid: null, uptime_seconds: null, status: "pm2_unavailable" };
+        apiProcess = { ...apiProcess, status: "pm2_unavailable" };
       }
+    } else if (isSchedulerEmbedded()) {
+      // Dev mode with embedded scheduler — reflect real scheduler state
+      const schedulerStatus = getSchedulerStatus();
+      coreProcess = {
+        running: schedulerStatus === "running",
+        pid: process.pid, // same process as API
+        uptime_seconds: getSchedulerUptimeSeconds(),
+        status: schedulerStatus === "running" ? "embedded" : schedulerStatus,
+      };
+    } else {
+      coreProcess = { running: false, pid: null, uptime_seconds: null, status: "unavailable" };
     }
 
     const discoverySummary = summarizeDiscovery(discoveryRecent);

@@ -128,6 +128,21 @@ CRM real con feedback humano estructurado.
 - UI-RESP-1 cerrado el 2026-05-25: max-width 1440px en layout, overflow-x-auto en todas las tablas (audit-log, users, discovery), grids responsivos en audit-log diff y segments.
 - QUAL-1 cerrado el 2026-05-25: tabla `niche_aliases` + storage/niches + CRUD admin API + expansión automática en filtros de leads + sección Nichos en `/admin/performance`.
 - El usuario adjuntó `context/prompts/deepsearch-discovery-places.md` como input aparte para generar el XLS que consume `DISC-10`.
+- Ciclo 4 abierto el 2026-05-27 con 11 fases nuevas (MAP-5 → LEAD-6) cubriendo: unificación real de `Mapa de leads` y `Contexto y mapa`, zonas dinámicas, fix de filtros combinados con Playwright, flujo `Aplicar`, iconos por nicho, auditoría integral de mapas, limpieza de alertas en Inicio, importación XLS en Plataforma, discovery predictivo por zona/histórico, XLS semilla y filtro por tipo de oferta comercial.
+- MAP-5 cerrado el 2026-05-26: `Mapa de leads` y `Contexto y mapa` montan wrappers por variante sobre `LocationDensityMapBase`; la serialización de selección/drilldown vive en helpers compartidos y ya hay test focalizado que lo prueba.
+- MAP-6 cerrado el 2026-05-27: `/api/v1/admin/geo/zones` expone zonas estructuradas con prioridad catálogo + fallback derivado; `lead-density` y `zone-leads` comparten parser/serializador de filtros y ambas pantallas refetch drilldown cuando cambian filtros.
+- MAP-7 cerrado el 2026-05-27: `Inicio` separa estado `draft`/`applied`, `LeadReviewMap` expone `Aplicar al listado`/`Cancelar`/`Limpiar`, y la lista embebida sólo cambia con filtros geográficos aplicados.
+- MAP-8 cerrado el 2026-05-27: el modo individual usa iconos por niche/canonical niche persistidos localmente, elimina `Vista completa` y reemplaza la lista lateral por cards comerciales compactas con selector de icono cuando el rol puede editar.
+- MAP-9 cerrado el 2026-05-27: auditoría triple documentada en `context/research/map-flow-audit.md`; se corrigieron el riesgo SSR de la base compartida en `next start` y los errores silenciosos de `lead-density`/`zone-leads`.
+- UI-8 cerrado el 2026-05-27: Inicio ya no muestra el bloque hardcoded de alertas y la campanita global se mantiene como única entrada a alertas persistidas.
+- DISC-12 cerrado el 2026-05-27: `/admin/imports` concentra upload, preview, confirmación, historial y catálogo activo; `audit_log` registra `discovery.places.import` y Discovery consume el catálogo en modo solo lectura.
+- DISC-13 cerrado el 2026-05-27: el ranking predictivo ya vive en `src/modules/discovery/location-opportunity.ts` y se consume por `GET /api/v1/discovery/location-suggestions` con razones, confianza y métricas históricas explicables.
+- DISC-14 cerrado el 2026-05-27: Composer y Creación masiva ya consumen `GET /api/v1/discovery/location-suggestions`, permiten revisar/deseleccionar sugerencias y persisten `predictive_context`/`suggestion_source` en batches y jobs bulk sin migración nueva.
+- DISC-15 cerrado el 2026-05-27: el repo ya incluye un seed reproducible (`uruguay-location-seed.ts` + `.xlsx`), documentación de fuentes y validación de preview real contra el contrato de importación.
+- LEAD-6 cerrado el 2026-05-27: `Lead Explorer` ya filtra y ordena server-side por `Tipo de oferta comercial`, reutiliza `commercial_offers_summary` como contrato compartido y valida el flujo con Vitest + build + Playwright.
+- Todas las fases del ciclo 4 completadas al 2026-05-27. Ciclo 4 cerrado.
+- No quedan fases `pending` en el roadmap canónico actual.
+- UX de selección de locación unificada el 2026-05-28: nueva base compartida `DiscoveryLocationPicker` (`ui/src/components/discovery-location-picker.tsx`) + helpers centralizados (`ui/src/lib/discovery-location.ts`). Composer (single + fallback texto libre) y Creación masiva (multi, ubicaciones del catálogo × nichos) la reutilizan; se eliminó la grilla hardcodeada `BULK_CITIES`, los paneles predictivos duplicados y la sección `CatalogSection` standalone (plegada en el tab `Catálogo`). Sin cambios de backend ni de schema; contrato `predictive_context`/`recommendation_origin` preservado. Validado con typecheck (raíz + ui), `ui build`, unit tests nuevos (`tests/ui/discovery-location.test.ts`) y Playwright actualizado (`tests/e2e/discovery-predictive-flow.playwright.ts`).
 
 **Lo que no hacer al retomar:**
 - no revertir lógica CRM por "simplicidad" — está diseñada para escalar
@@ -136,6 +151,11 @@ CRM real con feedback humano estructurado.
 - no cerrar `LEAD-5` sin las tres auditorías documentadas en `context/research/lead-5-audits.md`
 - no importar dependencias nuevas (charts, markercluster, xlsx, mapbox) sin pedir aprobación explícita antes
 - no ejecutar `UI-RESP-1` antes de cerrar todas las pantallas nuevas o modificadas del ciclo 3
+- no volver a duplicar lógica entre `Mapa de leads` y `Contexto y mapa`; cualquier cambio de mapas del ciclo 4 debe pasar por la base compartida de `MAP-5`
+- no aceptar filtro de zona manual como fuente primaria; usar zonas registradas con id estable
+- no cerrar `MAP-6` sin Playwright para combinaciones de filtros
+- no correr discovery real ni Google Places para probar el algoritmo predictivo; `DISC-13` y `DISC-14` se validan con histórico/catálogo/fixtures
+- no cargar XLS de fuentes externas sin trazabilidad de origen y licencia razonable
 
 **Ciclo 3 — gaps que cubre (snapshot al abrir):**
 - bug: Budget GP spent muestra 0 en lugar del valor real
@@ -147,3 +167,15 @@ CRM real con feedback humano estructurado.
 - ficha de Lead mezcla técnico y comercial; no diferencia ofertas de software vs marketing; el feedback humano está separado del dato que valida; bloques deprecated siguen visibles
 - nichos divergen por sinónimos sin forma de unirlos
 - no hay garantía de responsive en todo el admin
+
+**Ciclo 4 — gaps que cubre (snapshot al abrir 2026-05-27):**
+- `Mapa de leads` y `Contexto y mapa` deben converger en un componente/base cartográfica única con variantes por contexto.
+- El filtro `Filtrar zona` ya no puede ser manual; debe alimentarse de zonas registradas y mostrar jerarquía Departamento > Ciudad > Barrio.
+- Los filtros actuales de mapas tienen regresión al combinarse; la corrección exige matriz Playwright y validación de counters/listas/markers.
+- En `Mapa de leads`, seleccionar en mapa no debe filtrar `Leads para revisar` hasta confirmar con `Aplicar`.
+- Los leads individuales deben abandonar visual de heatmap y pasar a iconos configurables por nicho, con card comercial estética y resumida.
+- Inicio debe perder el bloque de alertas textual; las alertas reales quedan en campanita/página dedicada.
+- Discovery necesita catálogo de lugares importado desde `Plataforma > Importación` y un ranking predictivo por zona/histórico para evitar búsquedas amplias tipo `Montevideo`.
+- Se requiere XLS semilla trazable para poblar y probar la importación sin consumo billable.
+- `Leads para revisar` y listados compatibles deben filtrar/ordenar por `Tipo de oferta comercial` (`Marketing` vs `Software`).
+

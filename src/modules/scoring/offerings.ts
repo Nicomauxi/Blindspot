@@ -18,6 +18,19 @@ export interface CommercialOfferings {
   has_data: boolean;
 }
 
+export type CommercialOfferType = "software" | "marketing" | "both" | "unknown";
+
+export interface CommercialOfferingsSummary {
+  primary_offer_type: CommercialOfferType;
+  software_score: number;
+  marketing_score: number;
+  top_software_offer: string | null;
+  top_marketing_offer: string | null;
+  top_software_label: string | null;
+  top_marketing_label: string | null;
+  evidence_count: number;
+}
+
 const OFFER_LABELS: Record<string, string> = {
   web_nuevo: "Sitio web nuevo",
   rediseno: "Rediseño de sitio web",
@@ -162,4 +175,33 @@ export function buildCommercialOfferings(
   const has_data = softwareOfferings.length > 0 || marketingOfferings.length > 0;
 
   return { software: softwareOfferings, marketing: marketingOfferings, has_data };
+}
+
+export function buildCommercialOfferingsSummary(
+  offerings: CommercialOfferings
+): CommercialOfferingsSummary {
+  const topSoftware = offerings.software[0] ?? null;
+  const topMarketing = offerings.marketing[0] ?? null;
+  const softwareScore = topSoftware?.score ?? 0;
+  const marketingScore = topMarketing?.score ?? 0;
+  const hasSoftware = offerings.software.length > 0;
+  const hasMarketing = offerings.marketing.length > 0;
+
+  let primaryOfferType: CommercialOfferType = "unknown";
+  if (hasSoftware && hasMarketing) primaryOfferType = "both";
+  else if (hasSoftware) primaryOfferType = "software";
+  else if (hasMarketing) primaryOfferType = "marketing";
+
+  return {
+    primary_offer_type: primaryOfferType,
+    software_score: softwareScore,
+    marketing_score: marketingScore,
+    top_software_offer: topSoftware?.id ?? null,
+    top_marketing_offer: topMarketing?.id ?? null,
+    top_software_label: topSoftware?.label ?? null,
+    top_marketing_label: topMarketing?.label ?? null,
+    evidence_count:
+      offerings.software.reduce((sum, offering) => sum + offering.signals.length, 0) +
+      offerings.marketing.reduce((sum, offering) => sum + offering.signals.length, 0),
+  };
 }

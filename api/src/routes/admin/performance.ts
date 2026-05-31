@@ -215,7 +215,7 @@ export async function performanceRoutes(app: FastifyInstance): Promise<void> {
     }
     const days = parseDays(queryParse.data.days, DEFAULT_DAYS);
     const { start, end } = buildWindow(days);
-
+    try {
     const [runsRes, errorsRes, leadsRes] = await Promise.all([
       db.from("pipeline_runs").select("id, status, created_at, started_at, completed_at, phase_results").order("created_at", { ascending: false }).limit(200),
       db.from("pipeline_errors").select("id, occurred_at, run_id, phase, source, lead_id, error_type, message, stack, recovered").order("occurred_at", { ascending: false }).limit(5000),
@@ -328,6 +328,10 @@ export async function performanceRoutes(app: FastifyInstance): Promise<void> {
         ts: new Date().toISOString(),
       },
     });
+    } catch (err) {
+      request.log.error({ err }, "Failed to build performance overview");
+      return reply.status(500).send({ error: "Database error", error_code: "db_error" });
+    }
   });
 
   app.get("/admin/performance/errors", { preHandler: requireAdmin }, async (request, reply) => {
@@ -344,6 +348,7 @@ export async function performanceRoutes(app: FastifyInstance): Promise<void> {
       : query.recovered === "true";
     const { start, end } = buildWindow(days);
 
+    try {
     const result = await db
       .from("pipeline_errors")
       .select("id, occurred_at, run_id, phase, source, lead_id, error_type, message, stack, recovered")
@@ -380,6 +385,10 @@ export async function performanceRoutes(app: FastifyInstance): Promise<void> {
         recovered: recoveredFilter,
       },
     });
+    } catch (err) {
+      request.log.error({ err }, "Failed to fetch performance errors");
+      return reply.status(500).send({ error: "Database error", error_code: "db_error" });
+    }
   });
 
   app.get("/admin/performance/quality", { preHandler: requireAdmin }, async (request, reply) => {
@@ -391,6 +400,7 @@ export async function performanceRoutes(app: FastifyInstance): Promise<void> {
     const query: QualityQuery = queryParse.data;
     const days = parseDays(query.days, DEFAULT_DAYS);
 
+    try {
     const [runsRes, leadsRes] = await Promise.all([
       db.from("pipeline_runs").select("id, status, created_at, started_at, completed_at, phase_results").order("created_at", { ascending: false }).limit(200),
       db.from("leads").select("id, name, source, updated_at, prospect_score, gps, inferred_state, digital_footprint, score_breakdown").order("updated_at", { ascending: false }).limit(5000),
@@ -489,5 +499,9 @@ export async function performanceRoutes(app: FastifyInstance): Promise<void> {
         ts: new Date().toISOString(),
       },
     });
+    } catch (err) {
+      request.log.error({ err }, "Failed to build performance quality");
+      return reply.status(500).send({ error: "Database error", error_code: "db_error" });
+    }
   });
 }

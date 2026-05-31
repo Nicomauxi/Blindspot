@@ -27,21 +27,22 @@ Si hay contradicción, gana `ROADMAP_CANONICAL.md`.
 
 ## Misión actual
 
-El sistema ya fue remediado y dejado operable, y el ciclo 2 cerró el 2026-05-24.
-La misión actual es ejecutar el **ciclo 3** del programa de mejoras (35 fases nuevas
-desde `BUG-1` hasta `UI-RESP-1`), por fases chicas y verificables, con calidad
+El sistema ya fue remediado y dejado operable. Los ciclos 1, 2 y 3 están cerrados
+según `PROJECT_MASTER.md` y `ROADMAP_CANONICAL.md`.
+
+La misión actual es ejecutar el **ciclo 4** del programa de mejoras (11 fases nuevas
+desde `MAP-5` hasta `LEAD-6`), por fases chicas y verificables, con calidad
 profesional, sin reabrir caos arquitectónico ni agrandar diffs innecesariamente.
 
-El ciclo 3 cubre: bugfixes urgentes de budget GP, unificación Pipeline+Monitoreo
-en una pantalla `Operaciones` con secciones de Variables y Procesos en vivo,
-refresh masivo de leads en Discovery (incluyendo re-discovery de Google Places),
-hard cap mensual del budget GP, optimización del costo por lead nuevo, mapa
-heatmap granular con geocoding + filtros + modo individual, limpieza de UI
-deprecated (campañas, asistente comercial, outreach historial), sistema de
-alertas persistido con campanita en UI, mejoras CRM (transiciones bidireccionales,
-historial en popup, filtros) y safeguard RBAC para datos de contacto, rediseño
-completo de la ficha de Lead con **auditoría triple obligatoria** (técnico, UX,
-vendedor), aliasing de nichos en Calidad y responsive global como cierre.
+El ciclo 4 cubre: unificación de `Mapa de leads` y `Contexto y mapa` en una base
+cartográfica compartida, zonas dinámicas, corrección de filtros combinados con
+Playwright obligatorio, flujo `Aplicar` para no filtrar automáticamente `Leads para
+revisar`, iconos configurables por nicho, auditoría integral de mapas (QA,
+comercial y desarrollador), limpieza de alertas en Inicio, `Plataforma >
+Importación` para XLS de lugares/zonas, algoritmo predictivo para elegir lugares
+con potencial cruzando Departamento > Ciudad > Barrio con histórico de discoverys,
+XLS semilla trazable y filtro/ordenamiento por `Tipo de oferta comercial`
+(`Marketing` vs `Software`).
 
 ## Reglas de oro
 
@@ -164,10 +165,11 @@ Cada fase debe dejar:
 
 - Ciclo 1 cerrado: `CTX-0` → `CRM-4` (todos done, 2026-05-22 a 2026-05-24).
 - Ciclo 2 cerrado: `UI-2`, `UI-1`, `NAV-2`, `THEME-2`, `MON-3`, `MON-4`, `OPS-1`, `PIPE-1`, `PIPE-3`, `PIPE-2`, `CRM-5`, `DISC-4`, `DISC-5`, `DISC-6` (todos done, 2026-05-23/24).
-- **Ciclo 3 activo desde 2026-05-24**: 35 fases nuevas (ver `ROADMAP_CANONICAL.md` órdenes 32–66).
-- Próxima fase esperada: `BUG-1` (Budget GP spent muestra 0).
-- Asset auxiliar entregado por el usuario (fuera del flujo): `context/prompts/deepsearch-discovery-places.md`. Su output (un `.xlsx` con catálogo de lugares de Uruguay) se consume en la fase `DISC-10`.
-- El ciclo 3 termina cuando `UI-RESP-1` quede cerrada y documentada.
+- Ciclo 3 cerrado: `BUG-1` → `UI-RESP-1` (todos done, 2026-05-25 según contexto maestro).
+- **Ciclo 4 activo desde 2026-05-27**: 11 fases nuevas (ver `ROADMAP_CANONICAL.md` órdenes 67–77).
+- Próxima fase esperada: `MAP-5` (base cartográfica compartida para `Mapa de leads` y `Contexto y mapa`).
+- Asset auxiliar histórico: `context/prompts/deepsearch-discovery-places.md`. Puede informar `DISC-15`, pero el XLS semilla del ciclo 4 debe quedar trazable y compatible con `DISC-12`.
+- El ciclo 4 termina cuando `LEAD-6` quede cerrado y documentado, salvo que `MAP-9` abra follow-ups explícitos.
 
 ## Notas específicas del ciclo 3
 
@@ -189,3 +191,21 @@ Cada fase debe dejar:
 - **Hard cap GP budget**: `PIPE-4` es prerequisito de `DISC-11` y de cualquier campaña real de discovery. Tras cerrarla, el sistema debe rechazar runs que superarían el cap en UI, API y core.
 
 - **RBAC del ciclo**: `RBAC-1` cambia el shape de la API para usuarios `comercial`. Cualquier fase posterior que toque Lead Detail o pantallas comerciales debe respetar la redacción server-side.
+
+## Notas específicas del ciclo 4
+
+- **Mapas compartidos**: `MAP-5` es prerequisito real. No aceptar fixes aislados en una sola pantalla si duplican lógica cartográfica.
+
+- **Filtros de mapa**: `MAP-6` no cierra sin Playwright para combinaciones de zona, source, niche, score, tier y gps_source. Valores vacíos significan ausencia de restricción.
+
+- **Aplicar en Mapa de leads**: `MAP-7` separa estado `draft` de estado `applied`; `Leads para revisar` solo se actualiza al confirmar.
+
+- **Auditoría MAP-9**: debe documentarse en `context/research/map-flow-audit.md` con revisión QA, comercial y desarrollador. Sin las tres, no cerrar.
+
+- **Importación XLS**: `DISC-12` requiere parser XLS. Verificar dependencias primero; si falta `xlsx` u otra librería, pedir aprobación antes de importar.
+
+- **Discovery predictivo**: `DISC-13` y `DISC-14` no deben hacer llamadas Google Places para calcular sugerencias. Usar catálogo, histórico y fixtures.
+
+- **XLS semilla**: `DISC-15` requiere fuentes trazables. No usar scraping agresivo, fuentes pagas ni datos con licencia dudosa.
+
+- **Oferta comercial**: `LEAD-6` debe aplicar filtro/orden server-side. No resolverlo solo con filtrado client-side.

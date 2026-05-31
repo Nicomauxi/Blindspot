@@ -178,6 +178,7 @@ export interface BulkJobDefinition {
   max_results?: number;
   cost_cap_usd?: number | null;
   estimated_cost_usd?: number | null;
+  source_params?: Record<string, unknown> | null;
 }
 
 export async function bulkInsertDiscoveryJobs(
@@ -199,6 +200,7 @@ export async function bulkInsertDiscoveryJobs(
     batch_id: null,
     cost_cap_usd: j.cost_cap_usd ?? null,
     estimated_cost_usd: j.estimated_cost_usd ?? null,
+    source_params: j.source_params ?? null,
     enrich_after_discovery: false,
     enrich_status: "skipped",
   }));

@@ -8,7 +8,12 @@ import { expandNiche } from "../../../src/storage/niches.js";
 import { startFilterEnrichmentJob } from "../../../src/cli/commands/enrich.js";
 import { startReDiscoveryJob } from "../../../src/cli/commands/re-discover.js";
 import { summarizeFeedbackRows, computeFeedbackAdjustedConfidence } from "../../../src/modules/feedback/summary.js";
-import { buildCommercialOfferings } from "../../../src/modules/scoring/offerings.js";
+import {
+  buildCommercialOfferings,
+  buildCommercialOfferingsSummary,
+  type CommercialOfferType,
+  type CommercialOfferingsSummary,
+} from "../../../src/modules/scoring/offerings.js";
 import { createLeadGeocodingService } from "../services/lead-geocoding.js";
 import {
   buildGridCell,
@@ -162,6 +167,7 @@ const listQuerySchema = z.object({
   niche: z.string().optional(),
   source: z.string().optional(),
   primary_offer: z.string().optional(),
+  commercial_offer_type: z.enum(["marketing", "software", "both", "unknown"]).optional(),
   q: z.string().optional(),
   location_key: z.string().trim().min(1).optional(),
   parent_location_key: z.string().trim().min(1).optional(),
@@ -188,7 +194,7 @@ const listQuerySchema = z.object({
             .filter(Boolean)
         : []
     ),
-  sort_by: z.enum(["created_at", "prospect_score"]).optional().default("created_at"),
+  sort_by: z.enum(["created_at", "prospect_score", "marketing_score", "software_score", "offer_balance"]).optional().default("created_at"),
   sort_direction: z.enum(["asc", "desc"]).optional().default("desc"),
   cursor: z.string().min(1).optional(),
   limit: z
@@ -234,7 +240,7 @@ type CommercialEvidenceNode = {
   children?: CommercialEvidenceNode[];
 };
 
-type LeadSortBy = "created_at" | "prospect_score";
+type LeadSortBy = "created_at" | "prospect_score" | "marketing_score" | "software_score" | "offer_balance";
 type LeadSortDirection = "asc" | "desc";
 type LeadCursorPayload = {
   sort_by: LeadSortBy;
@@ -242,6 +248,9 @@ type LeadCursorPayload = {
   id: string;
   created_at: string;
   prospect_score: number | null;
+  marketing_score: number | null;
+  software_score: number | null;
+  offer_balance: number | null;
 };
 
 type GeoSelection = {
@@ -264,9 +273,9 @@ function buildGeoSelection(params: {
 
   if (params.location_key) {
     const parsed = parseGranularLocationKey(params.location_key);
-    if (parsed) {
-      parentLocationKeys.add(parsed.parentLocationKey);
-      gridLocationKeys.add(parsed.gridKey);
+    if (parsed.parent_location_key) {
+      parentLocationKeys.add(parsed.parent_location_key);
+      if (parsed.grid_location_key) gridLocationKeys.add(parsed.grid_location_key);
     } else {
       parentLocationKeys.add(params.location_key);
     }
@@ -276,6 +285,58 @@ function buildGeoSelection(params: {
     parentLocationKeys: [...parentLocationKeys],
     gridLocationKeys: [...gridLocationKeys],
   };
+}
+
+function getLeadCommercialOfferings(lead: JsonRecord) {
+  const existing = lead["commercial_offerings"];
+  if (isRecord(existing) && Array.isArray(existing["software"]) && Array.isArray(existing["marketing"])) {
+    return existing as unknown as ReturnType<typeof buildCommercialOfferings>;
+  }
+  return buildCommercialOfferings(
+    asStringArray(lead["tags"]),
+    isRecord(lead["score_breakdown"]) ? (lead["score_breakdown"] as Record<string, unknown>) : null,
+    isRecord(lead["digital_footprint"]) ? (lead["digital_footprint"] as Record<string, unknown>) : null
+  );
+}
+
+function getLeadCommercialSummary(lead: JsonRecord): CommercialOfferingsSummary {
+  const existing = lead["commercial_offers_summary"];
+  if (isRecord(existing)) {
+    return {
+      primary_offer_type: (existing["primary_offer_type"] as CommercialOfferType | undefined) ?? "unknown",
+      software_score: asNullableNumber(existing["software_score"]) ?? 0,
+      marketing_score: asNullableNumber(existing["marketing_score"]) ?? 0,
+      top_software_offer: asNullableString(existing["top_software_offer"]),
+      top_marketing_offer: asNullableString(existing["top_marketing_offer"]),
+      top_software_label: asNullableString(existing["top_software_label"]),
+      top_marketing_label: asNullableString(existing["top_marketing_label"]),
+      evidence_count: asNullableNumber(existing["evidence_count"]) ?? 0,
+    };
+  }
+  return buildCommercialOfferingsSummary(getLeadCommercialOfferings(lead));
+}
+
+function getLeadSortMetric(lead: JsonRecord, sortBy: LeadSortBy): number | null {
+  if (sortBy === "prospect_score") {
+    return asNullableNumber(lead["prospect_score"]);
+  }
+  const summary = getLeadCommercialSummary(lead);
+  if (sortBy === "marketing_score") return summary.marketing_score;
+  if (sortBy === "software_score") return summary.software_score;
+  if (sortBy === "offer_balance") return Math.abs(summary.software_score - summary.marketing_score);
+  return null;
+}
+
+function matchesCommercialOfferType(
+  lead: JsonRecord,
+  commercialOfferType: CommercialOfferType | undefined
+): boolean {
+  if (!commercialOfferType) return true;
+  return getLeadCommercialSummary(lead).primary_offer_type === commercialOfferType;
+}
+
+function isDerivedCommercialSort(sortBy: LeadSortBy): boolean {
+  return sortBy === "marketing_score" || sortBy === "software_score" || sortBy === "offer_balance";
 }
 
 function encodeLeadCursor(payload: LeadCursorPayload): string {
@@ -291,7 +352,7 @@ function decodeLeadCursor(value: string): LeadCursorPayload | null {
     const sortBy = parsed["sort_by"];
     const sortDirection = parsed["sort_direction"];
     if (!id || !createdAt) return null;
-    if (sortBy !== "created_at" && sortBy !== "prospect_score") return null;
+    if (sortBy !== "created_at" && sortBy !== "prospect_score" && sortBy !== "marketing_score" && sortBy !== "software_score" && sortBy !== "offer_balance") return null;
     if (sortDirection !== "asc" && sortDirection !== "desc") return null;
     return {
       sort_by: sortBy,
@@ -299,6 +360,9 @@ function decodeLeadCursor(value: string): LeadCursorPayload | null {
       id,
       created_at: createdAt,
       prospect_score: asNullableNumber(parsed["prospect_score"]),
+      marketing_score: asNullableNumber(parsed["marketing_score"]),
+      software_score: asNullableNumber(parsed["software_score"]),
+      offer_balance: asNullableNumber(parsed["offer_balance"]),
     };
   } catch {
     return null;
@@ -317,17 +381,21 @@ async function resolveLeadCursor(
 
   const { data } = await db
     .from("lead_dashboard")
-    .select("id, created_at, prospect_score")
+    .select("*")
     .eq("id", rawCursor)
     .maybeSingle();
 
   if (!data || typeof data !== "object") return null;
+  const normalized = normalizeLeadRow(data as JsonRecord);
   return {
     sort_by: sortBy,
     sort_direction: sortDirection,
-    id: asNullableString(data["id"]) ?? rawCursor,
-    created_at: asNullableString(data["created_at"]) ?? new Date(0).toISOString(),
-    prospect_score: asNullableNumber(data["prospect_score"]),
+    id: asNullableString(normalized["id"]) ?? rawCursor,
+    created_at: asNullableString(normalized["created_at"]) ?? new Date(0).toISOString(),
+    prospect_score: asNullableNumber(normalized["prospect_score"]),
+    marketing_score: getLeadCommercialSummary(normalized).marketing_score,
+    software_score: getLeadCommercialSummary(normalized).software_score,
+    offer_balance: Math.abs(getLeadCommercialSummary(normalized).software_score - getLeadCommercialSummary(normalized).marketing_score),
   };
 }
 
@@ -339,9 +407,9 @@ function compareLeadRows(
 ): number {
   const ascending = sortDirection === "asc";
 
-  if (sortBy === "prospect_score") {
-    const leftScore = asNullableNumber(left["prospect_score"]);
-    const rightScore = asNullableNumber(right["prospect_score"]);
+  if (sortBy !== "created_at") {
+    const leftScore = getLeadSortMetric(left, sortBy);
+    const rightScore = getLeadSortMetric(right, sortBy);
     if (leftScore !== rightScore) {
       if (leftScore == null) return 1;
       if (rightScore == null) return -1;
@@ -370,9 +438,16 @@ function isLeadRowAfterCursor(
 ): boolean {
   const ascending = sortDirection === "asc";
 
-  if (sortBy === "prospect_score") {
-    const rowScore = asNullableNumber(row["prospect_score"]);
-    const cursorScore = cursor.prospect_score;
+  if (sortBy !== "created_at") {
+    const rowScore = getLeadSortMetric(row, sortBy);
+    const cursorScore =
+      sortBy === "prospect_score"
+        ? cursor.prospect_score
+        : sortBy === "marketing_score"
+          ? cursor.marketing_score
+          : sortBy === "software_score"
+            ? cursor.software_score
+            : cursor.offer_balance;
     if (rowScore !== cursorScore) {
       if (rowScore == null) return false;
       if (cursorScore == null) return true;
@@ -868,15 +943,17 @@ function normalizeLeadRow(row: JsonRecord): JsonRecord {
   };
 
   const fieldSources = buildFieldSources(normalized, canonicalFields, corroboratingSources);
+  const commercialOfferings = buildCommercialOfferings(
+    asStringArray(normalized["tags"]),
+    isRecord(normalized["score_breakdown"]) ? normalized["score_breakdown"] : null,
+    isRecord(normalized["digital_footprint"]) ? normalized["digital_footprint"] : null
+  );
   return {
     ...normalized,
     field_sources: fieldSources,
     commercial_evidence_tree: buildCommercialEvidenceTree(normalized, fieldSources),
-    commercial_offerings: buildCommercialOfferings(
-      asStringArray(normalized["tags"]),
-      isRecord(normalized["score_breakdown"]) ? normalized["score_breakdown"] : null,
-      isRecord(normalized["digital_footprint"]) ? normalized["digital_footprint"] : null
-    ),
+    commercial_offerings: commercialOfferings,
+    commercial_offers_summary: buildCommercialOfferingsSummary(commercialOfferings),
   };
 }
 
@@ -988,6 +1065,25 @@ async function getCmActiveTrackedLeadIds(userId: string, leadIds: string[]): Pro
   return new Set(((data ?? []) as { lead_id: string }[]).map((r) => r.lead_id));
 }
 
+async function fetchLeadGpsByIds(db: ReturnType<typeof getDb>, leadIds: string[]): Promise<Map<string, unknown>> {
+  const gpsById = new Map<string, unknown>();
+  if (leadIds.length === 0) return gpsById;
+
+  const chunkSize = 100;
+  for (let index = 0; index < leadIds.length; index += chunkSize) {
+    const chunk = leadIds.slice(index, index + chunkSize);
+    const { data, error } = await db.from("leads").select("id, gps").in("id", chunk);
+    if (error) continue;
+    for (const row of data ?? []) {
+      const record = row as JsonRecord;
+      const id = asNullableString(record["id"]);
+      if (id) gpsById.set(id, record["gps"] ?? null);
+    }
+  }
+
+  return gpsById;
+}
+
 export async function leadsRoutes(app: FastifyInstance): Promise<void> {
   const leadGeocodingService = createLeadGeocodingService();
 
@@ -1011,6 +1107,7 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
         niche,
         source,
         primary_offer,
+        commercial_offer_type,
         q,
         location_key,
         parent_location_key,
@@ -1030,6 +1127,7 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
         grid_location_keys,
       });
       const geoSelectionActive = geoSelection.parentLocationKeys.length > 0 || geoSelection.gridLocationKeys.length > 0;
+      const requiresDerivedLeadPath = geoSelectionActive || commercial_offer_type !== undefined || isDerivedCommercialSort(sort_by);
 
       const db = getDb();
 
@@ -1075,7 +1173,7 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
         query = query.textSearch("search_vector", q, { type: "plain", config: "spanish" });
       }
 
-      if (geoSelectionActive) {
+      if (requiresDerivedLeadPath) {
         const fallbackQuery = query
           .order("created_at", { ascending: false })
           .order("id", { ascending: false })
@@ -1083,21 +1181,40 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
         const { data, error } = await fallbackQuery;
 
         if (error) {
-          request.log.error({ error, geoSelection: describeGeoSelection(geoSelection) }, "leads geo query error");
+          request.log.error(
+            { error, geoSelection: describeGeoSelection(geoSelection), commercial_offer_type, sort_by },
+            "leads derived query error"
+          );
           return reply.status(500).send({ error: "Database error", error_code: "db_error" });
         }
 
         const normalizedRows = (data ?? []).map((row) => normalizeLeadRow(row as JsonRecord));
+        const gpsById = geoSelectionActive
+          ? await fetchLeadGpsByIds(
+              db,
+              normalizedRows
+                .map((row) => asNullableString(row["id"]))
+                .filter((id): id is string => Boolean(id))
+            )
+          : null;
+        const rowsWithGeo = gpsById
+          ? normalizedRows.map((row) => ({
+              ...row,
+              gps: gpsById.get(asNullableString(row["id"]) ?? "") ?? null,
+            }))
+          : normalizedRows;
         const cmLeadFilter = authUser.role === "cm" ? authUser.lead_filter : null;
         const scopedRows = cmLeadFilter
-          ? normalizedRows.filter((row) => passesLeadFilter(row, cmLeadFilter))
-          : normalizedRows;
+          ? rowsWithGeo.filter((row) => passesLeadFilter(row, cmLeadFilter))
+          : rowsWithGeo;
 
         const matchingRows: JsonRecord[] = [];
         for (const row of scopedRows) {
-          if (await matchesGeoSelection(row, geoSelection, leadGeocodingService.geocodeAddress)) {
-            matchingRows.push(row);
+          if (!matchesCommercialOfferType(row, commercial_offer_type)) continue;
+          if (geoSelectionActive && !(await matchesGeoSelection(row, geoSelection, leadGeocodingService.geocodeAddress))) {
+            continue;
           }
+          matchingRows.push(row);
         }
 
         const sortedRows = [...matchingRows].sort((left, right) => compareLeadRows(left, right, sort_by, sort_direction));
@@ -1130,6 +1247,7 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
           ? rawPage.map((row) => (cmTrackedIds?.has(asNullableString(row["id"]) ?? "") ? row : redactContactFields(row)))
           : rawPage;
         const lastRow = rawPage[rawPage.length - 1];
+        const lastSummary = lastRow ? getLeadCommercialSummary(lastRow) : null;
         const nextCursor =
           hasMore && lastRow
             ? encodeLeadCursor({
@@ -1138,6 +1256,9 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
                 id: asNullableString(lastRow["id"]) ?? "",
                 created_at: asNullableString(lastRow["created_at"]) ?? new Date(0).toISOString(),
                 prospect_score: asNullableNumber(lastRow["prospect_score"]),
+                marketing_score: lastSummary?.marketing_score ?? null,
+                software_score: lastSummary?.software_score ?? null,
+                offer_balance: lastSummary ? Math.abs(lastSummary.software_score - lastSummary.marketing_score) : null,
               })
             : null;
 
@@ -1237,6 +1358,9 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
               id: asNullableString(lastRow["id"]) ?? "",
               created_at: asNullableString(lastRow["created_at"]) ?? new Date(0).toISOString(),
               prospect_score: asNullableNumber(lastRow["prospect_score"]),
+              marketing_score: null,
+              software_score: null,
+              offer_balance: null,
             })
           : null;
 

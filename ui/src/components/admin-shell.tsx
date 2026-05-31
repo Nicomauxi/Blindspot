@@ -90,6 +90,13 @@ export const adminNavGroups: NavGroup[] = [
     icon: PlatformIcon,
     items: [
       {
+        href: "/admin/imports",
+        label: "Importación",
+        description: "Catálogo XLS de lugares y zonas para Discovery",
+        icon: ImportIcon,
+        roles: ["admin"],
+      },
+      {
         href: "/admin/backups",
         label: "Backups",
         description: "Dump manual, cron y retención operativa",
@@ -425,6 +432,16 @@ function PlatformIcon({ className }: IconProps) {
       <path d="M7 4v16" />
       <path d="M17 10v10" />
       <path d="M4 17h16" />
+    </svg>
+  );
+}
+
+function ImportIcon({ className }: IconProps) {
+  return (
+    <svg {...iconProps(className)}>
+      <path d="M12 3v10" />
+      <path d="m8 9 4 4 4-4" />
+      <path d="M4 17v2h16v-2" />
     </svg>
   );
 }

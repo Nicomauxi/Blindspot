@@ -52,6 +52,7 @@ export async function requireAdmin(
   reply: FastifyReply
 ): Promise<void> {
   await requireAuth(request, reply);
+  if (reply.sent) return; // requireAuth already sent 401 — do not double-reply
   const authUser = (request as FastifyRequest & { authUser?: AuthUser }).authUser;
   if (!authUser || authUser.role !== "admin") {
     return reply.status(403).send({ error: "Forbidden", error_code: "admin_required" });

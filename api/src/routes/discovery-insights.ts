@@ -317,7 +317,7 @@ function resolveRawGpsSource(lead: LeadInsightRow): Exclude<LeadDensityGpsSource
   return sources.includes("google_places") ? "google" : "real";
 }
 
-function matchesLeadDensityFilters(
+export function matchesLeadDensityFilters(
   lead: LeadInsightRow,
   filters: LeadDensityFilters,
   rawCoordinate: DensityCoordinate | null

@@ -11,16 +11,17 @@ import {
   getZoneLeads,
   listDiscoveryJobBatches,
   listDiscoveryJobs,
-  listDiscoveryPlacesCatalog,
-  importDiscoveryPlacesXlsx,
+  listGeoZones,
+  listNicheAliasGroups,
   patchDiscoveryJobBatch,
   type DiscoveryCoverageGap,
+  type DiscoveryGeoZone,
   type DiscoveryJob,
   type DiscoveryJobBatch,
   type DiscoveryLeadDensityFilters,
+  type NicheAliasGroup,
   type DiscoveryLeadDensityMeta,
   type DiscoveryMapDensityLocation,
-  type DiscoveryPlaceCatalogEntry,
   type DiscoveryRecommendationData,
   type MissingFilters,
   type ZoneLead,
@@ -31,13 +32,19 @@ import {
   DISCOVERY_COMPOSER_STORAGE_KEY,
   parseDiscoveryComposerDraft,
   type DiscoveryComposerDraft,
-  type DiscoveryComposerGeoSelection,
 } from "@/lib/discovery-workspace";
+import {
+  buildPredictiveContext,
+  buildRecommendationOrigin,
+  freeTextToSelection,
+  type DiscoveryLocationSelection,
+} from "@/lib/discovery-location";
 import { cn, formatDate, formatRelative } from "@/lib/utils";
 import { AdminPageLayout, SectionCard, StatCard } from "@/components/admin-shell";
-import { LocationDensityMap } from "@/components/location-density-map";
+import { DiscoveryContextMap } from "@/components/discovery-context-map";
+import { DiscoveryLocationPicker } from "@/components/discovery-location-picker";
+import { buildComposerGeoSelection, buildZoneLeadRequest } from "@/lib/location-density-map";
 
-const BULK_CITIES = ["Montevideo", "Salto", "Paysandú", "Las Piedras", "Rivera", "Maldonado", "Tacuarembó", "Melo", "Mercedes", "Artigas", "Minas", "San José", "Durazno", "Florida", "Trinidad", "Rocha", "Fray Bentos", "Nueva Helvecia", "Dolores", "Young"] as const;
 const BULK_NICHES = ["restaurante", "hotel", "clínica", "ferretería", "supermercado", "farmacia", "peluquería", "taller", "panadería", "estudio contable"] as const;
 const BULK_COST_WARNING_THRESHOLD = 5;
 
@@ -70,15 +77,6 @@ const EMPTY_COMPOSER: DiscoveryComposerDraft = {
   enrich_after_discovery: true,
   geo_selection: undefined,
 };
-
-function buildComposerGeoSelection(location: DiscoveryMapDensityLocation): DiscoveryComposerGeoSelection {
-  const [, gridLocationKey] = location.location_key.split("::", 2);
-  return {
-    label: location.location_label,
-    parent_location_keys: [location.parent_location_key],
-    ...(gridLocationKey ? { grid_location_keys: [gridLocationKey] } : {}),
-  };
-}
 
 function buildSelectedLocationKeyFromComposer(composer: DiscoveryComposerDraft): string | null {
   const parentLocationKey = composer.geo_selection?.parent_location_keys?.[0];
@@ -123,93 +121,6 @@ const MISSING_FILTER_OPTIONS: { key: keyof MissingFilters; label: string }[] = [
 ];
 
 const REFRESH_ENRICH_LIMIT = 250;
-
-function CatalogSection({ onPrefill }: { onPrefill: (location: string) => void }) {
-  const token = useAuthStore((state) => state.token);
-  const [places, setPlaces] = useState<DiscoveryPlaceCatalogEntry[]>([]);
-  const [q, setQ] = useState("");
-  const [total, setTotal] = useState(0);
-  const [importing, setImporting] = useState(false);
-  const [importResult, setImportResult] = useState<string | null>(null);
-  const [importError, setImportError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!token) return;
-    void listDiscoveryPlacesCatalog(token, { q: q || undefined, limit: 100 }).then((res) => {
-      setPlaces(res.data);
-      setTotal(res.total);
-    }).catch(() => null);
-  }, [token, q]);
-
-  async function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file || !token) return;
-    setImporting(true);
-    setImportResult(null);
-    setImportError(null);
-    try {
-      const res = await importDiscoveryPlacesXlsx(token, file, false);
-      const r = res.data;
-      setImportResult(`Importado: ${r.inserted} nuevos, ${r.updated} actualizados, ${r.skipped} duplicados omitidos.${r.row_validation_errors.length > 0 ? ` ${r.row_validation_errors.length} filas con errores.` : ""}`);
-      void listDiscoveryPlacesCatalog(token, { limit: 100 }).then((res2) => { setPlaces(res2.data); setTotal(res2.total); });
-    } catch (err) {
-      setImportError(err instanceof Error ? err.message : "Error al importar.");
-    } finally {
-      setImporting(false);
-      e.target.value = "";
-    }
-  }
-
-  return (
-    <SectionCard title="Catálogo de lugares" description="Lugares importados via XLS para usar como sugerencias en el Composer.">
-      <div className="space-y-4">
-        <div className="flex items-center gap-3">
-          <input
-            type="text"
-            placeholder="Buscar por nombre o key…"
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            className="flex-1 rounded-xl border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500"
-          />
-          <label className={cn("cursor-pointer rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50", importing && "opacity-50 pointer-events-none")}>
-            {importing ? "Importando…" : "Importar .xlsx"}
-            <input type="file" accept=".xlsx,.xls" className="hidden" onChange={(e) => void handleFileUpload(e)} disabled={importing} />
-          </label>
-        </div>
-
-        {importResult && <p className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{importResult}</p>}
-        {importError && <p className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{importError}</p>}
-
-        <p className="text-xs text-slate-500">{total} lugares en catálogo{q ? ` (filtrando por "${q}")` : ""}.</p>
-
-        {places.length > 0 ? (
-          <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-            {places.slice(0, 60).map((place) => (
-              <button
-                key={place.id}
-                type="button"
-                onClick={() => onPrefill(place.display_name)}
-                className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-left hover:border-sky-200 hover:bg-sky-50/40 transition-colors"
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <p className="text-xs font-semibold text-slate-800 truncate">{place.display_name}</p>
-                  {place.commercial_score != null && (
-                    <span className="shrink-0 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-600">{place.commercial_score}</span>
-                  )}
-                </div>
-                <p className="mt-0.5 text-[11px] text-slate-400 capitalize">{place.kind.replace("_", " ")}{place.parent_location ? ` · ${place.parent_location}` : ""}</p>
-              </button>
-            ))}
-          </div>
-        ) : (
-          <div className="rounded-2xl border border-dashed border-slate-200 px-4 py-8 text-center text-sm text-slate-500">
-            {q ? "Sin resultados para la búsqueda." : "No hay lugares en el catálogo. Importá un archivo .xlsx para comenzar."}
-          </div>
-        )}
-      </div>
-    </SectionCard>
-  );
-}
 
 type RefreshMode = "enrichment" | "re_discovery";
 
@@ -422,9 +333,15 @@ export default function DiscoveryPage() {
   const [densityMeta, setDensityMeta] = useState<DiscoveryLeadDensityMeta | null>(null);
   const [densityFilters, setDensityFilters] = useState<DiscoveryLeadDensityFilters>(EMPTY_DENSITY_FILTERS);
   const [densityLoading, setDensityLoading] = useState(false);
+  const [zoneOptions, setZoneOptions] = useState<DiscoveryGeoZone[]>([]);
+  const [zoneSearch, setZoneSearch] = useState("");
+  const [zoneOptionsLoading, setZoneOptionsLoading] = useState(false);
+  const [nicheGroups, setNicheGroups] = useState<NicheAliasGroup[]>([]);
+  const [zoneOptionsError, setZoneOptionsError] = useState<string | null>(null);
   const [zoneLeads, setZoneLeads] = useState<ZoneLead[] | null>(null);
   const [zoneLeadsTotal, setZoneLeadsTotal] = useState(0);
   const [zoneLeadsLoading, setZoneLeadsLoading] = useState(false);
+  const [zoneLeadsError, setZoneLeadsError] = useState<string | null>(null);
   const [batches, setBatches] = useState<DiscoveryJobBatch[]>([]);
   const [legacyJobs, setLegacyJobs] = useState<DiscoveryJob[]>([]);
   const [expandedBatchId, setExpandedBatchId] = useState<string | null>(null);
@@ -439,9 +356,10 @@ export default function DiscoveryPage() {
     density: null,
   });
   const [prefillNote, setPrefillNote] = useState<string | null>(null);
+  const [composerSelection, setComposerSelection] = useState<DiscoveryLocationSelection | null>(null);
   const densityFiltersBootstrapped = useRef(false);
 
-  const [bulkCities, setBulkCities] = useState<string[]>([]);
+  const [bulkLocations, setBulkLocations] = useState<DiscoveryLocationSelection[]>([]);
   const [bulkNiches, setBulkNiches] = useState<string[]>([]);
   const [bulkMaxResults, setBulkMaxResults] = useState("100");
   const [bulkCostCap, setBulkCostCap] = useState("1");
@@ -450,7 +368,14 @@ export default function DiscoveryPage() {
   const [bulkError, setBulkError] = useState<string | null>(null);
   const [bulkConfirmPending, setBulkConfirmPending] = useState(false);
 
-  const bulkJobCount = bulkCities.length * bulkNiches.length;
+  const composerSelectedSuggestion =
+    composerSelection?.source === "predictive" ? composerSelection.suggestion : null;
+  const effectiveComposerLocation = composer.location.trim();
+  const bulkEffectiveLocations = useMemo(
+    () => bulkLocations.map((selection) => selection.display_name),
+    [bulkLocations]
+  );
+  const bulkJobCount = bulkEffectiveLocations.length * bulkNiches.length;
   const bulkPerJobCost = estimateGoogleCost(Math.max(1, Number(bulkMaxResults) || 0));
   const bulkTotalCost = bulkJobCount * bulkPerJobCost;
 
@@ -461,20 +386,28 @@ export default function DiscoveryPage() {
     setBulkError(null);
     setBulkConfirmPending(false);
     try {
-      const jobs = bulkCities.flatMap((city) =>
+      const jobs = bulkLocations.flatMap((selection) =>
         bulkNiches.map((niche) => ({
           source: "google_places" as const,
-          location: city,
+          location: selection.display_name,
           niche,
           max_results: Math.max(1, Number(bulkMaxResults) || 100),
           cost_cap_usd: Number(bulkCostCap) || undefined,
+          predictive_context: buildPredictiveContext(selection),
         }))
       );
       const res = await bulkCreateDiscoveryJobs(token, jobs);
       setBulkResult(`${res.data.count} jobs creados · costo estimado USD ${res.data.total_estimated_cost_usd.toFixed(2)}`);
       await loadPage();
     } catch (err) {
-      setBulkError(err instanceof Error ? err.message : "Error al crear jobs");
+      const apiErr = err instanceof Error && "status" in err ? (err as { status: number; error_code?: string }) : null;
+      if (apiErr?.status === 409) {
+        setBulkError("Ya hay un proceso en ejecución. Esperá a que termine antes de crear nuevos jobs.");
+      } else if (apiErr?.status === 400 && (apiErr as { error_code?: string }).error_code === "budget_exceeded") {
+        setBulkError("El costo estimado supera el presupuesto mensual disponible de Google Places. Reducí la cantidad de jobs.");
+      } else {
+        setBulkError("No se pudieron crear los jobs. Intentá de nuevo o reducí la cantidad de ubicaciones/nichos.");
+      }
     } finally {
       setBulkCreating(false);
     }
@@ -490,13 +423,13 @@ export default function DiscoveryPage() {
   const batchWarnings = useMemo(() => {
     const warnings: string[] = [];
     if (composer.sources.length === 0) warnings.push("Seleccioná al menos una fuente.");
-    if (!composer.location.trim()) warnings.push("La ubicación es obligatoria.");
+    if (!effectiveComposerLocation.trim()) warnings.push("La ubicación es obligatoria.");
     if (includesGoogle && !composer.google_cost_cap_usd.trim()) warnings.push("Google Places requiere cost cap USD antes de crear el lote.");
     if (includesGoogle && remainingBudget != null && remainingBudget <= 0) warnings.push("El presupuesto mensual de Google Places está agotado.");
     if (includesGoogle && remainingBudget != null && remainingBudget > 0 && estimatedGoogleCost > remainingBudget) warnings.push(`La estimación conservadora USD ${estimatedGoogleCost.toFixed(2)} supera el presupuesto restante USD ${remainingBudget.toFixed(2)}.`);
     if (includesGoogle && configuredCap > 0 && estimatedGoogleCost > configuredCap) warnings.push("La estimación conservadora supera el cap configurado para Google Places.");
     return warnings;
-  }, [composer.google_cost_cap_usd, composer.location, composer.sources.length, configuredCap, estimatedGoogleCost, includesGoogle, remainingBudget]);
+  }, [composer.google_cost_cap_usd, composer.sources.length, configuredCap, effectiveComposerLocation, estimatedGoogleCost, includesGoogle, remainingBudget]);
 
   async function loadDensity(filters: DiscoveryLeadDensityFilters, showSpinner = false) {
     if (!token) return;
@@ -577,6 +510,7 @@ export default function DiscoveryPage() {
     const draft = parseDiscoveryComposerDraft(saved, EMPTY_COMPOSER);
     setComposer(draft);
     setSelectedLocationKey(buildSelectedLocationKeyFromComposer(draft));
+    setComposerSelection(draft.location.trim() ? freeTextToSelection(draft.location) : null);
     setComposerHydrated(true);
   }, []);
 
@@ -608,6 +542,33 @@ export default function DiscoveryPage() {
 
   useEffect(() => {
     if (!token) return;
+    void listNicheAliasGroups(token).then((response) => setNicheGroups(response.data)).catch(() => setNicheGroups([]));
+  }, [token]);
+
+  useEffect(() => {
+    if (!token) return;
+    setZoneOptionsLoading(true);
+    const timeout = window.setTimeout(() => {
+      void listGeoZones(token, { q: zoneSearch || undefined, limit: 60 })
+        .then((response) => {
+          setZoneOptions(response.data);
+          setZoneOptionsError(null);
+        })
+        .catch((err) => {
+          setZoneOptions([]);
+          setZoneOptionsError(getErrorMessage(err, "No se pudieron cargar las zonas."));
+        })
+        .finally(() => setZoneOptionsLoading(false));
+    }, 180);
+
+    return () => {
+      window.clearTimeout(timeout);
+      setZoneOptionsLoading(false);
+    };
+  }, [token, zoneSearch]);
+
+  useEffect(() => {
+    if (!token) return;
     const timeout = window.setTimeout(() => {
       void getDiscoveryRecommendations(token, {
         sources: composer.sources,
@@ -633,7 +594,7 @@ export default function DiscoveryPage() {
     try {
       await createDiscoveryJobBatch(token, {
         sources: composer.sources,
-        location: composer.location.trim(),
+        location: effectiveComposerLocation.trim(),
         niche: composer.niche.trim() || undefined,
         max_results: maxResults,
         cpu_budget: composer.cpu_budget,
@@ -644,12 +605,18 @@ export default function DiscoveryPage() {
               cost_cap_usd: Number(composer.google_cost_cap_usd),
             }
           : undefined,
-        recommendation_origin: prefillNote ? { type: "manual", key: prefillNote } : { type: "manual" },
+        recommendation_origin: buildRecommendationOrigin(composerSelection, prefillNote),
         enrich_after_discovery: composer.enrich_after_discovery,
+        predictive_context: composerSelection ? buildPredictiveContext(composerSelection) : undefined,
       });
       await loadPage();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Error al crear lote");
+      const apiErr = err instanceof Error && "status" in err ? (err as { status: number; error_code?: string }) : null;
+      if (apiErr?.status === 409) {
+        setError("Ya hay un proceso en ejecución. Esperá a que termine antes de crear un nuevo batch.");
+      } else {
+        setError("No se pudo crear el batch. Verificá los parámetros e intentá de nuevo.");
+      }
     } finally {
       setCreating(false);
     }
@@ -673,6 +640,7 @@ export default function DiscoveryPage() {
       sources: Array.from(new Set([...gap.present_sources, ...gap.missing_sources])),
       geo_selection: undefined,
     }));
+    setComposerSelection(freeTextToSelection(gap.location_label));
     setSelectedLocationKey(null);
     setPrefillNote(`Gap ${gap.location_label} · ${gap.niche}`);
   }
@@ -683,29 +651,43 @@ export default function DiscoveryPage() {
       location: location.parent_location_label,
       geo_selection: buildComposerGeoSelection(location),
     }));
+    setComposerSelection(freeTextToSelection(location.parent_location_label));
     setSelectedLocationKey(location.location_key);
     setPrefillNote(`Zona ${location.location_label}`);
   }
 
-  async function handleDrillDown(location: DiscoveryMapDensityLocation) {
-    if (!token) return;
-    setSelectedLocationKey(location.location_key);
-    setZoneLeadsLoading(true);
-    try {
-      const [_, gridLocationKey] = location.location_key.split("::", 2);
-      const res = await getZoneLeads(token, {
-        location_key: location.location_key,
-        parent_location_key: location.parent_location_key,
-        ...(gridLocationKey ? { grid_location_key: gridLocationKey } : {}),
-        limit: 200,
-      });
-      setZoneLeads(res.data);
-      setZoneLeadsTotal(res.total);
-    } catch {
-      setZoneLeads([]);
-    } finally {
-      setZoneLeadsLoading(false);
+  const selectedLocation = useMemo(() => {
+    return selectedLocationKey
+      ? density.find((location) => location.location_key === selectedLocationKey) ?? null
+      : null;
+  }, [density, selectedLocationKey]);
+
+  useEffect(() => {
+    if (!token || !selectedLocation) {
+      setZoneLeads(null);
+      setZoneLeadsTotal(0);
+      return;
     }
+
+    setZoneLeads([]);
+    setZoneLeadsTotal(0);
+    setZoneLeadsLoading(true);
+    void getZoneLeads(token, { ...buildZoneLeadRequest(selectedLocation), ...densityFilters })
+      .then((res) => {
+        setZoneLeads(res.data);
+        setZoneLeadsTotal(res.total);
+        setZoneLeadsError(null);
+      })
+      .catch((err) => {
+        setZoneLeads([]);
+        setZoneLeadsTotal(0);
+        setZoneLeadsError(err instanceof Error ? err.message : "No se pudieron cargar los leads de la zona seleccionada.");
+      })
+      .finally(() => setZoneLeadsLoading(false));
+  }, [densityFilters, selectedLocation, token]);
+
+  function handleDrillDown(location: DiscoveryMapDensityLocation) {
+    setSelectedLocationKey(location.location_key);
   }
 
   const densityNicheSuggestions = useMemo(() => {
@@ -748,9 +730,10 @@ export default function DiscoveryPage() {
       <SectionCard title="Contexto y mapa" description="La carga de contexto arranca acá: elegí una cuadrícula desde el mapa y eso baja al Composer como ubicación visible más filtro geográfico estructurado persistido.">
         <div className="space-y-4">
           <SectionWarning message={sectionErrors.density} />
-          <LocationDensityMap
+          <DiscoveryContextMap
             locations={density}
             meta={densityMeta}
+            loadError={sectionErrors.density}
             selectedLocationKey={selectedLocationKey}
             onSelect={applyLocationPrefill}
             onSelectWithDrill={handleDrillDown}
@@ -758,9 +741,17 @@ export default function DiscoveryPage() {
             onFiltersChange={setDensityFilters}
             nicheSuggestions={densityNicheSuggestions}
             loading={densityLoading}
+            zones={zoneOptions}
+            zoneSearch={zoneSearch}
+            onZoneSearchChange={setZoneSearch}
+            zonesLoading={zoneOptionsLoading}
+            zonesError={zoneOptionsError}
             zoneLeads={zoneLeads}
             zoneLeadsTotal={zoneLeadsTotal}
             zoneLeadsLoading={zoneLeadsLoading}
+            zoneLeadsError={zoneLeadsError}
+            nicheGroups={nicheGroups}
+            allowIconEditing
           />
         </div>
       </SectionCard>
@@ -790,15 +781,35 @@ export default function DiscoveryPage() {
               <p className="mt-2 text-xs text-slate-500">&quot;google_places&quot; queda opt-in explícito y no se preselecciona en recomendaciones.</p>
             </div>
 
-            <div className="grid gap-4 md:grid-cols-2">
-              <div>
-                <label className="mb-1 block text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Ubicación</label>
-                <input value={composer.location} onChange={(event) => { setComposer((current) => ({ ...current, location: event.target.value, geo_selection: undefined })); setSelectedLocationKey(null); setPrefillNote(null); }} className="w-full rounded-2xl border border-slate-200 px-3 py-2.5 text-sm" placeholder="Montevideo" />
-              </div>
-              <div>
-                <label className="mb-1 block text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Niche</label>
-                <input value={composer.niche} onChange={(event) => setComposer((current) => ({ ...current, niche: event.target.value }))} className="w-full rounded-2xl border border-slate-200 px-3 py-2.5 text-sm" placeholder="restaurante, clínica, gimnasio..." />
-              </div>
+            <div>
+              <label className="mb-1 block text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Niche</label>
+              <input value={composer.niche} onChange={(event) => setComposer((current) => ({ ...current, niche: event.target.value }))} className="w-full rounded-2xl border border-slate-200 px-3 py-2.5 text-sm md:max-w-md" placeholder="restaurante, clínica, gimnasio..." />
+            </div>
+
+            <div>
+              <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Ubicación</label>
+              <DiscoveryLocationPicker
+                token={token}
+                mode="single"
+                selected={composerSelection ? [composerSelection] : []}
+                onChange={(next) => {
+                  const selection = next[0] ?? null;
+                  setComposerSelection(selection);
+                  setComposer((current) => ({ ...current, location: selection?.display_name ?? "", geo_selection: undefined }));
+                  setSelectedLocationKey(null);
+                  setPrefillNote(
+                    selection
+                      ? selection.source === "predictive"
+                        ? `Predictivo ${selection.display_name}`
+                        : `Catálogo ${selection.display_name}`
+                      : null
+                  );
+                }}
+                niche={composer.niche}
+                allowFreeText
+                enablePredictive
+                testId="composer-location"
+              />
             </div>
 
             <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
@@ -868,14 +879,16 @@ export default function DiscoveryPage() {
               </div>
               <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4 text-sm">
                 <div><span className="text-slate-500">Fuentes:</span> <span className="font-medium text-slate-900">{composer.sources.join(", ") || "—"}</span></div>
+                <div><span className="text-slate-500">Ubicación efectiva:</span> <span className="font-medium text-slate-900">{effectiveComposerLocation || "—"}</span></div>
                 <div><span className="text-slate-500">Costo estimado:</span> <span className="font-medium text-slate-900">USD {estimatedBatchCost.toFixed(2)}</span></div>
                 <div><span className="text-slate-500">Cap máximo:</span> <span className="font-medium text-slate-900">{effectiveGoogleCap != null && Number.isFinite(effectiveGoogleCap) ? `USD ${effectiveGoogleCap.toFixed(2)}` : "—"}</span></div>
-              <div><span className="text-slate-500">Origen:</span> <span className="font-medium text-slate-900">{prefillNote ?? "manual"}</span></div>
+              <div><span className="text-slate-500">Origen:</span> <span className="font-medium text-slate-900">{composerSelectedSuggestion ? `predictivo · ${composerSelectedSuggestion.catalog_entry.location_key}` : prefillNote ?? "manual"}</span></div>
               <div><span className="text-slate-500">Mapa:</span> <span className="font-medium text-slate-900">{composer.geo_selection?.label ?? "sin zona seleccionada"}</span></div>
               <div><span className="text-slate-500">Modo:</span> <span className="font-medium text-slate-900">{composer.enrich_after_discovery ? "discovery + enrich" : "solo discovery"}</span></div>
               </div>
               <div className="mt-4 flex flex-wrap gap-2">
                 <PrefillBadge label="Ubicación prefill" active={Boolean(prefillNote && composer.location)} />
+                <PrefillBadge label="Predictivo" active={Boolean(composerSelectedSuggestion)} />
                 <PrefillBadge label="Niche prefill" active={Boolean(prefillNote && composer.niche)} />
                 <PrefillBadge label="Fuentes sugeridas" active={Boolean(prefillNote && composer.sources.length > 0)} />
                 <PrefillBadge label="Zona del mapa" active={Boolean(composer.geo_selection?.label)} />
@@ -904,7 +917,7 @@ export default function DiscoveryPage() {
             </div>
 
             <div className="flex justify-end gap-2">
-              <button onClick={() => { setComposer(EMPTY_COMPOSER); setSelectedLocationKey(null); setPrefillNote(null); if (typeof window !== "undefined") window.localStorage.removeItem(DISCOVERY_COMPOSER_STORAGE_KEY); }} className="rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">Reset</button>
+              <button onClick={() => { setComposer(EMPTY_COMPOSER); setComposerSelection(EMPTY_COMPOSER.location.trim() ? freeTextToSelection(EMPTY_COMPOSER.location) : null); setSelectedLocationKey(null); setPrefillNote(null); if (typeof window !== "undefined") window.localStorage.removeItem(DISCOVERY_COMPOSER_STORAGE_KEY); }} className="rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50">Reset</button>
               <button onClick={() => void handleCreateBatch()} disabled={creating || batchWarnings.length > 0} className="rounded-lg bg-sky-600 px-4 py-2 text-sm font-medium text-white hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-50">
                 {creating ? "Creando…" : "Crear batch"}
               </button>
@@ -913,38 +926,33 @@ export default function DiscoveryPage() {
       </SectionCard>
 
       {/* Bulk creation — agrupado con Composer */}
-      <SectionCard title="Creación masiva" description="Creá múltiples jobs Google Places de una sola vez eligiendo ciudades × nichos.">
+      <SectionCard title="Creación masiva" description="Creá múltiples jobs Google Places de una sola vez combinando ubicaciones del catálogo × nichos.">
         <div className="space-y-4">
-          <div className="grid gap-4 md:grid-cols-2">
-            <div>
-              <p className="text-xs font-medium theme-text-muted mb-2">Ciudades</p>
-              <div className="flex flex-wrap gap-1.5">
-                {BULK_CITIES.map((city) => (
-                  <button
-                    key={city}
-                    type="button"
-                    onClick={() => setBulkCities((prev) => prev.includes(city) ? prev.filter((c) => c !== city) : [...prev, city])}
-                    className={cn("rounded-full px-2.5 py-1 text-xs font-medium border transition-colors", bulkCities.includes(city) ? "bg-sky-100 text-sky-700 border-sky-200" : "bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100")}
-                  >
-                    {city}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <div>
-              <p className="text-xs font-medium theme-text-muted mb-2">Nichos</p>
-              <div className="flex flex-wrap gap-1.5">
-                {BULK_NICHES.map((niche) => (
-                  <button
-                    key={niche}
-                    type="button"
-                    onClick={() => setBulkNiches((prev) => prev.includes(niche) ? prev.filter((n) => n !== niche) : [...prev, niche])}
-                    className={cn("rounded-full px-2.5 py-1 text-xs font-medium border transition-colors", bulkNiches.includes(niche) ? "bg-violet-100 text-violet-700 border-violet-200" : "bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100")}
-                  >
-                    {niche}
-                  </button>
-                ))}
-              </div>
+          <div>
+            <p className="text-xs font-medium theme-text-muted mb-2">Ubicaciones</p>
+            <DiscoveryLocationPicker
+              token={token}
+              mode="multi"
+              selected={bulkLocations}
+              onChange={setBulkLocations}
+              niche={bulkNiches[0]}
+              enablePredictive
+              testId="bulk-location"
+            />
+          </div>
+          <div>
+            <p className="text-xs font-medium theme-text-muted mb-2">Nichos</p>
+            <div className="flex flex-wrap gap-1.5">
+              {BULK_NICHES.map((niche) => (
+                <button
+                  key={niche}
+                  type="button"
+                  onClick={() => setBulkNiches((prev) => prev.includes(niche) ? prev.filter((n) => n !== niche) : [...prev, niche])}
+                  className={cn("rounded-full px-2.5 py-1 text-xs font-medium border transition-colors", bulkNiches.includes(niche) ? "bg-violet-100 text-violet-700 border-violet-200" : "bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100")}
+                >
+                  {niche}
+                </button>
+              ))}
             </div>
           </div>
 
@@ -958,7 +966,7 @@ export default function DiscoveryPage() {
               <input type="number" min={0} step={0.5} className="rounded-lg border px-2 py-1.5 text-sm theme-input w-28" value={bulkCostCap} onChange={(e) => setBulkCostCap(e.target.value)} />
             </div>
             <div className="rounded-xl border px-3 py-2 text-xs theme-text-muted space-y-0.5">
-              <p><span className="font-semibold theme-text-strong">{bulkJobCount}</span> jobs ({bulkCities.length} ciudades × {bulkNiches.length} nichos)</p>
+              <p><span className="font-semibold theme-text-strong">{bulkJobCount}</span> jobs ({bulkEffectiveLocations.length} ubicaciones × {bulkNiches.length} nichos)</p>
               <p>Costo estimado: <span className={cn("font-semibold", bulkTotalCost > BULK_COST_WARNING_THRESHOLD ? "text-amber-600" : "theme-text-strong")}>USD {bulkTotalCost.toFixed(2)}</span></p>
             </div>
           </div>
@@ -969,6 +977,7 @@ export default function DiscoveryPage() {
             </div>
           )}
 
+          {bulkJobCount === 0 && <p className="text-xs text-amber-700">Elegí al menos una ubicación y un nicho para crear el lote.</p>}
           {bulkResult && <p className="text-xs text-emerald-600">{bulkResult}</p>}
           {bulkError && <p className="text-xs text-rose-600">{bulkError}</p>}
 
@@ -1001,8 +1010,6 @@ export default function DiscoveryPage() {
         </div>
       </SectionCard>
 
-      <CatalogSection onPrefill={(location) => { setComposer((current) => ({ ...current, location, geo_selection: undefined })); setSelectedLocationKey(null); setPrefillNote(`Catálogo ${location}`); }} />
-
       <RefreshMasivoSection />
 
       <SectionCard title="Recomendaciones" description="Coverage gaps reales, nichos usados y oportunidades ordenadas por densidad comercial.">
@@ -1029,7 +1036,7 @@ export default function DiscoveryPage() {
               <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Por ubicación</p>
               <div className="mt-3 space-y-3">
                 {recommendations?.coverage_gaps_by_location.length ? recommendations.coverage_gaps_by_location.map((group) => (
-                  <button key={group.location_key} type="button" onClick={() => { setComposer((current) => ({ ...current, location: group.location_label, geo_selection: undefined })); setSelectedLocationKey(null); setPrefillNote(`Ubicación ${group.location_label}`); }} className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-left hover:border-sky-200 hover:bg-sky-50/40">
+                  <button key={group.location_key} type="button" onClick={() => { setComposer((current) => ({ ...current, location: group.location_label, geo_selection: undefined })); setComposerSelection(freeTextToSelection(group.location_label)); setSelectedLocationKey(null); setPrefillNote(`Ubicación ${group.location_label}`); }} className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-left hover:border-sky-200 hover:bg-sky-50/40">
                     <div className="flex items-center justify-between gap-3">
                       <div>
                         <p className="text-sm font-semibold text-slate-900">{group.location_label}</p>

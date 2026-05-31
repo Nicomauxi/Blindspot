@@ -88,11 +88,54 @@ Estado actual (`DISC-1` cerrado): hover con breakdown por fuente, draft persisti
 - panel lateral con altura limitada y scroll
 - filtros server-side con debounce de 300ms (`source`, `niche`, `prospect_score_gte`, `contact_tier`, `gps_source`) + filtros locales de zona/orden
 - metadata operativa del backlog de geocoding y contador de leads filtrados/posicionados
+- estado actual (`MAP-5` cerrado): `Contexto y mapa` y `Mapa de leads` montan wrappers (`DiscoveryContextMap`, `LeadReviewMap`) sobre `LocationDensityMapBase`; las diferencias viven en `variant`/props, no en forks de UI
+
+### Mapa de leads
+
+- debe operar como mapa embebido para revisar leads, no como pantalla paralela
+- la selección del mapa mantiene estado `draft` y no filtra `Leads para revisar` hasta que el usuario presiona `Aplicar`
+- debe ofrecer `Cancelar` o `Limpiar` para recuperar el estado aplicado anterior
+- Estado actual (`MAP-7` cerrado): `AdminHomePage` mantiene dos planos de estado (`draftDensityFilters`/`appliedDensityFilters`, `draftSelectedLocationKey`/`appliedSelectedLocationKey`) y sólo traduce el plano aplicado a `LeadExplorer`.
+- `Filtrar zona` usa selector dinámico de zonas registradas con jerarquía Departamento > Ciudad > Barrio
+- los filtros combinados deben comportarse igual que en `Contexto y mapa` y tener Playwright obligatorio
+- Estado actual (`MAP-8` cerrado): el modo de leads individuales usa markers/iconos por niche/canonical niche, con preferencia persistida por grupo canónico en `localStorage`; el heatmap queda reservado para densidad agregada
+- `Vista completa` no debe mostrarse porque ambos mapas tienen la misma capacidad embebida
+
+### Cards de leads individuales en mapa
+
+- diseño comercial, no técnico
+- capitalización legible de nombre/nicho/zona sin mutar dato crudo
+- resumen de score comercial con variables principales: website, redes, rating/reviews, contacto, señales de software y señales de marketing
+- selector de icono por nicho cuando el usuario tenga permiso
+- soporta claro/oscuro y mobile sin desbordar el viewport
+- Estado actual (`MAP-8` cerrado): la variante compartida renderiza cards comerciales con señales compactas y selector de iconos por niche; la persistencia no toca schema y se resuelve por `canonical_niche`.
 
 ### Limpieza UX
 
 - `jobs legacy` fuera de la experiencia principal
 - Lead Explorer full-page puede encolar enrichment sobre la colección filtrada actual con guardrails y feedback inmediato de run
+- Estado actual (`UI-8` cerrado): `Inicio` ya no duplica alertas hardcodeadas; el acceso a alertas queda concentrado en la campanita global y en `/admin/alerts`.
+
+### Importación y sugerencias predictivas
+
+- `Plataforma > Importación` es la superficie de carga de XLS; Discovery solo consume el catálogo resultante
+- Estado actual (`MAP-6` cerrado): `LocationDensityMapBase` consume zonas estructuradas (`zone_id`/`zone_ids`) desde `GET /api/v1/admin/geo/zones`; el selector de zona dejó de depender de texto libre y ambas pantallas de mapa comparten el mismo contrato de filtros y refetch de drilldown.
+- Composer y Creación masiva pueden activar `Usar sugerencias predictivas`
+- Estado actual (`DISC-14` cerrado): Discovery ya usa `GET /api/v1/discovery/location-suggestions` en Composer y Creación masiva; ambas superficies permiten revisar/deseleccionar sugerencias y siguen requiriendo confirmación humana antes de crear jobs.
+
+### Selección de locación unificada (`DiscoveryLocationPicker`)
+
+- Estado actual: la selección de locación del Workspace de discovery vive en una sola base compartida `DiscoveryLocationPicker` (`ui/src/components/discovery-location-picker.tsx`), parametrizada por props (`mode: "single" | "multi"`, `allowFreeText`, `enablePredictive`), sin forks por pantalla.
+- El picker tiene dos tabs: `Catálogo` (browse/búsqueda debounced del `discovery_places_catalog` vía `listDiscoveryPlacesCatalog`, con filtro por `kind` y jerarquía/`commercial_score` visibles) y `Predictivo` (sugerencias scoreadas vía `getDiscoveryLocationSuggestions`, con seed opcional de ciudad). El catálogo es la fuente principal de ubicaciones.
+- `Composer` lo monta en modo `single` con fallback de texto libre (preserva prefills de mapa/gaps y ubicaciones ad-hoc); `Creación masiva` lo monta en modo `multi` (combinación ubicaciones × nichos). La grilla hardcodeada de ciudades y los paneles predictivos duplicados quedaron eliminados.
+- La sección standalone `Catálogo de lugares` se plegó dentro del picker (tab `Catálogo`); el link a `Plataforma > Importación` se conserva en el estado vacío.
+- Estados loading/error/empty explícitos; catálogo vacío → mensaje claro + link a Importación, y el fallback de texto libre sigue usable.
+- La serialización de la selección (catálogo/predictivo/freetext → payload de job + `predictive_context` + `recommendation_origin`) está centralizada en `ui/src/lib/discovery-location.ts`; no hay parsing duplicado entre pantallas.
+- El zone-picker del mapa (`zone_ids` sobre `GET /api/v1/admin/geo/zones`) sigue siendo un filtro de densidad, semánticamente distinto de elegir la locación a descubrir; queda fuera de esta base compartida.
+- las sugerencias muestran explicación: score, confianza, histórico de éxito, riesgo de duplicados, costo estimado y última exploración
+- el usuario siempre confirma antes de crear jobs; no hay llamadas billable por ver sugerencias
+- si no hay catálogo importado, mostrar CTA a Importación y mantener flujo manual disponible
+- Estado actual (`DISC-15` cerrado): el repo trae `tests/discovery/fixtures/uruguay-location-seed.xlsx` como seed de validación y la UI de Importación ya explica que `notes` puede transportar trazabilidad `SRC:*`.
 
 ## Leads y feedback humano
 
@@ -107,6 +150,13 @@ La ficha del lead debe poder mostrar y recibir validación humana sin romper su 
 Estado actual:
 - ya existe API persistida de feedback humano por lead/campo
 - la siguiente fase activa es `FDBK-2`, para integrarlo en la ficha del lead
+
+### Filtros comerciales
+
+- Estado actual (`LEAD-6` cerrado): `Leads para revisar` ya expone `Tipo de oferta comercial` como filtro y ordenamiento (`marketing_score`, `software_score`, `offer_balance`) sobre `listLeads`.
+- Opciones activas: `Todas`, `Marketing`, `Software`, `Marketing + Software` y `Sin señal suficiente`.
+- El filtro sigue siendo server-side y reutilizable por otros listados que consuman `listLeads`.
+- Las cards muestran badge sobrio derivado de `commercial_offers_summary` y resumen breve `MKT/SW`.
 
 ## CRM objetivo
 
@@ -146,3 +196,6 @@ Toda fase de UI debe cerrar con:
 - `pnpm --dir ui build`
 - tests de la superficie tocada
 - smoke en navegador si la fase cambia navegación o flujos operativos críticos
+- Playwright obligatorio para mapas cuando cambian filtros, selección, markers o listas derivadas
+- Estado actual (`MAP-9` cerrado): los wrappers de mapa usan carga dinámica sin SSR para aislar Leaflet del servidor de Next y la UI distingue errores de red de estados vacíos en densidad/drilldown.
+- Estado actual (`DISC-12` cerrado): `Plataforma > Importación` vive en `/admin/imports`, hace preview/confirmación de XLS y Discovery dejó de hospedar el upload; ahí solo se consulta y preselecciona el catálogo.

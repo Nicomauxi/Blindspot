@@ -292,6 +292,11 @@ export async function buildMonitoringOverview() {
       .select("id, occurred_at, run_id, phase, source, lead_id, error_type, message, recovered")
       .order("occurred_at", { ascending: false })
       .limit(100),
+    // Exact counts — appended at the END to avoid shifting existing indices
+    db.from("discovery_jobs").select("*", { count: "exact", head: true }).eq("status", "queued"),
+    db.from("discovery_jobs").select("*", { count: "exact", head: true }).eq("status", "running"),
+    db.from("discovery_jobs").select("*", { count: "exact", head: true }).eq("status", "completed"),
+    db.from("discovery_jobs").select("*", { count: "exact", head: true }).eq("status", "failed"),
   ]);
   const dbLatency = round(diffMs(dbStartedAt, Date.now()), 1);
 
@@ -302,6 +307,10 @@ export async function buildMonitoringOverview() {
   const settled4 = settled[4].status === "fulfilled" ? settled[4].value : { data: null, error: new Error("query failed") };
   const settled5 = settled[5].status === "fulfilled" ? settled[5].value : { data: null, error: new Error("query failed") };
   const settled6 = settled[6].status === "fulfilled" ? settled[6].value : { data: null, error: new Error("query failed") };
+  const countQueued    = settled[7]?.status === "fulfilled" ? (settled[7].value as { count: number | null }).count ?? 0 : 0;
+  const countRunning   = settled[8]?.status === "fulfilled" ? (settled[8].value as { count: number | null }).count ?? 0 : 0;
+  const countCompleted = settled[9]?.status === "fulfilled" ? (settled[9].value as { count: number | null }).count ?? 0 : 0;
+  const countFailed    = settled[10]?.status === "fulfilled" ? (settled[10].value as { count: number | null }).count ?? 0 : 0;
 
   const configResult = settled0;
   const runsResult = settled1;
@@ -375,7 +384,15 @@ export async function buildMonitoringOverview() {
 
   const backupOverview = await safeBackupOverview();
   const backupAlerts = backupOverview?.alerts ?? [];
-  const discoverySummary = summarizeDiscovery(discoveryRecent);
+  // Use exact DB counts instead of sampling the last 50 rows
+  const discoverySummary = {
+    queued: countQueued,
+    running: countRunning,
+    completed: countCompleted,
+    failed: countFailed,
+    paused: 0,
+    cancelled: 0,
+  };
   const failedDiscovery = discoveryRecent.filter((job) => job.status === "failed").slice(0, 5);
   const manualDiscovery = discoveryRecent.filter((job) => job.triggered_by === "manual").slice(0, 5);
   const llmConfig = inferLlmConfig();

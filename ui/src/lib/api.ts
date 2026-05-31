@@ -668,6 +668,50 @@ export async function getProcessMetrics(token: string) {
   return request<{ data: ProcessMetricsData }>("/api/v1/admin/operations/process-metrics", {}, token);
 }
 
+// ── Embedded scheduler control ──────────────────────────────────────────────
+
+export type SchedulerStatus = "running" | "stopped" | "disabled";
+
+export type SchedulerStatusData = {
+  status: SchedulerStatus;
+  uptime_seconds: number | null;
+  embedded: boolean;
+};
+
+export type SchedulerLogLine = {
+  ts: string;
+  level: string;
+  msg: string;
+};
+
+export async function getSchedulerStatus(token: string) {
+  return request<{ data: SchedulerStatusData }>("/api/v1/admin/scheduler/status", {}, token);
+}
+
+export async function startScheduler(token: string) {
+  return request<{ data: { status: string } }>("/api/v1/admin/scheduler/start", { method: "POST" }, token);
+}
+
+export async function restartScheduler(token: string) {
+  return request<{ data: { status: string } }>("/api/v1/admin/scheduler/restart", { method: "POST" }, token);
+}
+
+export async function getSchedulerLogs(token: string, limit = 200) {
+  return request<{ data: SchedulerLogLine[] }>(
+    `/api/v1/admin/scheduler/logs?limit=${limit}`,
+    {},
+    token
+  );
+}
+
+export async function getApiLogs(token: string, limit = 200) {
+  return request<{ data: SchedulerLogLine[] }>(
+    `/api/v1/admin/scheduler/api-logs?limit=${limit}`,
+    {},
+    token
+  );
+}
+
 export type MissingFilters = {
   missing_gps?: boolean;
   missing_address?: boolean;
@@ -906,6 +950,19 @@ export type CommercialOfferings = {
   has_data: boolean;
 };
 
+export type CommercialOfferType = "software" | "marketing" | "both" | "unknown";
+
+export type CommercialOfferingsSummary = {
+  primary_offer_type: CommercialOfferType;
+  software_score: number;
+  marketing_score: number;
+  top_software_offer: string | null;
+  top_marketing_offer: string | null;
+  top_software_label: string | null;
+  top_marketing_label: string | null;
+  evidence_count: number;
+};
+
 export type LeadDashboard = {
   id: string;
   name: string;
@@ -937,6 +994,8 @@ export type LeadDashboard = {
   contact_reliability_score: number | null;
   contact_ready: boolean | null;
   sources_count?: number | null;
+  commercial_offerings?: CommercialOfferings | null;
+  commercial_offers_summary?: CommercialOfferingsSummary | null;
 };
 
 export type LeadGeoSelection = {
@@ -953,6 +1012,7 @@ export type LeadDetail = LeadDashboard & {
   field_sources: Record<string, LeadFieldSource> | null;
   commercial_evidence_tree: CommercialEvidenceNode[] | null;
   commercial_offerings: CommercialOfferings | null;
+  commercial_offers_summary?: CommercialOfferingsSummary | null;
   notes: string | null;
   business_status: string | null;
 };
@@ -965,8 +1025,9 @@ export async function listLeads(
     niche?: string;
     source?: string;
     primary_offer?: string;
+    commercial_offer_type?: CommercialOfferType;
     q?: string;
-    sort_by?: "created_at" | "prospect_score";
+    sort_by?: "created_at" | "prospect_score" | "marketing_score" | "software_score" | "offer_balance";
     sort_direction?: "asc" | "desc";
     cursor?: string;
     limit?: number;
@@ -980,6 +1041,7 @@ export async function listLeads(
   if (params.niche) qp.set("niche", params.niche);
   if (params.source) qp.set("source", params.source);
   if (params.primary_offer) qp.set("primary_offer", params.primary_offer);
+  if (params.commercial_offer_type) qp.set("commercial_offer_type", params.commercial_offer_type);
   if (params.q) qp.set("q", params.q);
   if (params.sort_by) qp.set("sort_by", params.sort_by);
   if (params.sort_direction) qp.set("sort_direction", params.sort_direction);
@@ -1229,6 +1291,12 @@ export type DiscoveryJob = {
   created_at: string;
 };
 
+export type PredictiveLocationContext = {
+  suggestion_source: "predictive_location";
+  location_catalog_entry_id: string;
+  opportunity_score_snapshot?: DiscoveryLocationSuggestion;
+};
+
 export type DiscoveryJobBatch = {
   id: string;
   location: string;
@@ -1243,7 +1311,7 @@ export type DiscoveryJobBatch = {
     cost_cap_usd: number;
   } | null;
   recommendation_origin: {
-    type: "coverage_gap" | "location_density" | "top_niche" | "manual";
+    type: "coverage_gap" | "location_density" | "top_niche" | "manual" | "predictive_location";
     key?: string;
   } | null;
   enrich_after_discovery: boolean;
@@ -1304,6 +1372,7 @@ export type DiscoveryLeadDensityFilters = {
   prospect_score_gte?: number;
   contact_tier?: string[];
   gps_source?: DiscoveryLeadDensityGpsSource[];
+  zone_ids?: string[];
   limit?: number;
 };
 
@@ -1315,6 +1384,30 @@ export type DiscoveryLeadDensityMeta = {
   filtered_leads: number;
   positioned_leads: number;
   grid_cell_size_km: number;
+};
+
+export type DiscoveryLocationSuggestion = {
+  catalog_entry: DiscoveryPlaceCatalogEntry;
+  niche: string | null;
+  score: number;
+  confidence: "high" | "medium" | "low";
+  expected_new_leads: number;
+  duplicate_risk: number;
+  cost_estimate: number | null;
+  reasons: string[];
+  historical_metrics: {
+    jobs_count: number;
+    candidates_seen: number;
+    new_leads_count: number;
+    duplicate_count: number;
+    success_rate: number;
+    duplicate_rate: number;
+    avg_cost_per_new_lead: number | null;
+    last_discovery_at: string | null;
+    coverage_lead_count: number;
+    historical_scope: "direct" | "parent" | "ancestor" | "none";
+    inherited_from: string[];
+  };
 };
 
 export type DiscoveryRecommendationData = {
@@ -1385,6 +1478,7 @@ export type BulkJobDefinition = {
   niche: string;
   max_results?: number;
   cost_cap_usd?: number;
+  predictive_context?: PredictiveLocationContext;
 };
 
 export type BulkJobResult = {
@@ -1432,8 +1526,9 @@ export async function createDiscoveryJobBatch(
     max_results?: number;
     cpu_budget?: "conservative" | "balanced" | "aggressive";
     google_places?: { profile?: "A" | "B" | "C" | "D"; concurrency?: number; cost_cap_usd: number };
-    recommendation_origin?: { type: "coverage_gap" | "location_density" | "top_niche" | "manual"; key?: string };
+    recommendation_origin?: { type: "coverage_gap" | "location_density" | "top_niche" | "manual" | "predictive_location"; key?: string };
     enrich_after_discovery?: boolean;
+    predictive_context?: PredictiveLocationContext;
   }
 ) {
   return request<SingleResponse<DiscoveryJobBatch>>("/api/v1/discovery/job-batches", {
@@ -1465,10 +1560,21 @@ export async function getDiscoveryRecommendations(
   return request<{ data: DiscoveryRecommendationData }>(`/api/v1/discovery/recommendations?${qp}`, {}, token);
 }
 
-export async function getLeadDensity(
+export async function getDiscoveryLocationSuggestions(
   token: string,
-  params: DiscoveryLeadDensityFilters = {}
+  params: { departamento?: string; ciudad?: string; barrio?: string; niche?: string; limit?: number; min_score?: number } = {}
 ) {
+  const qp = new URLSearchParams();
+  if (params.departamento) qp.set("departamento", params.departamento);
+  if (params.ciudad) qp.set("ciudad", params.ciudad);
+  if (params.barrio) qp.set("barrio", params.barrio);
+  if (params.niche) qp.set("niche", params.niche);
+  if (params.limit) qp.set("limit", String(params.limit));
+  if (params.min_score != null) qp.set("min_score", String(params.min_score));
+  return request<{ data: DiscoveryLocationSuggestion[]; total: number }>(`/api/v1/discovery/location-suggestions?${qp}`, {}, token);
+}
+
+export function buildDiscoveryGeoFilterQuery(params: DiscoveryLeadDensityFilters = {}): URLSearchParams {
   const qp = new URLSearchParams();
   if (params.location) qp.set("location", params.location);
   if (params.source && params.source.length > 0) qp.set("source", params.source.join(","));
@@ -1476,7 +1582,16 @@ export async function getLeadDensity(
   if (params.prospect_score_gte != null) qp.set("prospect_score_gte", String(params.prospect_score_gte));
   if (params.contact_tier && params.contact_tier.length > 0) qp.set("contact_tier", params.contact_tier.join(","));
   if (params.gps_source && params.gps_source.length > 0) qp.set("gps_source", params.gps_source.join(","));
+  if (params.zone_ids && params.zone_ids.length > 0) qp.set("zone_ids", params.zone_ids.join(","));
   if (params.limit) qp.set("limit", String(params.limit));
+  return qp;
+}
+
+export async function getLeadDensity(
+  token: string,
+  params: DiscoveryLeadDensityFilters = {}
+) {
+  const qp = buildDiscoveryGeoFilterQuery(params);
   return request<{ data: { locations: DiscoveryMapDensityLocation[]; exact_points: Array<{ lat: number; lng: number }>; geocoded_points: Array<{ lat: number; lng: number }>; meta: DiscoveryLeadDensityMeta } }>(`/api/v1/admin/geo/lead-density?${qp}`, {}, token);
 }
 
@@ -1942,6 +2057,17 @@ export interface DiscoveryPlaceCatalogEntry {
   imported_at: string;
 }
 
+export interface DiscoveryGeoZone {
+  zone_id: string;
+  departamento: string | null;
+  ciudad: string | null;
+  barrio: string | null;
+  label: string;
+  kind: DiscoveryPlaceKind;
+  lead_count: number;
+  last_seen_at: string | null;
+}
+
 export interface DiscoveryPlacesImportResult {
   inserted: number;
   updated: number;
@@ -1949,6 +2075,42 @@ export interface DiscoveryPlacesImportResult {
   row_validation_errors: Array<{ row: number; reason: string }>;
   upsert_errors: Array<{ location_key: string; reason: string }>;
   duplicate_keys: string[];
+}
+
+export interface DiscoveryPlacesImportPreview {
+  filename: string;
+  row_count: number;
+  valid_count: number;
+  invalid_count: number;
+  duplicate_count: number;
+  entries: Array<{
+    location_key: string;
+    display_name: string;
+    parent_location: string | null;
+    kind: DiscoveryPlaceKind;
+    lat_approx: number | null;
+    lng_approx: number | null;
+    commercial_score: number | null;
+    notes: string | null;
+  }>;
+  row_validation_errors: Array<{ row: number; reason: string }>;
+  duplicate_entries: Array<{ location_key: string; display_name: string }>;
+}
+
+export interface DiscoveryPlacesImportHistoryEntry {
+  id: string;
+  action: string;
+  occurred_at: string;
+  actor_user_id: string | null;
+  actor_role: string | null;
+  filename: string | null;
+  row_count: number;
+  inserted: number;
+  updated: number;
+  skipped: number;
+  invalid_count: number;
+  duplicate_count: number;
+  upsert: boolean;
 }
 
 export async function listDiscoveryPlacesCatalog(
@@ -1962,10 +2124,43 @@ export async function listDiscoveryPlacesCatalog(
   if (params.limit) qs.set("limit", String(params.limit));
   const suffix = qs.toString() ? `?${qs.toString()}` : "";
   return request<{ data: DiscoveryPlaceCatalogEntry[]; total: number }>(
-    `/api/v1/admin/discovery/places${suffix}`,
+    `/api/v1/admin/discovery/places${suffix}` ,
     {},
     token
   );
+}
+
+export async function listDiscoveryPlaceImports(token: string, limit = 20) {
+  return request<{ data: DiscoveryPlacesImportHistoryEntry[]; total: number }>(`/api/v1/admin/imports/locations?limit=${limit}`, {}, token);
+}
+
+export async function previewDiscoveryPlacesImport(token: string, file: File) {
+  const formData = new FormData();
+  formData.append("file", file);
+  const response = await fetch(`${resolveBaseUrl()}/api/v1/admin/imports/locations/preview`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+    body: formData,
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new ApiError(
+      response.status,
+      (body as { error_code?: string }).error_code ?? "unknown_error",
+      (body as { error?: string }).error ?? `HTTP ${response.status}`
+    );
+  }
+  return body as { data: DiscoveryPlacesImportPreview };
+}
+
+export async function commitDiscoveryPlacesImport(
+  token: string,
+  payload: { filename: string; upsert: boolean; entries: DiscoveryPlacesImportPreview["entries"] }
+) {
+  return request<{ data: DiscoveryPlacesImportResult }>(`/api/v1/admin/imports/locations/commit`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  }, token);
 }
 
 export async function importDiscoveryPlacesXlsx(
@@ -1981,11 +2176,25 @@ export async function importDiscoveryPlacesXlsx(
     headers: { Authorization: `Bearer ${token}` },
     body: formData,
   });
+  const body = await response.json().catch(() => ({}));
   if (!response.ok) {
-    const text = await response.text();
-    throw new Error(text);
+    throw new ApiError(
+      response.status,
+      (body as { error_code?: string }).error_code ?? "unknown_error",
+      (body as { error?: string }).error ?? `HTTP ${response.status}`
+    );
   }
-  return response.json() as Promise<{ data: DiscoveryPlacesImportResult }>;
+  return body as { data: DiscoveryPlacesImportResult };
+}
+export async function listGeoZones(
+  token: string,
+  params: { kind?: DiscoveryPlaceKind; q?: string; limit?: number } = {}
+) {
+  const q = new URLSearchParams();
+  if (params.kind) q.set("kind", params.kind);
+  if (params.q) q.set("q", params.q);
+  if (params.limit) q.set("limit", String(params.limit));
+  return request<{ data: DiscoveryGeoZone[]; total: number }>(`/api/v1/admin/geo/zones?${q}`, {}, token);
 }
 
 // Zone leads — individual map mode
@@ -1999,17 +2208,26 @@ export type ZoneLead = {
   gps: unknown;
   map_point?: { lat: number; lng: number } | null;
   source: string | null;
+  website?: string | null;
+  phone?: string | null;
+  whatsapp?: string | null;
+  email?: string | null;
+  rating?: number | null;
+  review_count?: number | null;
+  primary_offer?: string | null;
+  pitch_hook?: string | null;
+  contact_ready?: boolean | null;
+  tags?: string[] | null;
 };
 
 export async function getZoneLeads(
   token: string,
-  params: { location_key?: string; parent_location_key?: string; grid_location_key?: string; limit?: number }
+  params: DiscoveryLeadDensityFilters & { location_key?: string; parent_location_key?: string; grid_location_key?: string; limit?: number }
 ): Promise<{ data: ZoneLead[]; total: number; has_more: boolean }> {
-  const q = new URLSearchParams();
+  const q = buildDiscoveryGeoFilterQuery(params);
   if (params.location_key) q.set("location_key", params.location_key);
   if (params.parent_location_key) q.set("parent_location_key", params.parent_location_key);
   if (params.grid_location_key) q.set("grid_location_key", params.grid_location_key);
-  if (params.limit) q.set("limit", String(params.limit));
   return request<{ data: ZoneLead[]; total: number; has_more: boolean }>(
     `/api/v1/admin/geo/zone-leads?${q}`,
     {},

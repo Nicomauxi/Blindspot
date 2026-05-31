@@ -8,6 +8,11 @@ import {
   getMonitoringOverview,
   getPipelineRun,
   getPipelineRunLog,
+  getSchedulerStatus,
+  getSchedulerLogs,
+  getApiLogs,
+  startScheduler,
+  restartScheduler,
   listPipelineRuns,
   resetDatabase,
   restartAll,
@@ -16,6 +21,8 @@ import {
   type MonitoringOverview,
   type PipelineLogLine,
   type PipelineRun,
+  type SchedulerStatusData,
+  type SchedulerLogLine,
 } from "@/lib/api";
 import { useAuthStore } from "@/lib/auth-store";
 import { formatBackupSize } from "@/lib/backups";
@@ -47,7 +54,12 @@ export function MonitoringSection() {
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
   const [restartTarget, setRestartTarget] = useState<"core" | "api" | null>(null);
   const [restartMessage, setRestartMessage] = useState<string | null>(null);
+  const [schedulerStatus, setSchedulerStatus] = useState<SchedulerStatusData | null>(null);
+  const [schedulerActionLoading, setSchedulerActionLoading] = useState(false);
   const [runs, setRuns] = useState<PipelineRun[]>([]);
+  const [runsHasMore, setRunsHasMore] = useState(false);
+  const [runsCursor, setRunsCursor] = useState<string | null>(null);
+  const [runsStatusFilter, setRunsStatusFilter] = useState<string>("all");
   const [selectedRun, setSelectedRun] = useState<PipelineRun | null>(null);
   const [runLogs, setRunLogs] = useState<PipelineLogLine[]>([]);
   const runPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -76,16 +88,36 @@ export function MonitoringSection() {
     return () => clearInterval(interval);
   }, [refresh]);
 
-  const loadRuns = useCallback(async () => {
+  // Poll scheduler status independently (faster than full monitoring refresh)
+  useEffect(() => {
+    if (!token) return;
+    const fetchScheduler = () => {
+      void getSchedulerStatus(token)
+        .then((res) => setSchedulerStatus(res.data))
+        .catch(() => null);
+    };
+    fetchScheduler();
+    const id = setInterval(fetchScheduler, 5000);
+    return () => clearInterval(id);
+  }, [token]);
+
+  const loadRuns = useCallback(async (statusFilter = runsStatusFilter, cursor?: string) => {
     if (!token) return;
     try {
-      const res = await listPipelineRuns(token, { limit: 10 });
-      setRuns(res.data);
-      setSelectedRun((current) => current ? res.data.find((run) => run.id === current.id) ?? current : res.data[0] ?? null);
+      const params: Parameters<typeof listPipelineRuns>[1] = { limit: 10 };
+      if (statusFilter !== "all") params.status = statusFilter;
+      if (cursor) params.cursor = cursor;
+      const res = await listPipelineRuns(token, params);
+      setRuns((prev) => cursor ? [...prev, ...res.data] : res.data);
+      setRunsHasMore(res.next_cursor !== null);
+      setRunsCursor(res.next_cursor);
+      if (!cursor) {
+        setSelectedRun((current) => current ? res.data.find((run) => run.id === current.id) ?? current : res.data[0] ?? null);
+      }
     } catch {
       // non-blocking: run status is best-effort
     }
-  }, [token]);
+  }, [token, runsStatusFilter]);
 
   const loadRunDetail = useCallback(async (runId: string) => {
     if (!token) return;
@@ -102,23 +134,27 @@ export function MonitoringSection() {
   }, [token]);
 
   useEffect(() => {
-    void loadRuns();
-  }, [loadRuns]);
+    void loadRuns(runsStatusFilter);
+  }, [loadRuns, runsStatusFilter]);
 
   useEffect(() => {
     if (!selectedRun?.id) return;
     void loadRunDetail(selectedRun.id);
   }, [loadRunDetail, selectedRun?.id]);
 
+  const isActiveRun = selectedRun?.status === "running" || selectedRun?.status === "pending";
+
   useEffect(() => {
+    // Only poll run detail when the selected run is actively executing.
+    // Terminal runs (aborted/completed/partial/failed) never change — no need to re-fetch.
     runPollRef.current = setInterval(() => {
       void loadRuns();
-      if (selectedRun?.id) void loadRunDetail(selectedRun.id);
-    }, 5000);
+      if (selectedRun?.id && isActiveRun) void loadRunDetail(selectedRun.id);
+    }, 10000); // 10s instead of 5s — halves the request rate
     return () => {
       if (runPollRef.current) clearInterval(runPollRef.current);
     };
-  }, [loadRunDetail, loadRuns, selectedRun?.id]);
+  }, [isActiveRun, loadRunDetail, loadRuns, selectedRun?.id]);
 
   const loadJobsSummary = useCallback(async () => {
     if (!token) return;
@@ -145,6 +181,17 @@ export function MonitoringSection() {
     setError(null);
 
     try {
+      // For embedded core: use scheduler restart endpoint.
+      // Check env var via overview too, in case schedulerStatus hasn't loaded yet.
+      const isEmbedded = schedulerStatus?.embedded === true;
+      if (target === "core" && isEmbedded) {
+        await restartScheduler(token);
+        const res = await getSchedulerStatus(token);
+        setSchedulerStatus(res.data);
+        setRestartMessage("Core scheduler reiniciado.");
+        setRestartTarget(null);
+        return;
+      }
       const result = await restartSystemProcess(token, target);
       if (!result.ok) {
         setError(result.error);
@@ -165,7 +212,21 @@ export function MonitoringSection() {
       void refresh();
       setRestartTarget(null);
     }, 10_000);
-  }, [refresh, token]);
+  }, [refresh, schedulerStatus, token]);
+
+  const handleStartCore = useCallback(async () => {
+    if (!token) return;
+    setSchedulerActionLoading(true);
+    try {
+      await startScheduler(token);
+      const res = await getSchedulerStatus(token);
+      setSchedulerStatus(res.data);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "No se pudo iniciar el scheduler.");
+    } finally {
+      setSchedulerActionLoading(false);
+    }
+  }, [token]);
 
   async function handleRestartAll() {
     if (!token) return;
@@ -250,9 +311,9 @@ export function MonitoringSection() {
           <div className="grid gap-4 xl:grid-cols-[1fr,1fr]">
             <SectionCard title="Procesos y scheduler" description="Estado vivo de API, core, DB y cron operativo.">
               <div className="space-y-3">
-                <ProcessCard name="api" process={overview.processes.api} onRestart={() => void handleRestart("api")} disabled={restartTarget !== null} pending={restartTarget === "api"} />
-                <ProcessCard name="core" process={overview.processes.core} onRestart={() => void handleRestart("core")} disabled={restartTarget !== null} pending={restartTarget === "core"} />
-                <ProcessCard name="db" process={overview.processes.db} disabled pending={false} />
+                <ProcessCard name="api" process={overview.processes.api} token={token} onRestart={() => void handleRestart("api")} disabled={restartTarget !== null} pending={restartTarget === "api"} />
+                <ProcessCard name="core" process={overview.processes.core} token={token} schedulerStatus={schedulerStatus} onRestart={() => void handleRestart("core")} onStart={() => void handleStartCore()} disabled={restartTarget !== null || schedulerActionLoading} pending={restartTarget === "core" || schedulerActionLoading} />
+                <ProcessCard name="db" process={overview.processes.db} token={token} disabled pending={false} />
                 <div className="grid gap-2 text-sm md:grid-cols-2">
                   <InfoRow label="Cron" value={overview.pipeline.cron_enabled ? "habilitado" : "deshabilitado"} />
                   <InfoRow label="Expresión" value={overview.pipeline.cron_expression ?? "—"} />
@@ -325,15 +386,30 @@ export function MonitoringSection() {
             <div className="space-y-4">
               {resetMessage ? <Banner tone="info" text={resetMessage} /> : null}
               <div className="flex flex-wrap gap-3">
-                <button onClick={() => void handleRestart("api")} disabled={restartTarget !== null} className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium hover:bg-slate-50 disabled:opacity-50">
-                  {restartTarget === "api" ? "Reiniciando API…" : "Reiniciar API"}
+                {/* API restart — only meaningful in production with PM2 */}
+                {!schedulerStatus?.embedded ? (
+                  <button onClick={() => void handleRestart("api")} disabled={restartTarget !== null} className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium hover:bg-slate-50 disabled:opacity-50">
+                    {restartTarget === "api" ? "Reiniciando API…" : "Reiniciar API"}
+                  </button>
+                ) : (
+                  <span className="rounded-lg border border-slate-200 px-4 py-2 text-sm text-slate-400 cursor-default" title="En modo dev la API se reinicia manualmente desde la terminal">
+                    Reiniciar API (dev: manual)
+                  </span>
+                )}
+                {/* Core restart — use embedded endpoint when scheduler is embedded */}
+                <button
+                  onClick={() => void handleRestart("core")}
+                  disabled={restartTarget !== null || schedulerActionLoading}
+                  className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium hover:bg-slate-50 disabled:opacity-50"
+                >
+                  {(restartTarget === "core" || schedulerActionLoading) ? "Reiniciando Core…" : "Reiniciar Core"}
                 </button>
-                <button onClick={() => void handleRestart("core")} disabled={restartTarget !== null} className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium hover:bg-slate-50 disabled:opacity-50">
-                  {restartTarget === "core" ? "Reiniciando Core…" : "Reiniciar Core"}
-                </button>
-                <button onClick={() => void handleRestartAll()} disabled={restartAllRunning} className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium hover:bg-slate-50 disabled:opacity-50">
-                  {restartAllRunning ? "Reiniciando…" : "Reiniciar todo"}
-                </button>
+                {/* Restart all — hide in embedded dev mode to avoid accidental PM2 calls */}
+                {!schedulerStatus?.embedded && (
+                  <button onClick={() => void handleRestartAll()} disabled={restartAllRunning} className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium hover:bg-slate-50 disabled:opacity-50">
+                    {restartAllRunning ? "Reiniciando…" : "Reiniciar todo"}
+                  </button>
+                )}
               </div>
               <div className="rounded-xl border border-rose-200 bg-rose-50 p-4 space-y-3">
                 <p className="text-sm font-semibold text-rose-900">Reset de base de datos</p>
@@ -413,12 +489,34 @@ export function MonitoringSection() {
                       </div>
 
                       <div>
-                        <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Runs recientes</div>
+                        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                          <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Runs recientes</span>
+                          <div className="flex flex-wrap gap-1.5">
+                            {(["all", "running", "completed", "partial", "failed", "aborted"] as const).map((s) => (
+                              <button
+                                key={s}
+                                type="button"
+                                onClick={() => { setRunsStatusFilter(s); setRuns([]); }}
+                                className={cn(
+                                  "rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors",
+                                  runsStatusFilter === s
+                                    ? "border-sky-300 bg-sky-50 text-sky-700"
+                                    : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"
+                                )}
+                              >
+                                {s === "all" ? "todos" : s}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
                         <div className="overflow-x-auto pb-2">
                           <div className="flex min-w-max gap-3">
-                            {runs.slice(0, 6).map((run) => {
+                            {runs.length === 0 && (
+                              <p className="text-sm text-slate-500 py-2">Sin runs para este filtro.</p>
+                            )}
+                            {runs.map((run) => {
                               const summary = summarizeRunCard(run);
-                              const active = selectedRun.id === run.id;
+                              const active = selectedRun?.id === run.id;
                               return (
                                 <button
                                   key={run.id}
@@ -452,6 +550,15 @@ export function MonitoringSection() {
                                 </button>
                               );
                             })}
+                            {runsHasMore && (
+                              <button
+                                type="button"
+                                onClick={() => void loadRuns(runsStatusFilter, runsCursor ?? undefined)}
+                                className="w-[10rem] shrink-0 rounded-2xl border border-dashed border-slate-300 px-4 py-3 text-sm text-slate-500 hover:border-slate-400 hover:text-slate-700 transition-colors self-center"
+                              >
+                                Cargar más…
+                              </button>
+                            )}
                           </div>
                         </div>
                       </div>
@@ -596,34 +703,172 @@ function InfoRow({ label, value }: { label: string; value: string }) {
   );
 }
 
+const POLL_LOGS_MS = 2_000;
+
 function ProcessCard({
   name,
-  process,
+  process: proc,
+  token,
+  schedulerStatus,
   onRestart,
+  onStart,
   disabled = true,
   pending = false,
 }: {
   name: string;
   process: MonitoringOverview["processes"]["api"];
+  token: string | null;
+  schedulerStatus?: SchedulerStatusData | null;
   onRestart?: () => void;
+  onStart?: () => void;
   disabled?: boolean;
   pending?: boolean;
 }) {
+  const [expanded, setExpanded] = useState(false);
+  const [logs, setLogs] = useState<SchedulerLogLine[]>([]);
+  const [logsLoading, setLogsLoading] = useState(false);
+  const logsContainerRef = useRef<HTMLDivElement>(null);
+
+  // Use live scheduler status for core when embedded
+  const isCore = name === "core";
+  const effectiveRunning = isCore && schedulerStatus
+    ? schedulerStatus.status === "running"
+    : proc.running;
+  const effectiveStatus = isCore && schedulerStatus
+    ? schedulerStatus.status === "running" ? "embebido ✓" : schedulerStatus.status
+    : proc.status === "embedded" ? "embebido ✓" : proc.status;
+  const effectivePid = isCore && schedulerStatus?.embedded ? proc.pid : proc.pid;
+  const effectiveUptime = isCore && schedulerStatus
+    ? schedulerStatus.uptime_seconds
+    : proc.uptime_seconds;
+
+  useEffect(() => {
+    if (!expanded || !token) return;
+    const fetch = () => {
+      setLogsLoading(true);
+      const fn = isCore ? getSchedulerLogs(token, 200) : getApiLogs(token, 200);
+      fn.then((r) => setLogs(r.data)).catch(() => null).finally(() => setLogsLoading(false));
+    };
+    fetch();
+    const id = setInterval(fetch, POLL_LOGS_MS);
+    return () => clearInterval(id);
+  }, [expanded, token, isCore]);
+
+  useEffect(() => {
+    if (!expanded) return;
+    const el = logsContainerRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  }, [logs, expanded]);
+
+  const statusColor = effectiveRunning
+    ? "text-emerald-600 font-medium"
+    : proc.status === "unavailable" || proc.status === "pm2_unavailable"
+      ? "text-rose-500"
+      : "text-amber-600";
+
+  const logLevelColor = (level: string) =>
+    level === "error" ? "text-rose-400" : level === "warn" ? "text-amber-400" : "text-slate-300";
+
+  const formatLogTime = (iso: string) =>
+    new Date(iso).toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+
   return (
-    <div className="rounded-xl border border-slate-200 px-4 py-3">
-      <div className="flex items-center justify-between gap-3">
-        <div>
+    <div className="rounded-xl border border-slate-200 overflow-hidden">
+      {/* div instead of button to avoid nested <button> hydration error */}
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={() => setExpanded((v) => !v)}
+        onKeyDown={(e) => e.key === "Enter" && setExpanded((v) => !v)}
+        className="w-full flex items-center justify-between gap-3 px-4 py-3 text-left hover:bg-slate-50 transition-colors cursor-pointer"
+      >
+        <div className="min-w-0">
           <div className="font-medium text-slate-800">{name}</div>
-          <div className="mt-1 text-xs text-slate-500">
-            pid: {process.pid ?? "n/a"} · uptime: {process.uptime_seconds != null ? `${process.uptime_seconds}s` : "n/a"} · estado: {process.status}
+          <div className="mt-0.5 text-xs text-slate-500 flex flex-wrap gap-2">
+            <span>pid: {effectivePid ?? "n/a"}</span>
+            <span>uptime: {effectiveUptime != null ? `${effectiveUptime}s` : "n/a"}</span>
+            <span className={statusColor}>{effectiveStatus}</span>
           </div>
         </div>
-        {onRestart ? (
-          <button onClick={onRestart} disabled={disabled} className="theme-button-secondary rounded-lg px-3 py-2 text-sm disabled:opacity-50">
-            {pending ? "Reiniciando…" : `Restart ${name}`}
-          </button>
-        ) : null}
+        <div className="flex shrink-0 items-center gap-2">
+          {/* Start / Restart buttons for core when embedded */}
+          {isCore && schedulerStatus?.embedded && (
+            <div onClick={(e) => e.stopPropagation()} className="flex gap-1.5">
+              {schedulerStatus.status === "running" ? (
+                onRestart && (
+                  <button
+                    onClick={onRestart}
+                    disabled={disabled}
+                    className="rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                  >
+                    {pending ? "Reiniciando…" : "Reiniciar"}
+                  </button>
+                )
+              ) : (
+                onStart && (
+                  <button
+                    onClick={onStart}
+                    disabled={disabled}
+                    className="rounded-lg border border-emerald-300 bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700 hover:bg-emerald-100 disabled:opacity-50"
+                  >
+                    {pending ? "Iniciando…" : "Iniciar"}
+                  </button>
+                )
+              )}
+            </div>
+          )}
+          {/* Restart for api via pm2 */}
+          {!isCore && onRestart && (
+            <div onClick={(e) => e.stopPropagation()}>
+              <button
+                onClick={onRestart}
+                disabled={disabled}
+                className="rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+              >
+                {pending ? "Reiniciando…" : "Restart"}
+              </button>
+            </div>
+          )}
+          <span className="text-slate-400 text-xs">{expanded ? "▲" : "▼"}</span>
+        </div>
       </div>
+
+      {expanded && (
+        <div className="border-t border-slate-700 bg-slate-950 flex flex-col" style={{ height: 260 }}>
+          <div className="flex items-center justify-between border-b border-slate-800 px-3 py-1.5">
+            <span className="text-[10px] font-mono font-medium uppercase tracking-widest text-slate-500">
+              logs · {name}
+            </span>
+            <div className="flex items-center gap-2">
+              {logsLoading && <span className="text-[10px] text-slate-600 animate-pulse">actualizando…</span>}
+              <button
+                type="button"
+                onClick={() => setLogs([])}
+                className="rounded px-2 py-0.5 text-[10px] text-slate-500 hover:bg-slate-800 hover:text-slate-300 transition-colors"
+              >
+                Limpiar
+              </button>
+            </div>
+          </div>
+          <div ref={logsContainerRef} className="flex-1 overflow-y-auto px-3 py-2 space-y-0.5">
+            {logs.length === 0 ? (
+              <p className="text-xs font-mono text-slate-600 mt-2">
+                {effectiveRunning
+                  ? "Esperando logs…"
+                  : `El proceso ${name} no está corriendo.`}
+              </p>
+            ) : (
+              logs.map((line, idx) => (
+                <p key={idx} className="text-xs font-mono leading-5 whitespace-pre-wrap break-all">
+                  <span className="text-slate-600 select-none mr-2">{formatLogTime(line.ts)}</span>
+                  <span className={logLevelColor(line.level)}>{line.msg}</span>
+                </p>
+              ))
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

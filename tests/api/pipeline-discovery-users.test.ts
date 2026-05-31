@@ -3,6 +3,10 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const startFilterEnrichmentJob = vi.fn();
 const countLeadsByFilterSelection = vi.fn();
 const geocodeAddress = vi.fn();
+const listDiscoveryPlaces = vi.fn();
+const upsertDiscoveryPlaces = vi.fn();
+const getGooglePlacesBudgetStatus = vi.fn();
+const bulkInsertDiscoveryJobsMock = vi.fn();
 
 vi.mock("../../src/cli/commands/enrich.js", () => ({
   startFilterEnrichmentJob,
@@ -16,8 +20,46 @@ vi.mock("../../api/src/services/lead-geocoding.js", () => ({
   createLeadGeocodingService: () => ({ geocodeAddress }),
 }));
 
+vi.mock("../../src/storage/pipeline-config.js", () => ({
+  getGooglePlacesBudgetStatus,
+}));
+
+vi.mock("../../src/storage/discovery-jobs.js", () => ({
+  bulkInsertDiscoveryJobs: bulkInsertDiscoveryJobsMock,
+}));
+
+vi.mock("../../src/storage/discovery-places.js", async () => {
+  const actual = await vi.importActual<typeof import("../../src/storage/discovery-places.js")>("../../src/storage/discovery-places.js");
+  return {
+    ...actual,
+    listDiscoveryPlaces,
+    upsertDiscoveryPlaces,
+  };
+});
+
 let _activePipelineRun: Record<string, unknown> | null = null;
 let _mockLeadSchemaMissingContactTier = false;
+let _mockAuditLogRows: Record<string, unknown>[] = [];
+let _mockDiscoveryPlaceKeys: string[] = [];
+let _lastInsertedDiscoveryBatch: Record<string, unknown> | null = null;
+let _lastInsertedDiscoveryJobs: Record<string, unknown>[] = [];
+let _mockDiscoveryJobs: Record<string, unknown>[] = [
+  {
+    id: "legacy-job-id",
+    batch_id: null,
+    source: "yelu",
+    location: "Montevideo",
+    niche: "restaurant",
+    status: "queued",
+    enrich_after_discovery: false,
+    enrich_status: "skipped",
+    leads_found: 20,
+    leads_new: 6,
+    estimated_cost_usd: 1.8,
+    completed_at: "2026-05-20T10:00:00Z",
+    created_at: "2026-05-20T10:00:00Z",
+  },
+];
 
 let _mockLeads: Record<string, unknown>[] = [
   {
@@ -154,26 +196,27 @@ vi.mock("../../api/src/db/client.js", () => ({
           }),
         };
       }
+      if (table === "lead_dashboard") {
+        return {
+          select: (_cols?: string, _opts?: unknown) => ({
+            order: () => ({
+              limit: (_n: number) => Promise.resolve({
+                data: _mockLeads.map((lead) => ({ ...lead, contact_tier: (lead.contact_tier ?? null) })),
+                error: null,
+                count: _mockLeads.length,
+              }),
+            }),
+          }),
+        };
+      }
       if (table === "discovery_jobs") {
         return {
           select: (_cols: string, _opts?: unknown) => ({
             order: () => ({
               limit: (_n: number) => Promise.resolve({
-                data: [
-                  {
-                    id: "legacy-job-id",
-                    batch_id: null,
-                    source: "yelu",
-                    location: "Montevideo",
-                    niche: "restaurant",
-                    status: "queued",
-                    enrich_after_discovery: false,
-                    enrich_status: "skipped",
-                    created_at: "2026-05-20T10:00:00Z",
-                  },
-                ],
+                data: _mockDiscoveryJobs,
                 error: null,
-                count: 1,
+                count: _mockDiscoveryJobs.length,
               }),
             }),
             eq: () => ({
@@ -199,9 +242,7 @@ vi.mock("../../api/src/db/client.js", () => ({
               }),
             }),
             limit: (_n: number) => Promise.resolve({
-              data: [
-                { source: "yelu", niche: "restaurant", location: "Montevideo", created_at: "2026-05-20T10:00:00Z" },
-              ],
+              data: _mockDiscoveryJobs,
               error: null,
             }),
           }),
@@ -211,12 +252,15 @@ vi.mock("../../api/src/db/client.js", () => ({
                 data: { id: "new-job-id", status: "queued", batch_id: null },
                 error: null,
               }),
-              then: (cb: (value: unknown) => void) => cb({
-                data: Array.isArray(payload)
-                  ? payload.map((entry, index) => ({ id: `child-job-${index + 1}`, ...(entry as object) }))
-                  : [],
-                error: null,
-              }),
+              then: (cb: (value: unknown) => void) => {
+                _lastInsertedDiscoveryJobs = Array.isArray(payload) ? payload as Record<string, unknown>[] : [];
+                return cb({
+                  data: Array.isArray(payload)
+                    ? payload.map((entry, index) => ({ id: `child-job-${index + 1}`, ...(entry as object) }))
+                    : [],
+                  error: null,
+                });
+              },
             }),
           }),
           update: () => ({
@@ -261,10 +305,13 @@ vi.mock("../../api/src/db/client.js", () => ({
           }),
           insert: (payload: unknown) => ({
             select: () => ({
-              single: async () => ({
-                data: { id: "batch-1", status: "queued", created_at: "2026-05-20T10:00:00Z", ...(payload as object) },
-                error: null,
-              }),
+              single: async () => {
+                _lastInsertedDiscoveryBatch = payload as Record<string, unknown>;
+                return {
+                  data: { id: "batch-1", status: "queued", created_at: "2026-05-20T10:00:00Z", ...(payload as object) },
+                  error: null,
+                };
+              },
             }),
           }),
           update: () => ({
@@ -288,6 +335,12 @@ vi.mock("../../api/src/db/client.js", () => ({
                   error: null,
                 });
               },
+            }),
+            in: (_column: string, values: string[]) => Promise.resolve({
+              data: _mockLeads
+                .filter((lead) => values.includes(String(lead.id)))
+                .map((lead) => ({ id: lead.id, gps: lead.gps ?? null })),
+              error: null,
             }),
           }),
         };
@@ -334,11 +387,18 @@ vi.mock("../../api/src/db/client.js", () => ({
           select: (_cols: string, _opts?: unknown) => ({
             order: () => ({
               limit: (_n: number) =>
-                Promise.resolve({ data: [], error: null, count: 0 }),
+                Promise.resolve({ data: _mockAuditLogRows, error: null, count: _mockAuditLogRows.length }),
             }),
             eq: () => ({
               single: async () => ({ data: null, error: { code: "PGRST116" } }),
             }),
+          }),
+        };
+      }
+      if (table === "discovery_places_catalog") {
+        return {
+          select: (_cols: string) => ({
+            in: (_c: string, keys: string[]) => Promise.resolve({ data: keys.filter((key) => _mockDiscoveryPlaceKeys.includes(key)).map((location_key) => ({ location_key })), error: null }),
           }),
         };
       }
@@ -359,6 +419,36 @@ describe("Pipeline routes — admin only", () => {
     process.env["API_JWT_SECRET"] = "test-secret-at-least-32-chars-long-1234";
     _activePipelineRun = null;
     _mockLeadSchemaMissingContactTier = false;
+    upsertDiscoveryPlaces.mockReset();
+    getGooglePlacesBudgetStatus.mockReset();
+    bulkInsertDiscoveryJobsMock.mockReset();
+    bulkInsertDiscoveryJobsMock.mockImplementation(async (jobs) => {
+      _lastInsertedDiscoveryJobs = Array.isArray(jobs) ? jobs as Record<string, unknown>[] : [];
+      return _lastInsertedDiscoveryJobs.map((entry, index) => ({ id: `bulk-job-${index + 1}`, ...(entry as object) }));
+    });
+    getGooglePlacesBudgetStatus.mockResolvedValue({ budget_total: 200, budget_spent: 40, budget_remaining: 160, alert_threshold: 10, over_alert: false });
+    upsertDiscoveryPlaces.mockResolvedValue({ inserted: 0, updated: 0, skipped: 0, errors: [] });
+    _mockAuditLogRows = [];
+    _mockDiscoveryPlaceKeys = [];
+    _lastInsertedDiscoveryBatch = null;
+    _lastInsertedDiscoveryJobs = [];
+    _mockDiscoveryJobs = [
+      {
+        id: "legacy-job-id",
+        batch_id: null,
+        source: "yelu",
+        location: "Montevideo",
+        niche: "restaurant",
+        status: "queued",
+        enrich_after_discovery: false,
+        enrich_status: "skipped",
+        leads_found: 20,
+        leads_new: 6,
+        estimated_cost_usd: 1.8,
+        completed_at: "2026-05-20T10:00:00Z",
+        created_at: "2026-05-20T10:00:00Z",
+      },
+    ];
     _mockLeads = [
       {
         id: "lead-1",
@@ -712,6 +802,377 @@ describe("Discovery routes", () => {
     await app.close();
   });
 
+  it("GET /admin/geo/lead-density applies zone_ids with the same AND semantics as the rest of the filters", async () => {
+    _mockLeads = [
+      { id: "zone-mvd-match", source: "yelu", niche: "restaurant", address: "Montevideo, Uruguay", prospect_score: 82, contact_tier: "A", gps: { lat: -34.9, lng: -56.2 }, corroborating_sources: [] },
+      { id: "zone-mvd-low-score", source: "yelu", niche: "restaurant", address: "Montevideo, Uruguay", prospect_score: 40, contact_tier: "A", gps: { lat: -34.91, lng: -56.19 }, corroborating_sources: [] },
+      { id: "zone-salto-match", source: "yelu", niche: "restaurant", address: "Salto, Uruguay", prospect_score: 85, contact_tier: "A", gps: { lat: -31.39, lng: -57.96 }, corroborating_sources: [] },
+    ];
+
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/admin/geo/lead-density?zone_ids=montevideo&source=yelu&niche=restaurant&prospect_score_gte=70&contact_tier=A",
+      headers: { authorization: "Bearer " + token },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.data.meta.filtered_leads).toBe(1);
+    expect(body.data.locations).toHaveLength(1);
+    expect(body.data.locations[0]?.parent_location_key).toBe("montevideo");
+    await app.close();
+  });
+
+  function buildBinaryUpload(buffer: Buffer, filename: string) {
+    const boundary = "----blindspot-test-boundary";
+    const header = Buffer.from(
+      `--${boundary}\r\n` +
+      `Content-Disposition: form-data; name="file"; filename="${filename}"\r\n` +
+      `Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet\r\n\r\n`
+    );
+    const footer = Buffer.from(`\r\n--${boundary}--\r\n`);
+    return {
+      payload: Buffer.concat([header, buffer, footer]),
+      contentType: `multipart/form-data; boundary=${boundary}`,
+    };
+  }
+
+  async function buildWorkbookUpload(rows: Record<string, unknown>[]) {
+    const { utils, write } = await import("xlsx");
+    const workbook = utils.book_new();
+    const sheet = utils.json_to_sheet(rows);
+    utils.book_append_sheet(workbook, sheet, "places");
+    const buffer = Buffer.from(write(workbook, { type: "buffer", bookType: "xlsx" }));
+    return buildBinaryUpload(buffer, "places.xlsx");
+  }
+
+  it("POST /admin/imports/locations/preview returns valid, invalid and duplicate rows", async () => {
+    _mockDiscoveryPlaceKeys = ["montevideo-centro"];
+    const upload = await buildWorkbookUpload([
+      { location_key: "montevideo-centro", display_name: "Montevideo Centro", parent_location: "Montevideo", kind: "barrio", lat_approx: "-34.90", lng_approx: "-56.19", commercial_score: "82", notes: "existente" },
+      { location_key: "salto-centro", display_name: "Salto Centro", parent_location: "Salto", kind: "barrio", lat_approx: "-31.39", lng_approx: "-57.96", commercial_score: "74", notes: "nuevo" },
+      { location_key: "", display_name: "Sin key", kind: "ciudad" },
+    ]);
+
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/admin/imports/locations/preview",
+      headers: {
+        authorization: "Bearer " + token,
+        "content-type": upload.contentType,
+      },
+      payload: upload.payload,
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.data.valid_count).toBe(2);
+    expect(body.data.invalid_count).toBe(1);
+    expect(body.data.duplicate_count).toBe(1);
+    expect(body.data.entries).toHaveLength(2);
+    expect(body.data.row_validation_errors[0]?.reason).toContain("missing location_key");
+    await app.close();
+  });
+
+  it("DISC-15 seed XLSX preview accepts curated Uruguay fixture", async () => {
+    _mockDiscoveryPlaceKeys = [];
+    const { readFile } = await import("node:fs/promises");
+    const { join } = await import("node:path");
+    const buffer = await readFile(join(process.cwd(), "tests/discovery/fixtures/uruguay-location-seed.xlsx"));
+    const upload = buildBinaryUpload(buffer, "uruguay-location-seed.xlsx");
+
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/admin/imports/locations/preview",
+      headers: {
+        authorization: "Bearer " + token,
+        "content-type": upload.contentType,
+      },
+      payload: upload.payload,
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.data.filename).toBe("uruguay-location-seed.xlsx");
+    expect(body.data.row_count).toBe(32);
+    expect(body.data.valid_count).toBe(32);
+    expect(body.data.invalid_count).toBe(0);
+    expect(body.data.duplicate_count).toBe(0);
+    expect(body.data.entries[0]).toMatchObject({ location_key: "montevideo-departamento", kind: "departamento" });
+    expect(body.data.entries.some((entry: { location_key: string }) => entry.location_key === "peninsula-pde")).toBe(true);
+    await app.close();
+  });
+
+  it("POST /admin/imports/locations/commit upserts entries and writes import audit metadata", async () => {
+    upsertDiscoveryPlaces.mockResolvedValueOnce({ inserted: 1, updated: 0, skipped: 1, errors: [{ location_key: "montevideo-centro", reason: "duplicate — use upsert=true to overwrite" }] });
+
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/admin/imports/locations/commit",
+      headers: { authorization: "Bearer " + token },
+      payload: {
+        filename: "places.xlsx",
+        upsert: false,
+        entries: [
+          { location_key: "montevideo-centro", display_name: "Montevideo Centro", parent_location: "Montevideo", kind: "barrio", lat_approx: -34.9, lng_approx: -56.19, commercial_score: 82, notes: "dup" },
+          { location_key: "salto-centro", display_name: "Salto Centro", parent_location: "Salto", kind: "barrio", lat_approx: -31.39, lng_approx: -57.96, commercial_score: 74, notes: "new" },
+        ],
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.data).toMatchObject({ inserted: 1, updated: 0, skipped: 1, duplicate_keys: ["montevideo-centro"] });
+    expect(upsertDiscoveryPlaces).toHaveBeenCalledWith(expect.any(Array), "admin-user-id", false);
+    await app.close();
+  });
+
+  it("GET /admin/imports/locations returns import history from audit log", async () => {
+    _mockAuditLogRows = [
+      {
+        id: "audit-import-1",
+        action: "discovery.places.import",
+        occurred_at: "2026-05-27T12:00:00Z",
+        actor_user_id: "admin-user-id",
+        actor_role: "admin",
+        diff: {
+          filename: "places.xlsx",
+          row_count: 12,
+          inserted: 8,
+          updated: 2,
+          skipped: 1,
+          invalid_count: 1,
+          duplicate_count: 1,
+          upsert: true,
+        },
+      },
+    ];
+
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/admin/imports/locations?limit=10",
+      headers: { authorization: "Bearer " + token },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.data[0]).toMatchObject({ filename: "places.xlsx", inserted: 8, updated: 2, invalid_count: 1, upsert: true });
+    await app.close();
+  });
+  it("GET /discovery/location-suggestions returns explainable ranked suggestions", async () => {
+    listDiscoveryPlaces.mockResolvedValue([
+      {
+        id: "city-montevideo",
+        location_key: "montevideo",
+        display_name: "Montevideo",
+        parent_location: "Montevideo",
+        kind: "ciudad",
+        lat_approx: -34.9,
+        lng_approx: -56.2,
+        commercial_score: 88,
+        notes: null,
+        source: "xls_import",
+        imported_at: "2026-05-01T00:00:00Z",
+        imported_by_user_id: null,
+      },
+      {
+        id: "barrio-pocitos",
+        location_key: "pocitos",
+        display_name: "Pocitos",
+        parent_location: "Montevideo",
+        kind: "barrio",
+        lat_approx: -34.92,
+        lng_approx: -56.15,
+        commercial_score: 93,
+        notes: null,
+        source: "xls_import",
+        imported_at: "2026-05-01T00:00:00Z",
+        imported_by_user_id: null,
+      },
+    ]);
+    _mockDiscoveryJobs = [
+      {
+        id: "job-1",
+        batch_id: null,
+        source: "google_places",
+        location: "Montevideo",
+        niche: "restaurant",
+        status: "completed",
+        enrich_after_discovery: false,
+        enrich_status: "skipped",
+        leads_found: 24,
+        leads_new: 10,
+        estimated_cost_usd: 2.4,
+        completed_at: "2026-03-20T10:00:00Z",
+        created_at: "2026-03-20T10:00:00Z",
+      },
+    ];
+    _mockLeads = [
+      { id: "lead-pocitos-1", niche: "restaurant", address: "Pocitos, Montevideo, Uruguay", prospect_score: 74, created_at: "2026-05-21T10:00:00Z" },
+    ];
+
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/discovery/location-suggestions?barrio=Pocitos&niche=restaurant&limit=5",
+      headers: { authorization: "Bearer " + token },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.total).toBe(1);
+    expect(body.data[0]).toMatchObject({
+      confidence: "low",
+      niche: "restaurant",
+      catalog_entry: { location_key: "pocitos" },
+      historical_metrics: { historical_scope: "parent", jobs_count: 1 },
+    });
+    expect(body.data[0].reasons.length).toBeGreaterThan(0);
+    await app.close();
+  });
+
+  it("POST /discovery/job-batches persists predictive metadata in batch and child jobs", async () => {
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
+    const snapshot = {
+      catalog_entry: { id: "catalog-pocitos", location_key: "pocitos", display_name: "Pocitos" },
+      score: 78,
+      confidence: "medium",
+      reasons: ["Cobertura baja"],
+    };
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/discovery/job-batches",
+      headers: { authorization: "Bearer " + token },
+      payload: {
+        sources: ["google_places", "yelu"],
+        location: "Pocitos",
+        niche: "restaurant",
+        max_results: 120,
+        cpu_budget: "balanced",
+        google_places: { profile: "B", concurrency: 3, cost_cap_usd: 4 },
+        recommendation_origin: { type: "predictive_location", key: "pocitos" },
+        predictive_context: {
+          suggestion_source: "predictive_location",
+          location_catalog_entry_id: "catalog-pocitos",
+          opportunity_score_snapshot: snapshot,
+        },
+        enrich_after_discovery: true,
+      },
+    });
+
+    expect(res.statusCode).toBe(201);
+    expect(_lastInsertedDiscoveryBatch).toMatchObject({
+      recommendation_origin: {
+        type: "predictive_location",
+        key: "pocitos",
+        suggestion_source: "predictive_location",
+        location_catalog_entry_id: "catalog-pocitos",
+      },
+    });
+    expect(_lastInsertedDiscoveryJobs[0]).toMatchObject({
+      triggered_by: "predictive_location",
+      source_params: {
+        suggestion_source: "predictive_location",
+        location_catalog_entry_id: "catalog-pocitos",
+      },
+    });
+    await app.close();
+  });
+
+  it("POST /discovery/jobs/bulk persists predictive metadata per job", async () => {
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/discovery/jobs/bulk",
+      headers: { authorization: "Bearer " + token },
+      payload: {
+        jobs: [
+          {
+            source: "google_places",
+            location: "Pocitos",
+            niche: "restaurant",
+            max_results: 80,
+            cost_cap_usd: 2,
+            predictive_context: {
+              suggestion_source: "predictive_location",
+              location_catalog_entry_id: "catalog-pocitos",
+              opportunity_score_snapshot: { score: 71 },
+            },
+          },
+        ],
+      },
+    });
+
+    expect(res.statusCode).toBe(201);
+    expect(_lastInsertedDiscoveryJobs[0]).toMatchObject({
+      source_params: {
+        suggestion_source: "predictive_location",
+        location_catalog_entry_id: "catalog-pocitos",
+      },
+    });
+    await app.close();
+  });
+
+  it("GET /admin/geo/zones returns catalog-backed structured options with lead counts", async () => {
+    listDiscoveryPlaces.mockResolvedValue([
+      {
+        id: "zone-1",
+        location_key: "montevideo",
+        display_name: "Montevideo",
+        parent_location: "Montevideo",
+        kind: "ciudad",
+        lat_approx: -34.9,
+        lng_approx: -56.2,
+        commercial_score: 88,
+        notes: null,
+        source: "xls_import",
+        imported_at: "2026-05-01T00:00:00Z",
+        imported_by_user_id: null,
+      },
+    ]);
+    _mockLeads = [
+      { id: "lead-zone-1", source: "yelu", niche: "restaurant", address: "Montevideo, Uruguay", prospect_score: 72, contact_tier: "A", gps: { lat: -34.9, lng: -56.2 }, corroborating_sources: [], created_at: "2026-05-21T10:00:00Z" },
+      { id: "lead-zone-2", source: "osm", niche: "hotel", address: "Montevideo, Uruguay", prospect_score: 65, contact_tier: "B", gps: { lat: -34.91, lng: -56.19 }, corroborating_sources: [], created_at: "2026-05-22T11:00:00Z" },
+    ];
+
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/admin/geo/zones?q=monte",
+      headers: { authorization: "Bearer " + token },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.data[0]).toMatchObject({ zone_id: "montevideo", label: "Montevideo", kind: "ciudad", lead_count: 2 });
+    await app.close();
+  });
+
   it("GET /admin/geo/lead-density falls back when leads.contact_tier is missing in legacy schema", async () => {
     _mockLeadSchemaMissingContactTier = true;
     _mockLeads = [
@@ -746,6 +1207,8 @@ describe("Discovery routes", () => {
 describe("Campaigns routes — implemented (Fase 43)", () => {
   beforeEach(() => {
     process.env["API_JWT_SECRET"] = "test-secret-at-least-32-chars-long-1234";
+    listDiscoveryPlaces.mockReset();
+    listDiscoveryPlaces.mockResolvedValue([]);
     _mockUser = {
       id: "admin-user-id",
       email: "admin@blindspot.local",
@@ -924,6 +1387,7 @@ describe("Admin audit-log route", () => {
 describe("GET /admin/geo/zone-leads — MAP-4 individual mode", () => {
   beforeEach(() => {
     process.env["API_JWT_SECRET"] = "test-secret-at-least-32-chars-long-1234";
+    _mockLeadSchemaMissingContactTier = false;
     _mockUser = {
       id: "admin-user-id",
       email: "admin@blindspot.local",
@@ -1005,6 +1469,30 @@ describe("GET /admin/geo/zone-leads — MAP-4 individual mode", () => {
     expect(body.data[0]).toHaveProperty("map_point");
     // lead-2 has address "Salto, Uruguay" → different location_key
     expect(body.data.every((lead: { id: string }) => lead.id !== "lead-2")).toBe(true);
+    await app.close();
+  });
+
+  it("honors the shared filter contract when drilling into zone-leads", async () => {
+    _mockLeads = [
+      { id: "lead-zone-filter-match", name: "Restaurante Centro", source: "yelu", niche: "restaurant", contact_tier: "A", prospect_score: 82, address: "Montevideo, Uruguay", gps: { lat: -34.9, lng: -56.2 }, corroborating_sources: [], website: "https://centro.example.com", phone: "+59899111222", review_count: 48, primary_offer: "software_pos", pitch_hook: "POS con oportunidad inmediata", contact_ready: true, tags: ["instagram-confirmed"] },
+      { id: "lead-zone-filter-tier-miss", name: "Hotel Centro", source: "yelu", niche: "hotel", contact_tier: "C", prospect_score: 85, address: "Montevideo, Uruguay", gps: { lat: -34.91, lng: -56.19 }, corroborating_sources: [] },
+      { id: "lead-zone-filter-zone-miss", name: "Restaurante Salto", source: "yelu", niche: "restaurant", contact_tier: "A", prospect_score: 88, address: "Salto, Uruguay", gps: { lat: -31.39, lng: -57.96 }, corroborating_sources: [] },
+    ];
+
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/admin/geo/zone-leads?location_key=montevideo&zone_ids=montevideo&source=yelu&niche=restaurant&prospect_score_gte=70&contact_tier=A",
+      headers: { authorization: "Bearer " + token },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.total).toBe(1);
+    expect(body.data.map((lead: { id: string }) => lead.id)).toEqual(["lead-zone-filter-match"]);
+    expect(body.data[0]).toMatchObject({ website: "https://centro.example.com", phone: "+59899111222", review_count: 48, primary_offer: "software_pos", pitch_hook: "POS con oportunidad inmediata", contact_ready: true, tags: ["instagram-confirmed"] });
     await app.close();
   });
 
