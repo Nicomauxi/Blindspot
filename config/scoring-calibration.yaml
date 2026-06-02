@@ -1,0 +1,245 @@
+version: 1
+default_scenario: hybrid_bounded_v31_candidate
+
+scenarios:
+  multiplicative_attenuated_probe:
+    family: multiplicative_attenuated
+    gap_depth_cap: 52
+    source_quality_bonus:
+      google_places: 0
+      osm: 2
+      yelu: 3
+      pedidosya: 4
+      mintur: 4
+    commercial_breadth:
+      secondary_threshold: 42
+      secondary_bonus: 5
+      tertiary_threshold: 52
+      tertiary_bonus: 2
+    business_quality:
+      rating_tiers:
+        - { min: 4.0, max: 4.3, points: 1 }
+        - { min: 4.3, max: null, points: 3 }
+      review_tiers:
+        - { min: 20, max: 50, points: 1 }
+        - { min: 50, max: null, points: 2 }
+      data_confidence_multiplier: 2
+      contact_reliability_multiplier: 1
+      corroboration_bonus: 1
+      cap: 12
+    accessibility:
+      bounded_bonus_by_tier: { A: 4, B: 2, C: 0, D: -2, X: -6 }
+      score_tiers:
+        - { min: 50, points: 1 }
+        - { min: 70, points: 2 }
+        - { min: 85, points: 3 }
+      multiplicative_multiplier_by_tier: { A: 1.10, B: 1.05, C: 1.0, D: 0.94, X: 0.88 }
+      score_multiplier_weight: 0.10
+      reliability_multiplier_weight: 0.08
+    timing:
+      high_urgency_bonus: 4
+      medium_urgency_bonus: 2
+      low_urgency_bonus: 0
+      franchise_penalty: -8
+      freshness_bonus: 1
+      stale_penalty: -2
+    offer_adjustments:
+      web_nuevo: { multiplier: 1.0 }
+      rediseno: { multiplier: 1.0 }
+      marketing: { multiplier: 0.95 }
+      software: { multiplier: 1.0 }
+      catalogo: { multiplier: 0.92, cap: 50 }
+      contacto_directo: { multiplier: 0.95 }
+    catalogo_by_niche:
+      restaurant: { multiplier: 0.84, cap: 42 }
+      car_dealer: { multiplier: 0.92, cap: 46 }
+      accommodation: { multiplier: 0.9, cap: 46 }
+      gym: { multiplier: 0.94, cap: 48 }
+    preview_thresholds:
+      normal_max: 34
+      good_min: 35
+      very_good_min: 55
+      exceptional_min: 75
+
+  additive_pure_balanced:
+    family: additive_pure
+    gap_depth_cap: 48
+    source_quality_bonus:
+      google_places: 0
+      osm: 2
+      yelu: 3
+      pedidosya: 4
+      mintur: 4
+    commercial_breadth:
+      secondary_threshold: 45
+      secondary_bonus: 4
+      tertiary_threshold: 55
+      tertiary_bonus: 1
+    business_quality:
+      rating_tiers:
+        - { min: 4.0, max: 4.3, points: 1 }
+        - { min: 4.3, max: null, points: 3 }
+      review_tiers:
+        - { min: 20, max: 50, points: 1 }
+        - { min: 50, max: null, points: 2 }
+      data_confidence_multiplier: 2
+      contact_reliability_multiplier: 0
+      corroboration_bonus: 1
+      cap: 12
+    accessibility:
+      bounded_bonus_by_tier: { A: 8, B: 5, C: 1, D: -3, X: -8 }
+      score_tiers:
+        - { min: 50, points: 1 }
+        - { min: 70, points: 2 }
+        - { min: 85, points: 3 }
+      multiplicative_multiplier_by_tier: { A: 1.0, B: 1.0, C: 1.0, D: 1.0, X: 1.0 }
+      score_multiplier_weight: 0
+      reliability_multiplier_weight: 0
+    timing:
+      high_urgency_bonus: 2
+      medium_urgency_bonus: 1
+      low_urgency_bonus: 0
+      franchise_penalty: -8
+      freshness_bonus: 0
+      stale_penalty: -1
+    offer_adjustments:
+      web_nuevo: { multiplier: 1.0 }
+      rediseno: { multiplier: 1.0 }
+      marketing: { multiplier: 0.95 }
+      software: { multiplier: 1.0 }
+      catalogo: { multiplier: 0.9, cap: 46 }
+      contacto_directo: { multiplier: 0.95 }
+    catalogo_by_niche:
+      restaurant: { multiplier: 0.82, cap: 40 }
+      car_dealer: { multiplier: 0.92, cap: 44 }
+      accommodation: { multiplier: 0.9, cap: 44 }
+      gym: { multiplier: 0.95, cap: 46 }
+    preview_thresholds:
+      normal_max: 34
+      good_min: 35
+      very_good_min: 55
+      exceptional_min: 75
+
+  hybrid_bounded_balanced:
+    family: hybrid_bounded
+    gap_depth_cap: 50
+    source_quality_bonus:
+      google_places: 0
+      osm: 2
+      yelu: 3
+      pedidosya: 4
+      mintur: 4
+    commercial_breadth:
+      secondary_threshold: 45
+      secondary_bonus: 4
+      tertiary_threshold: 55
+      tertiary_bonus: 1
+    business_quality:
+      rating_tiers:
+        - { min: 4.0, max: 4.3, points: 1 }
+        - { min: 4.3, max: null, points: 3 }
+      review_tiers:
+        - { min: 20, max: 50, points: 1 }
+        - { min: 50, max: null, points: 2 }
+      data_confidence_multiplier: 2
+      contact_reliability_multiplier: 0
+      corroboration_bonus: 1
+      cap: 12
+    accessibility:
+      bounded_bonus_by_tier: { A: 7, B: 4, C: 1, D: -3, X: -8 }
+      score_tiers:
+        - { min: 50, points: 1 }
+        - { min: 70, points: 2 }
+        - { min: 85, points: 3 }
+      multiplicative_multiplier_by_tier: { A: 1.0, B: 1.0, C: 1.0, D: 1.0, X: 1.0 }
+      score_multiplier_weight: 0
+      reliability_multiplier_weight: 0
+    timing:
+      high_urgency_bonus: 2
+      medium_urgency_bonus: 1
+      low_urgency_bonus: 0
+      franchise_penalty: -8
+      freshness_bonus: 0
+      stale_penalty: -1
+    offer_adjustments:
+      web_nuevo: { multiplier: 1.0 }
+      rediseno: { multiplier: 1.0 }
+      marketing: { multiplier: 0.95 }
+      software: { multiplier: 1.0 }
+      catalogo: { multiplier: 0.92, cap: 48 }
+      contacto_directo: { multiplier: 0.95 }
+    catalogo_by_niche:
+      restaurant: { multiplier: 0.84, cap: 42 }
+      car_dealer: { multiplier: 0.94, cap: 44 }
+      accommodation: { multiplier: 0.92, cap: 44 }
+      gym: { multiplier: 0.96, cap: 46 }
+    preview_thresholds:
+      normal_max: 34
+      good_min: 35
+      very_good_min: 55
+      exceptional_min: 75
+
+
+  hybrid_bounded_v31_candidate:
+    family: hybrid_bounded
+    gap_depth_cap: 48
+    source_quality_bonus:
+      google_places: 0
+      osm: 2
+      yelu: 3
+      pedidosya: 4
+      mintur: 10
+    commercial_breadth:
+      secondary_threshold: 45
+      secondary_bonus: 3
+      tertiary_threshold: 55
+      tertiary_bonus: 1
+    business_quality:
+      rating_tiers:
+        - { min: 4.0, max: 4.3, points: 1 }
+        - { min: 4.3, max: null, points: 3 }
+      review_tiers:
+        - { min: 20, max: 50, points: 1 }
+        - { min: 50, max: null, points: 2 }
+      data_confidence_multiplier: 2
+      contact_reliability_multiplier: 0
+      corroboration_bonus: 1
+      cap: 12
+    accessibility:
+      bounded_bonus_by_tier: { A: 5, B: 3, C: 1, D: -3, X: -8 }
+      score_tiers:
+        - { min: 50, points: 1 }
+        - { min: 70, points: 1 }
+        - { min: 85, points: 2 }
+      multiplicative_multiplier_by_tier: { A: 1.0, B: 1.0, C: 1.0, D: 1.0, X: 1.0 }
+      score_multiplier_weight: 0
+      reliability_multiplier_weight: 0
+    timing:
+      high_urgency_bonus: 2
+      medium_urgency_bonus: 1
+      low_urgency_bonus: 0
+      franchise_penalty: -8
+      freshness_bonus: 0
+      stale_penalty: -1
+    offer_adjustments:
+      web_nuevo: { multiplier: 1.0 }
+      rediseno: { multiplier: 1.0 }
+      marketing: { multiplier: 0.95 }
+      software: { multiplier: 1.0 }
+      catalogo: { multiplier: 0.88, cap: 45 }
+      contacto_directo: { multiplier: 0.92 }
+    catalogo_by_niche:
+      other: { multiplier: 0.68, cap: 30 }
+      restaurant: { multiplier: 0.82, cap: 40 }
+      car_dealer: { multiplier: 0.9, cap: 42 }
+      accommodation: { multiplier: 0.88, cap: 42 }
+      gym: { multiplier: 0.94, cap: 44 }
+    preview_thresholds:
+      normal_max: 34
+      good_min: 35
+      very_good_min: 50
+      exceptional_min: 63
+    dedupe:
+      possible_duplicate_penalty: 6
+      duplicate_secondary_penalty: 18
+      block_duplicate_secondary_exceptional: true

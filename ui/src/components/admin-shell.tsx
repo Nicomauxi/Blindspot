@@ -572,7 +572,7 @@ export function AdminPageLayout({
 }) {
   return (
     <div className="space-y-6">
-      <header className="theme-panel rounded-2xl px-6 py-5">
+      <header className="theme-panel relative z-20 overflow-visible rounded-2xl px-6 py-5">
         {eyebrow ? (
           <p className="text-xs font-semibold uppercase tracking-[0.2em] text-sky-700">{eyebrow}</p>
         ) : null}

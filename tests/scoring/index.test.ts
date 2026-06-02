@@ -103,12 +103,13 @@ describe("scoreLead", () => {
     expect(result.prospect_score).toBe(0);
   });
 
-  it("prospect_score usa la fórmula v2 y mantiene floor en el producto final", () => {
+  it("email aislado suma score compuesto pero no alcanza tier A", () => {
     const lead = { ...empty_lead, tags: ["web-only-no-social"], canonical_fields: { email: "owner@example.com" } };
     const result = scoreLead(lead);
     expect(result.score_breakdown.sub_scores.marketing).toBe(28);
-    expect(result.score_breakdown.contact_tier).toBe("A");
-    expect(result.prospect_score).toBe(28);
+    expect(result.score_breakdown.contact_score).toBe(45);
+    expect(result.score_breakdown.contact_tier).toBe("B");
+    expect(result.prospect_score).toBe(24);
   });
 
   it("breakdown.rules contains ONLY post-exclusion rules (no excluded rules)", () => {
@@ -139,11 +140,11 @@ describe("scoreLead", () => {
     expect(ts).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
   });
 
-  it("floor not round: web-only-no-social + email no redondea hacia arriba", () => {
+  it("floor not round: el score compuesto sigue usando floor", () => {
     const lead = { ...empty_lead, tags: ["web-only-no-social"], canonical_fields: { email: "owner@example.com" } };
     const result = scoreLead(lead);
-    expect(result.prospect_score).toBe(28);
-    expect(result.prospect_score).not.toBe(29);
+    expect(result.prospect_score).toBe(24);
+    expect(result.prospect_score).not.toBe(25);
   });
 
   it("google_data fields absent → matched:false, no throw", () => {

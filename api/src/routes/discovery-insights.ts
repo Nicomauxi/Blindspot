@@ -9,6 +9,8 @@ export type LeadInsightRow = {
   address: string | null;
   prospect_score: number | null;
   contact_tier: string | null;
+  primary_offer?: string | null;
+  commercial_offers_summary?: { primary_offer_type?: string | null } | null;
   gps: unknown;
   corroborating_sources: unknown;
 };
@@ -63,6 +65,8 @@ export type LeadDensityFilters = {
   niche?: string | null;
   prospect_score_gte?: number | null;
   contact_tiers?: string[];
+  primary_offer?: string | null;
+  commercial_offer_type?: string | null;
   gps_sources?: LeadDensityGpsSource[];
 };
 
@@ -317,6 +321,16 @@ function resolveRawGpsSource(lead: LeadInsightRow): Exclude<LeadDensityGpsSource
   return sources.includes("google_places") ? "google" : "real";
 }
 
+function classifyCommercialOfferType(lead: LeadInsightRow): string {
+  const explicit = lead.commercial_offers_summary?.primary_offer_type?.trim().toLowerCase();
+  if (explicit) return explicit;
+  const normalized = (lead.primary_offer ?? "").trim().toLowerCase();
+  if (!normalized) return "unknown";
+  if (["marketing", "ads", "redes", "social", "campana"].some((term) => normalized.includes(term))) return "marketing";
+  if (["software", "pos", "web", "catalogo", "crm", "erp"].some((term) => normalized.includes(term))) return "software";
+  return "unknown";
+}
+
 export function matchesLeadDensityFilters(
   lead: LeadInsightRow,
   filters: LeadDensityFilters,
@@ -339,6 +353,15 @@ export function matchesLeadDensityFilters(
   if (filters.contact_tiers && filters.contact_tiers.length > 0) {
     const tier = normalizeContactTier(lead.contact_tier);
     if (!tier || !filters.contact_tiers.includes(tier)) return false;
+  }
+
+  if (filters.primary_offer) {
+    const primaryOffer = (lead.primary_offer ?? "").trim().toLowerCase();
+    if (!primaryOffer || primaryOffer !== filters.primary_offer.trim().toLowerCase()) return false;
+  }
+
+  if (filters.commercial_offer_type) {
+    if (classifyCommercialOfferType(lead) !== filters.commercial_offer_type.trim().toLowerCase()) return false;
   }
 
   if (filters.gps_sources && filters.gps_sources.length > 0) {
@@ -421,6 +444,8 @@ export async function buildLeadDensitySnapshot(
     niche: options.filters?.niche?.trim() || null,
     prospect_score_gte: options.filters?.prospect_score_gte ?? null,
     contact_tiers: options.filters?.contact_tiers?.map((value) => value.trim().toUpperCase()).filter(Boolean),
+    primary_offer: options.filters?.primary_offer?.trim() || null,
+    commercial_offer_type: options.filters?.commercial_offer_type?.trim().toLowerCase() || null,
     gps_sources: options.filters?.gps_sources?.filter(Boolean),
   };
 

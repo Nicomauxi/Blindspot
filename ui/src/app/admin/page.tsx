@@ -100,7 +100,7 @@ export default function AdminHomePage() {
   useEffect(() => {
     if (!token || role !== "admin") return;
     setDensityLoading(true);
-    getLeadDensity(token, draftDensityFilters)
+    getLeadDensity(token, appliedDensityFilters)
       .then((res) => {
         setDensityLocations(res.data.locations);
         setDensityError(null);
@@ -112,7 +112,7 @@ export default function AdminHomePage() {
         setDraftSelectedLocationKey(null);
       })
       .finally(() => setDensityLoading(false));
-  }, [draftDensityFilters, token, role]);
+  }, [appliedDensityFilters, token, role]);
 
   useEffect(() => {
     if (!token) return;
@@ -156,7 +156,7 @@ export default function AdminHomePage() {
     setZoneLeads([]);
     setZoneLeadsTotal(0);
     setZoneLeadsLoading(true);
-    void getZoneLeads(token, { ...buildZoneLeadRequest(selectedLocation), ...draftDensityFilters })
+    void getZoneLeads(token, { ...buildZoneLeadRequest(selectedLocation), ...appliedDensityFilters })
       .then((response) => {
         setZoneLeads(response.data);
         setZoneLeadsTotal(response.total);
@@ -168,7 +168,7 @@ export default function AdminHomePage() {
         setZoneLeadsError(err instanceof Error ? err.message : "No se pudieron cargar los leads de la zona seleccionada.");
       })
       .finally(() => setZoneLeadsLoading(false));
-  }, [draftDensityFilters, selectedLocation, token]);
+  }, [appliedDensityFilters, selectedLocation, token]);
 
   function handleDrillDown(location: DiscoveryMapDensityLocation) {
     setDraftSelectedLocationKey(location.location_key);

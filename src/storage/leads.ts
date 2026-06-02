@@ -24,6 +24,9 @@ const DUPLICATE_TAG = "possible-duplicate";
 const DUPLICATE_SECONDARY_TAG = "duplicate-secondary";
 const FRANCHISE_TAG = "franchise-detected";
 const SIGNIFICANT_CHANGE_TAG = "state-changed-significant";
+const TAG_UPDATE_BATCH_SIZE = 25;
+const TAG_UPDATE_MAX_RETRIES = 3;
+const TAG_UPDATE_RETRY_BASE_MS = 150;
 const FALLBACK_BLOCKED_EMAIL_DOMAINS = new Set([
   "thinkit.com.uy",
   "smartserv.com.uy",
@@ -200,15 +203,69 @@ export function detectDuplicates(
   return duplicates;
 }
 
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function updateLeadTagsWithRetry(
+  id: string,
+  tags: string[],
+  label: string
+): Promise<{ id: string; error: Error | null }> {
+  const db = getSupabase();
+
+  for (let attempt = 1; attempt <= TAG_UPDATE_MAX_RETRIES; attempt++) {
+    try {
+      const { error } = await db.from("leads").update({ tags }).eq("id", id);
+      if (!error) return { id, error: null };
+
+      const message = error.message ?? `${label} update failed`;
+      if (attempt === TAG_UPDATE_MAX_RETRIES) {
+        return { id, error: new Error(message) };
+      }
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (attempt === TAG_UPDATE_MAX_RETRIES) {
+        return { id, error: new Error(message) };
+      }
+    }
+
+    await sleep(TAG_UPDATE_RETRY_BASE_MS * attempt);
+  }
+
+  return { id, error: new Error(`${label} update failed`) };
+}
+
+async function runLeadTagUpdates(
+  updates: Array<{ id: string; tags: string[] }>,
+  label: string
+): Promise<void> {
+  const failures: Array<{ id: string; error: Error }> = [];
+
+  for (let offset = 0; offset < updates.length; offset += TAG_UPDATE_BATCH_SIZE) {
+    const batch = updates.slice(offset, offset + TAG_UPDATE_BATCH_SIZE);
+    const results = await Promise.all(
+      batch.map(({ id, tags }) => updateLeadTagsWithRetry(id, tags, label))
+    );
+
+    for (const result of results) {
+      if (result.error) failures.push({ id: result.id, error: result.error });
+    }
+  }
+
+  if (failures.length > 0) {
+    const summary = failures.map((f) => `${f.id}: ${f.error.message}`).join("; ");
+    throw new Error(`${label} failed for ${failures.length} lead(s): ${summary}`);
+  }
+}
+
 export async function tagDuplicates(leads: Lead[]): Promise<void> {
   const groups = detectDuplicates(leads);
   if (groups.size === 0) return;
 
-  const db = getSupabase();
-
-  // Build update plans first, then execute concurrently.
-  // tagDuplicates' inputs typically have unique tag sets per lead, so we cannot
-  // batch with `.in(...).update(...)`. Concurrent updates avoid the N+1 latency.
+  // Build update plans first, then execute in bounded batches with retries.
+  // The full scoring flow can touch thousands of rows; unbounded Promise.all()
+  // against PostgREST causes transient fetch failures under load.
   const updates: Array<{ id: string; tags: string[] }> = [];
   for (const group of groups.values()) {
     for (let i = 0; i < group.length; i++) {
@@ -220,18 +277,7 @@ export async function tagDuplicates(leads: Lead[]): Promise<void> {
     }
   }
 
-  const results = await Promise.all(
-    updates.map(async ({ id, tags }) => {
-      const { error } = await db.from("leads").update({ tags }).eq("id", id);
-      return { id, error };
-    })
-  );
-
-  const failed = results.filter((r) => r.error);
-  if (failed.length > 0) {
-    const summary = failed.map((f) => `${f.id}: ${f.error?.message}`).join("; ");
-    throw new Error(`tagDuplicates failed for ${failed.length} lead(s): ${summary}`);
-  }
+  await runLeadTagUpdates(updates, "tagDuplicates");
 }
 
 export async function tagFranchises(
@@ -248,7 +294,6 @@ export async function tagFranchises(
     addressesByName.set(norm, addrs);
   }
 
-  const db = getSupabase();
   const failures: Array<{ leadId: string; message: string }> = [];
 
   for (const lead of leads) {
@@ -261,13 +306,10 @@ export async function tagFranchises(
     if (!byList && !byHeuristic) continue;
 
     const tags = [...lead.tags, FRANCHISE_TAG];
-    const { error } = await db
-      .from("leads")
-      .update({ tags })
-      .eq("id", lead.id);
+    const result = await updateLeadTagsWithRetry(lead.id, tags, "tagFranchises");
 
-    if (error) {
-      failures.push({ leadId: lead.id, message: error.message });
+    if (result.error) {
+      failures.push({ leadId: lead.id, message: result.error.message });
     }
   }
 
@@ -1125,6 +1167,29 @@ export async function loadAllPassedLeads(): Promise<Lead[]> {
       .range(from, to);
 
     if (error) throw new Error(`Failed to load all passed leads: ${error.message}`);
+    const batch = (data ?? []) as Lead[];
+    leads.push(...batch);
+    if (batch.length < pageSize) break;
+  }
+
+  return leads;
+}
+
+export async function loadLeadsByScoringVersion(scoringVersion: number): Promise<Lead[]> {
+  const db = getSupabase();
+  const pageSize = 1000;
+  const leads: Lead[] = [];
+
+  for (let from = 0; ; from += pageSize) {
+    const to = from + pageSize - 1;
+    const { data, error } = await db
+      .from("leads")
+      .select("*")
+      .eq("scoring_version", scoringVersion)
+      .order("name")
+      .range(from, to);
+
+    if (error) throw new Error(`Failed to load leads for scoring_version=${scoringVersion}: ${error.message}`);
     const batch = (data ?? []) as Lead[];
     leads.push(...batch);
     if (batch.length < pageSize) break;

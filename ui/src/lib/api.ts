@@ -1371,6 +1371,8 @@ export type DiscoveryLeadDensityFilters = {
   niche?: string;
   prospect_score_gte?: number;
   contact_tier?: string[];
+  primary_offer?: string;
+  commercial_offer_type?: CommercialOfferType;
   gps_source?: DiscoveryLeadDensityGpsSource[];
   zone_ids?: string[];
   limit?: number;
@@ -1581,6 +1583,8 @@ export function buildDiscoveryGeoFilterQuery(params: DiscoveryLeadDensityFilters
   if (params.niche) qp.set("niche", params.niche);
   if (params.prospect_score_gte != null) qp.set("prospect_score_gte", String(params.prospect_score_gte));
   if (params.contact_tier && params.contact_tier.length > 0) qp.set("contact_tier", params.contact_tier.join(","));
+  if (params.primary_offer) qp.set("primary_offer", params.primary_offer);
+  if (params.commercial_offer_type) qp.set("commercial_offer_type", params.commercial_offer_type);
   if (params.gps_source && params.gps_source.length > 0) qp.set("gps_source", params.gps_source.join(","));
   if (params.zone_ids && params.zone_ids.length > 0) qp.set("zone_ids", params.zone_ids.join(","));
   if (params.limit) qp.set("limit", String(params.limit));

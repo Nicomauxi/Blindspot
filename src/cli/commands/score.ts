@@ -128,6 +128,7 @@ export async function scoreCommand(rawArgs: RawScoreArgs): Promise<void> {
 
   try {
     const scored: Array<{ lead: Lead; prospectScore: number }> = [];
+    const warnings: string[] = [];
     const deliverySystemCostUyu = await getAdminServicePricing("delivery_system");
     const buyerScoreOpts = deliverySystemCostUyu != null ? { deliverySystemCostUyu } : {};
 
@@ -174,9 +175,23 @@ export async function scoreCommand(rawArgs: RawScoreArgs): Promise<void> {
           ...lead,
           prospect_score: prospectScore,
         }));
-        await tagDuplicates(leadsWithScore);
-        const runtimeLists = await loadRuntimeLists();
-        await tagFranchises(leadsWithScore, runtimeLists.franchiseNames);
+
+        try {
+          await tagDuplicates(leadsWithScore);
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : String(err);
+          warnings.push(`duplicate_tagging: ${msg}`);
+          log.warn({ error: msg }, "Duplicate tagging failed after scoring; scores remain persisted");
+        }
+
+        try {
+          const runtimeLists = await loadRuntimeLists();
+          await tagFranchises(leadsWithScore, runtimeLists.franchiseNames);
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : String(err);
+          warnings.push(`franchise_tagging: ${msg}`);
+          log.warn({ error: msg }, "Franchise tagging failed after scoring; scores remain persisted");
+        }
       }
     }
 
@@ -196,6 +211,7 @@ export async function scoreCommand(rawArgs: RawScoreArgs): Promise<void> {
       duration_ms,
       top_5,
       bottom_5,
+      ...(warnings.length > 0 ? { warnings } : {}),
     };
 
     await completeScoringRun(scoringRun.id, stats);

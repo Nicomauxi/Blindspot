@@ -1,10 +1,18 @@
-# Blindspot Data Schema
+# Blindspot Data Notes
 
-## score_breakdown
+Este archivo no documenta todo el schema físico del sistema. Su alcance actual es acotado: notas de uso sobre estructuras JSONB que suelen generar drift o consultas erróneas.
 
-`leads.score_breakdown` is a JSONB object written by the scoring module.
+La fuente operativa del modelo real sigue siendo:
 
-Example:
+- migraciones en `supabase/migrations/`
+- contratos y restricciones resumidos en `context/ARCHITECTURE.md`
+- convenciones de datos relevantes en `context/FUTURE.md`
+
+## `score_breakdown`
+
+`leads.score_breakdown` es un objeto JSONB escrito por el módulo de scoring.
+
+Ejemplo:
 
 ```json
 {
@@ -36,7 +44,7 @@ Example:
 }
 ```
 
-Use `rules` arrays for match-rate queries. There is no `matched` object.
+Usar arrays `rules` para consultas de match-rate. No existe un objeto `matched`.
 
 ```sql
 SELECT
@@ -51,17 +59,17 @@ GROUP BY rule->>'name', rule->>'weight'
 ORDER BY matched DESC;
 ```
 
-## digital_footprint JSONB paths
+## `digital_footprint` JSONB paths
 
-- `digital_footprint->'contact_emails'`: JSON array of useful contact emails.
-- `digital_footprint->'social_search'`: social discovery result.
-- `digital_footprint->'social_search'->>'source'`: social search source, such as `duckduckgo`, `duckduckgo-fallback`, or `playwright`.
-- `digital_footprint->'social_search'->'facebook'`: Facebook search/extraction result.
-- `digital_footprint->'social_search'->'instagram'`: Instagram search/extraction result.
-- `digital_footprint->'heuristic_discovery'`: heuristic website/social/WhatsApp discovery result.
-- `digital_footprint->'heuristic_discovery'->'selected'->'website'->>'url'`: selected heuristic website URL.
-- `digital_footprint->'whatsapp'`: WhatsApp signals parsed from website HTML.
-- `digital_footprint->'pixels'`: Meta/GA/GTM tracking signals.
-- `digital_footprint->'stack'`: detected website platform/stack.
-- `digital_footprint->'ssl'`: HTTPS signal derived from final URL.
-- `digital_footprint->'viewport'`: responsive viewport signal.
+- `digital_footprint->'contact_emails'`: JSON array de emails útiles.
+- `digital_footprint->'social_search'`: resultado de descubrimiento social.
+- `digital_footprint->'social_search'->>'source'`: origen de social search, por ejemplo `duckduckgo`, `duckduckgo-fallback` o `playwright`.
+- `digital_footprint->'social_search'->'facebook'`: resultado de búsqueda/extracción de Facebook.
+- `digital_footprint->'social_search'->'instagram'`: resultado de búsqueda/extracción de Instagram.
+- `digital_footprint->'heuristic_discovery'`: resultado de descubrimiento heurístico de website/social/WhatsApp.
+- `digital_footprint->'heuristic_discovery'->'selected'->'website'->>'url'`: URL de website heurístico seleccionado.
+- `digital_footprint->'whatsapp'`: señales de WhatsApp parseadas desde HTML.
+- `digital_footprint->'pixels'`: señales Meta/GA/GTM.
+- `digital_footprint->'stack'`: plataforma/stack detectado.
+- `digital_footprint->'ssl'`: señal HTTPS derivada de la URL final.
+- `digital_footprint->'viewport'`: señal de viewport responsive.

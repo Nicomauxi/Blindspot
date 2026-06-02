@@ -337,6 +337,9 @@ export type LocationDensityMapBaseProps = {
   onApplySelection?: () => void;
   onCancelSelection?: () => void;
   onClearSelection?: () => void;
+  filterPanelMode?: "full" | "geo-only";
+  showSelectionActions?: boolean;
+  filterHint?: string;
 };
 
 export function LocationDensityMapBase({
@@ -368,6 +371,11 @@ export function LocationDensityMapBase({
   onApplySelection,
   onCancelSelection,
   onClearSelection,
+  filterPanelMode = "full",
+  showSelectionActions = variant === "lead-review",
+  filterHint = variant === "lead-review"
+    ? "Los cambios quedan en borrador hasta aplicar la selección."
+    : "Debounce 300ms sobre API. Los filtros se aplican antes de agregar la grilla.",
 }: LocationDensityMapBaseProps) {
   const [sort, setSort] = useState<LocationDensitySort>("density");
   const [mounted, setMounted] = useState(false);
@@ -421,7 +429,8 @@ export function LocationDensityMapBase({
   ].reduce((sum, value) => sum + value, 0);
   const nicheListId = "discovery-map-niche-suggestions";
   const hasMore = (zoneLeadsTotal ?? 0) > (zoneLeads?.length ?? 0);
-  const showLeadReviewActions = variant === "lead-review";
+  const showLeadReviewSummary = variant === "lead-review";
+  const showLeadReviewActions = showLeadReviewSummary && showSelectionActions;
   const selectedLocation = selectedLocationKey
     ? locations.find((location) => location.location_key === selectedLocationKey) ?? null
     : null;
@@ -611,8 +620,8 @@ export function LocationDensityMapBase({
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
               <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">{copy.filterTitle}</p>
-              <p className="mt-1 text-xs text-slate-500">Debounce 300ms sobre API. Los filtros se aplican antes de agregar la grilla.</p>
-              {showLeadReviewActions ? (
+              <p className="mt-1 text-xs text-slate-500">{filterHint}</p>
+              {showLeadReviewSummary ? (
                 <p className="mt-2 text-[11px] text-slate-500" data-testid="lead-review-map-selection-summary">
                   {pendingChanges
                     ? draftSelectionLabel
@@ -626,31 +635,31 @@ export function LocationDensityMapBase({
             </div>
             <div className="flex flex-wrap items-center justify-end gap-2">
               <span className="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-600">{activeFilterCount} filtros activos</span>
-              {showLeadReviewActions ? (
+              {showLeadReviewSummary ? (
                 <>
                   <span data-testid="lead-review-map-pending-state" className={cn("rounded-full px-2 py-1 text-[11px] font-semibold", pendingChanges ? "bg-amber-100 text-amber-700" : "bg-emerald-100 text-emerald-700")}>
                     {pendingChanges ? "Cambios sin aplicar" : "Listado sincronizado"}
                   </span>
-                  <button type="button" onClick={() => onApplySelection?.()} disabled={!pendingChanges} data-testid="lead-review-map-apply" className="rounded-full border border-sky-200 bg-sky-50 px-3 py-1.5 text-xs font-semibold text-sky-700 transition-colors hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-50">
-                    Aplicar al listado
-                  </button>
-                  <button type="button" onClick={() => onCancelSelection?.()} disabled={!pendingChanges} data-testid="lead-review-map-cancel" className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50">
-                    Cancelar
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (onClearSelection) {
-                        onClearSelection();
-                        return;
-                      }
-                      clearFilters();
-                    }}
-                    data-testid="lead-review-map-clear"
-                    className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 transition-colors hover:bg-slate-50"
-                  >
-                    Limpiar
-                  </button>
+                  {showLeadReviewActions ? (
+                    <>
+                      <button type="button" onClick={() => onApplySelection?.()} disabled={!pendingChanges} data-testid="lead-review-map-apply" className="rounded-full border border-sky-200 bg-sky-50 px-3 py-1.5 text-xs font-semibold text-sky-700 transition-colors hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-50">
+                        Aplicar al listado
+                      </button>
+                      <button type="button" onClick={() => onCancelSelection?.()} disabled={!pendingChanges} data-testid="lead-review-map-cancel" className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50">
+                        Cancelar
+                      </button>
+                    </>
+                  ) : null}
+                  {onClearSelection ? (
+                    <button
+                      type="button"
+                      onClick={() => onClearSelection()}
+                      data-testid="lead-review-map-clear"
+                      className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 transition-colors hover:bg-slate-50"
+                    >
+                      Limpiar selección
+                    </button>
+                  ) : null}
                 </>
               ) : (
                 <button type="button" onClick={clearFilters} className="text-xs font-medium text-sky-700 hover:underline">
@@ -661,95 +670,103 @@ export function LocationDensityMapBase({
           </div>
 
           <div className="mt-4 space-y-4">
-            <div>
-              <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Fuente</span>
-              <div className="mt-2 flex flex-wrap gap-2">
-                {MAP_SOURCE_OPTIONS.map((source) => {
-                  const active = filters.source?.includes(source) ?? false;
-                  return (
-                    <button
-                      key={source}
-                      type="button"
-                      onClick={() => patchFilters({ source: toggleValue(filters.source, source) })}
-                      className={cn(
-                        "rounded-full border px-2.5 py-1.5 text-xs font-medium transition-colors",
-                        active ? "border-sky-300 bg-sky-50 text-sky-700" : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"
-                      )}
-                    >
-                      {sourceLabel(source)}
-                    </button>
-                  );
-                })}
+            {filterPanelMode === "full" ? (
+              <>
+                <div>
+                  <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Fuente</span>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {MAP_SOURCE_OPTIONS.map((source) => {
+                      const active = filters.source?.includes(source) ?? false;
+                      return (
+                        <button
+                          key={source}
+                          type="button"
+                          onClick={() => patchFilters({ source: toggleValue(filters.source, source) })}
+                          className={cn(
+                            "rounded-full border px-2.5 py-1.5 text-xs font-medium transition-colors",
+                            active ? "border-sky-300 bg-sky-50 text-sky-700" : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"
+                          )}
+                        >
+                          {sourceLabel(source)}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <label className="space-y-1">
+                  <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Niche</span>
+                  <input
+                    value={filters.niche ?? ""}
+                    onChange={(event) => patchFilters({ niche: event.target.value || undefined })}
+                    placeholder="restaurante, clínica, hotel..."
+                    list={nicheListId}
+                    className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-sky-300 focus:bg-white"
+                  />
+                  <datalist id={nicheListId}>
+                    {nicheSuggestions.map((niche) => (
+                      <option key={niche} value={niche} />
+                    ))}
+                  </datalist>
+                </label>
+
+                <label className="space-y-2">
+                  <span className="flex items-center justify-between text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+                    <span>Prospect score mínimo</span>
+                    <span className="text-slate-700">{filters.prospect_score_gte ?? 0}</span>
+                  </span>
+                  <input type="range" min={0} max={100} step={5} value={filters.prospect_score_gte ?? 0} onChange={(event) => patchFilters({ prospect_score_gte: Number(event.target.value) || 0 })} className="w-full accent-sky-600" />
+                </label>
+
+                <div>
+                  <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Contact tier</span>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {CONTACT_TIER_OPTIONS.map((tier) => {
+                      const active = filters.contact_tier?.includes(tier) ?? false;
+                      return (
+                        <button
+                          key={tier}
+                          type="button"
+                          onClick={() => patchFilters({ contact_tier: toggleValue(filters.contact_tier, tier) })}
+                          className={cn(
+                            "rounded-full border px-2.5 py-1.5 text-xs font-medium transition-colors",
+                            active ? "border-emerald-300 bg-emerald-50 text-emerald-700" : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"
+                          )}
+                        >
+                          {tier}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div>
+                  <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Origen GPS</span>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {GPS_SOURCE_OPTIONS.map((option) => {
+                      const active = filters.gps_source?.includes(option.value) ?? false;
+                      return (
+                        <button
+                          key={option.value}
+                          type="button"
+                          onClick={() => patchFilters({ gps_source: toggleValue(filters.gps_source, option.value) as DiscoveryLeadDensityGpsSource[] | undefined })}
+                          className={cn(
+                            "rounded-full border px-2.5 py-1.5 text-xs font-medium transition-colors",
+                            active ? "border-violet-300 bg-violet-50 text-violet-700" : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"
+                          )}
+                        >
+                          {option.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div className="rounded-2xl border border-slate-100 bg-slate-50 px-3 py-3 text-xs text-slate-600">
+                El mapa ya refleja fuente, nicho, score y tier del panel principal. Acá definís solo el recorte geográfico.
               </div>
-            </div>
-
-            <label className="space-y-1">
-              <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Niche</span>
-              <input
-                value={filters.niche ?? ""}
-                onChange={(event) => patchFilters({ niche: event.target.value || undefined })}
-                placeholder="restaurante, clínica, hotel..."
-                list={nicheListId}
-                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-sky-300 focus:bg-white"
-              />
-              <datalist id={nicheListId}>
-                {nicheSuggestions.map((niche) => (
-                  <option key={niche} value={niche} />
-                ))}
-              </datalist>
-            </label>
-
-            <label className="space-y-2">
-              <span className="flex items-center justify-between text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
-                <span>Prospect score mínimo</span>
-                <span className="text-slate-700">{filters.prospect_score_gte ?? 0}</span>
-              </span>
-              <input type="range" min={0} max={100} step={5} value={filters.prospect_score_gte ?? 0} onChange={(event) => patchFilters({ prospect_score_gte: Number(event.target.value) || 0 })} className="w-full accent-sky-600" />
-            </label>
-
-            <div>
-              <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Contact tier</span>
-              <div className="mt-2 flex flex-wrap gap-2">
-                {CONTACT_TIER_OPTIONS.map((tier) => {
-                  const active = filters.contact_tier?.includes(tier) ?? false;
-                  return (
-                    <button
-                      key={tier}
-                      type="button"
-                      onClick={() => patchFilters({ contact_tier: toggleValue(filters.contact_tier, tier) })}
-                      className={cn(
-                        "rounded-full border px-2.5 py-1.5 text-xs font-medium transition-colors",
-                        active ? "border-emerald-300 bg-emerald-50 text-emerald-700" : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"
-                      )}
-                    >
-                      {tier}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            <div>
-              <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Origen GPS</span>
-              <div className="mt-2 flex flex-wrap gap-2">
-                {GPS_SOURCE_OPTIONS.map((option) => {
-                  const active = filters.gps_source?.includes(option.value) ?? false;
-                  return (
-                    <button
-                      key={option.value}
-                      type="button"
-                      onClick={() => patchFilters({ gps_source: toggleValue(filters.gps_source, option.value) as DiscoveryLeadDensityGpsSource[] | undefined })}
-                      className={cn(
-                        "rounded-full border px-2.5 py-1.5 text-xs font-medium transition-colors",
-                        active ? "border-violet-300 bg-violet-50 text-violet-700" : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"
-                      )}
-                    >
-                      {option.label}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
+            )}
           </div>
 
           {unpositionedLeadCount > 0 ? (

@@ -73,6 +73,7 @@ export interface ScoringRunStats {
   duration_ms: number;
   top_5: ProspectEntry[];
   bottom_5: ProspectEntry[];
+  warnings?: string[];
   error?: string;
 }
 

@@ -153,6 +153,8 @@ const geoFilterQueryFields = {
       (value) => !value || value.every((entry) => LEAD_DENSITY_CONTACT_TIERS.includes(entry as (typeof LEAD_DENSITY_CONTACT_TIERS)[number])),
       { message: "contact_tier must be one of A, B, C, D or X" }
     ),
+  primary_offer: z.string().trim().min(1).optional(),
+  commercial_offer_type: z.enum(["marketing", "software", "both", "unknown"]).optional(),
   gps_source: z
     .union([z.string(), z.array(z.string())])
     .optional()
@@ -319,7 +321,7 @@ async function loadLeadDensityRows(request: { log: FastifyInstance["log"] }) {
   const db = getDb();
   const baseQuery = await db
     .from("lead_dashboard")
-    .select("id, source, niche, address, prospect_score, contact_tier, corroborating_sources, created_at")
+    .select("id, source, niche, address, prospect_score, contact_tier, primary_offer, corroborating_sources, created_at")
     .order("created_at", { ascending: false })
     .limit(5000);
 
@@ -337,7 +339,7 @@ async function loadLeadDensityRows(request: { log: FastifyInstance["log"] }) {
     }
 
     return {
-      data: (legacyQuery.data ?? []).map((lead) => ({ ...(lead as Record<string, unknown>), contact_tier: null })) as unknown as LeadInsightRow[],
+      data: (legacyQuery.data ?? []).map((lead) => ({ ...(lead as Record<string, unknown>), contact_tier: null, primary_offer: null, commercial_offers_summary: null })) as unknown as LeadInsightRow[],
       schemaFallback: true,
     };
   }
@@ -350,6 +352,7 @@ async function loadLeadDensityRows(request: { log: FastifyInstance["log"] }) {
     data: (baseQuery.data ?? []).map((lead) => ({
       ...(lead as Record<string, unknown>),
       gps: gpsById.get(String((lead as Record<string, unknown>).id)) ?? null,
+      commercial_offers_summary: null,
     })) as unknown as LeadInsightRow[],
     schemaFallback: false,
   };
@@ -525,6 +528,8 @@ function buildLeadDensityFiltersFromQuery(query: GeoFilterQueryData) {
       niche: query.niche ?? null,
       prospect_score_gte: query.prospect_score_gte ?? null,
       contact_tiers: query.contact_tier,
+      primary_offer: query.primary_offer ?? null,
+      commercial_offer_type: query.commercial_offer_type ?? null,
       gps_sources: query.gps_source as Array<"real" | "inferred" | "google"> | undefined,
     },
     zoneIds: resolveZoneIds(query),

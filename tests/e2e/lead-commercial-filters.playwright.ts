@@ -7,6 +7,7 @@ const browser = await chromium.launch({ headless: true });
 const page = await browser.newPage({ viewport: { width: 1440, height: 1200 } });
 
 const requestLog: string[] = [];
+const densityRequestLog: string[] = [];
 
 const baseLeads = [
   {
@@ -145,6 +146,21 @@ await page.route("**/api/v1/alerts/unread-count**", async (route) => {
   await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ data: { count: 0 } }) });
 });
 
+await page.route("**/api/v1/admin/geo/lead-density**", async (route) => {
+  const url = new URL(route.request().url());
+  densityRequestLog.push(url.search);
+  await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ data: { locations: [], exact_points: [], geocoded_points: [], meta: { raw_gps_leads: 0, geocoded_address_leads: 0, unresolved_address_leads: 0, deferred_geocode_leads: 0, filtered_leads: 0, positioned_leads: 0, grid_cell_size_km: 2.2 } } }) });
+});
+await page.route("**/api/v1/admin/geo/zones**", async (route) => {
+  await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ data: [], total: 0 }) });
+});
+await page.route("**/api/v1/admin/geo/zone-leads**", async (route) => {
+  await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ data: [], total: 0, has_more: false }) });
+});
+await page.route("**/api/v1/admin/niche-aliases**", async (route) => {
+  await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ data: [] }) });
+});
+
 await page.route("**/api/v1/leads**", async (route) => {
   const url = new URL(route.request().url());
   requestLog.push(url.search);
@@ -172,16 +188,31 @@ await page.getByRole("link", { name: "Lead marketing" }).waitFor();
 await page.locator("span").filter({ hasText: /^Marketing \+ Software$/ }).waitFor();
 console.log("LEAD-6 Playwright: badges comerciales visibles OK");
 
-await page.locator('select').first().selectOption('marketing');
+const initialRequests = requestLog.length;
+await page.getByLabel("Tipo de oferta comercial", { exact: true }).selectOption("marketing");
+await page.getByText("Mostrando 1-3 de 3 leads").waitFor();
+assert.equal(requestLog.length, initialRequests);
+const initialDensityRequests = densityRequestLog.length;
+await page.getByRole("spinbutton").fill("80");
+await page.getByText("Mostrando 1-3 de 3 leads").waitFor();
+assert.equal(requestLog.length, initialRequests);
+assert.equal(densityRequestLog.length, initialDensityRequests);
+console.log("LEAD-6 Playwright: cambiar filtros no dispara requests de lista/mapa hasta aplicar OK");
+
+await page.getByRole("button", { name: "Filtrar" }).click();
 await page.getByRole("link", { name: "Lead marketing" }).waitFor();
 await page.getByText("Mostrando 1-1 de 1 leads").waitFor();
 assert.equal(requestLog.some((entry) => entry.includes("commercial_offer_type=marketing")), true);
-console.log("LEAD-6 Playwright: filtro comercial marketing via backend OK");
+assert.equal(densityRequestLog.some((entry) => entry.includes("prospect_score_gte=80")), true);
+assert.equal(densityRequestLog.some((entry) => entry.includes("commercial_offer_type=marketing")), true);
+console.log("LEAD-6 Playwright: filtros aplicados sincronizan lista y mapa via backend OK");
 
-await page.locator('select').first().selectOption('');
+await page.getByLabel("Tipo de oferta comercial", { exact: true }).selectOption("");
+await page.getByRole("button", { name: "Filtrar" }).click();
 await page.getByText("Mostrando 1-3 de 3 leads").waitFor();
 
-await page.locator('select').nth(1).selectOption('software_score:desc');
+await page.getByLabel("Ordenar por", { exact: true }).selectOption("software_score:desc");
+await page.getByRole("button", { name: "Filtrar" }).click();
 await page.getByRole("link", { name: "Lead software alto" }).waitFor();
 const firstLeadName = (await page.locator('a[href^="/admin/leads/"]').first().textContent())?.trim();
 assert.equal(firstLeadName, "Lead software alto");

@@ -6,6 +6,8 @@ import { enrichCommand } from "./commands/enrich.js";
 import { heuristicRefreshCommand } from "./commands/heuristic-refresh.js";
 import { scoreCommand } from "./commands/score.js";
 import { scoreEvalCommand } from "./commands/score-eval.js";
+import { scoreSimulateCommand } from "./commands/score-simulate.js";
+import { scoreRolloutV3Command } from "./commands/score-rollout-v3.js";
 import { reportCommand } from "./commands/report.js";
 import { leadsListCommand } from "./commands/leads-list.js";
 import { vocabularyCommand } from "./commands/vocabulary.js";
@@ -165,6 +167,41 @@ program
       ...(opts.outputDir ? { outputDir: opts.outputDir } : {}),
       top: opts.top,
       goldSetSize: opts.goldSetSize,
+    });
+  });
+
+
+program
+  .command("score-simulate")
+  .description("Simulate scoring calibration scenarios against the current scoring_version=2 cohort without persisting changes")
+  .option("--scenario <name>", "Only run one calibration scenario")
+  .option("--output-dir <path>", "Output directory (default: ./reports/scoring-calibration/<timestamp>/)")
+  .option("--gold-set <path>", "CSV with reviewed gold-set labels")
+  .option("--gold-set-size <number>", "Seed size for gold-set candidate export", "80")
+  .action(async (opts: { scenario?: string; outputDir?: string; goldSet?: string; goldSetSize: string }) => {
+    await scoreSimulateCommand({
+      ...(opts.scenario ? { scenario: opts.scenario } : {}),
+      ...(opts.outputDir ? { outputDir: opts.outputDir } : {}),
+      ...(opts.goldSet ? { goldSet: opts.goldSet } : {}),
+      goldSetSize: opts.goldSetSize,
+    });
+  });
+
+program
+  .command("score-rollout-v3")
+  .description("Persist a calibrated scoring v3 scenario for a selected scoring cohort")
+  .requiredOption("--scenario <name>", "Calibration scenario to persist")
+  .option("--snapshot-label <label>", "Snapshot label for rollback backup")
+  .option("--output-dir <path>", "Output directory (default: ./reports/score-rollout-v3/<snapshot>/)")
+  .option("--from-version <number>", "Only rescore leads currently on this scoring_version", "2")
+  .option("--dry-run", "Simulate the rollout without persisting DB writes", false)
+  .action(async (opts: { scenario: string; snapshotLabel?: string; outputDir?: string; fromVersion: string; dryRun?: boolean }) => {
+    await scoreRolloutV3Command({
+      scenario: opts.scenario,
+      ...(opts.snapshotLabel ? { snapshotLabel: opts.snapshotLabel } : {}),
+      ...(opts.outputDir ? { outputDir: opts.outputDir } : {}),
+      fromVersion: Number(opts.fromVersion),
+      dryRun: opts.dryRun ?? false,
     });
   });
 

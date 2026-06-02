@@ -100,6 +100,8 @@ export function scoreLeadV1(lead: Lead): ScoreResult {
       primary_offer: subScores.primary_offer,
       source_quality_bonus: 0,
       contact_tier: "X",
+      contact_score: 0,
+      contact_score_signals: [],
       pitch_hook: "",
       urgency_signal: urgencySignal,
       gap_depth: 0,

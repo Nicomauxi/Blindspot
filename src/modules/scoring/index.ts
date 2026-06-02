@@ -7,6 +7,8 @@ import { calculateSubScores } from "./sub-scores.js";
 import { scoreSystemsGap } from "./systems-gap.js";
 import type { EvaluatedRule, ScoreResult, ScoringRule } from "./types.js";
 import { computeCommercialScore } from "./v2.js";
+import { getScoringCalibrationConfig } from "./calibration-config.js";
+import { buildScoreResultV3 } from "./v3.js";
 export { scoreLeadV1 } from "./v1.js";
 
 function scaleHeuristicWeight(baseWeight: number, lead: Lead): number {
@@ -44,6 +46,15 @@ function scoreDimension(
 
 export function scoreLead(lead: Lead): ScoreResult {
   const config = getScoringConfig();
+  if (config.prospect_formula === "commercial_score_v3") {
+    const calibration = getScoringCalibrationConfig();
+    const scenario = calibration.scenarios[calibration.default_scenario];
+    if (!scenario) {
+      throw new Error(`Missing default calibration scenario: ${calibration.default_scenario}`);
+    }
+    return buildScoreResultV3(lead, scenario, scenario.preview_thresholds);
+  }
+
   const computedAt = new Date().toISOString();
 
   const bq = scoreDimension(
@@ -88,6 +99,8 @@ export function scoreLead(lead: Lead): ScoreResult {
       primary_offer: commercial.primary_offer,
       source_quality_bonus: commercial.source_quality_bonus,
       contact_tier: commercial.contact_tier,
+      contact_score: commercial.contact_score,
+      contact_score_signals: commercial.contact_score_signals,
       pitch_hook: commercial.pitch_hook,
       urgency_signal: commercial.urgency_signal,
       gap_depth: commercial.gap_depth,
