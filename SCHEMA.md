@@ -8,6 +8,20 @@ La fuente operativa del modelo real sigue siendo:
 - contratos y restricciones resumidos en `context/ARCHITECTURE.md`
 - convenciones de datos relevantes en `context/FUTURE.md`
 
+## `gps` en fuentes externas
+
+`leads.gps` (`geography(Point,4326)`) ahora se persiste también para fuentes externas
+cuando la fuente trae coordenadas (hoy: OSM). Antes solo Google escribía GPS; los externos
+quedaban en `NULL`, lo que cegaba el matching geográfico cruzado. Formato de escritura:
+`SRID=4326;POINT(lng lat)`. Para fuentes sin coordenadas (yelu, mintur, pedidosya) sigue en
+`NULL` hasta que un corroborante con GPS lo complete.
+
+## `canonical_fields` cross-source
+
+Al corroborar/reconciliar, `phone`/`website`/`email` se consolidan en `canonical_fields`
+como `{ value, confidence, sources[], conflict }`. `conflict: true` marca valores
+divergentes entre fuentes (no se pisan a ciegas; gana mayor `source_confidence`).
+
 ## `score_breakdown`
 
 `leads.score_breakdown` es un objeto JSONB escrito por el módulo de scoring.
