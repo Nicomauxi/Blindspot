@@ -180,6 +180,38 @@ describe("insertExternalLead", () => {
     await expect(insertExternalLead(candidate())).rejects.toThrow("insertExternalLead failed: db error");
   });
 
+  it("persiste gps como SRID=4326;POINT(lng lat) cuando el candidato tiene coordenadas", async () => {
+    let capturedPayload: Record<string, unknown> | null = null;
+    const singleFn = vi.fn(async () => ({ data: { id: "lead-gps" }, error: null }));
+    const upsertTable = {
+      upsert: vi.fn((payload: Record<string, unknown>) => {
+        capturedPayload = payload;
+        return { select: vi.fn(() => ({ single: singleFn })) };
+      }),
+    };
+    supabaseRef.current = { from: vi.fn(() => upsertTable) };
+
+    await insertExternalLead(candidate({ latitude: -34.9011, longitude: -56.1645 }));
+
+    expect(capturedPayload?.gps).toBe("SRID=4326;POINT(-56.1645 -34.9011)");
+  });
+
+  it("omite gps cuando el candidato no tiene coordenadas", async () => {
+    let capturedPayload: Record<string, unknown> | null = null;
+    const singleFn = vi.fn(async () => ({ data: { id: "lead-nogps" }, error: null }));
+    const upsertTable = {
+      upsert: vi.fn((payload: Record<string, unknown>) => {
+        capturedPayload = payload;
+        return { select: vi.fn(() => ({ single: singleFn })) };
+      }),
+    };
+    supabaseRef.current = { from: vi.fn(() => upsertTable) };
+
+    await insertExternalLead(candidate({ latitude: null, longitude: null }));
+
+    expect(capturedPayload).not.toHaveProperty("gps");
+  });
+
   it("pasa extraTags al upsert cuando se proporcionan", async () => {
     let capturedPayload: Record<string, unknown> | null = null;
     const singleFn = vi.fn(async () => ({ data: { id: "lead-3" }, error: null }));
@@ -312,6 +344,41 @@ describe("addCorroboratingSource", () => {
         ],
       })
     );
+  });
+
+  it("completa gps del lead primario cuando no tenía y la fuente corroborante trae coordenadas", async () => {
+    const currentLead = leadRow({ gps: null });
+    const fetchSingleFn = vi.fn(async () => ({ data: currentLead, error: null }));
+    const leadsSelectTable = {
+      select: vi.fn(() => ({ eq: vi.fn(() => ({ single: fetchSingleFn })) })),
+    };
+    const rpcSingleFn = vi.fn(async () => ({ data: leadRow({ gps: null }), error: null }));
+    const rpcFn = vi.fn(() => ({ single: rpcSingleFn }));
+
+    let gpsUpdatePayload: Record<string, unknown> | null = null;
+    const gpsUpdateEqFn = vi.fn(async () => ({ error: null }));
+    const gpsUpdateTable = {
+      update: vi.fn((payload: Record<string, unknown>) => {
+        gpsUpdatePayload = payload;
+        return { eq: gpsUpdateEqFn };
+      }),
+    };
+
+    supabaseRef.current = {
+      from: vi.fn()
+        .mockReturnValueOnce(leadsSelectTable)
+        .mockReturnValueOnce(gpsUpdateTable),
+      rpc: rpcFn,
+    };
+
+    const result = await addCorroboratingSource(
+      "lead-1",
+      candidate({ source: "osm", latitude: -34.9011, longitude: -56.1645 })
+    );
+
+    expect(gpsUpdatePayload?.gps).toBe("SRID=4326;POINT(-56.1645 -34.9011)");
+    expect(gpsUpdateEqFn).toHaveBeenCalledWith("id", "lead-1");
+    expect(result?.gps).toBe("SRID=4326;POINT(-56.1645 -34.9011)");
   });
 
   it("propagates error when lead fetch fails", async () => {

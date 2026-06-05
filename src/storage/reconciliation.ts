@@ -1,6 +1,7 @@
 import { getSupabase } from "../shared/supabase.js";
 import type { CorroboratingSource, DiscoveryCandidate, DiscoverySource, Lead } from "../shared/types.js";
 import { calculateContactReliability, calculateDataConfidence } from "../modules/scoring/confidence.js";
+import { parseLeadGps } from "../modules/discovery/geo-text.js";
 
 interface LeadSourceReferenceRow {
   lead_id: string;
@@ -180,43 +181,6 @@ function canonicalFieldValue(canonicalFields: Lead["canonical_fields"], field: "
   return null;
 }
 
-function parseLeadGps(gps: Lead["gps"]): { lat: number; lng: number } | null {
-  if (!gps) return null;
-
-  if (typeof gps === "string") {
-    const match = gps.match(/POINT\((-?\d+(?:\.\d+)?) (-?\d+(?:\.\d+)?)\)/);
-    if (match) {
-      return {
-        lng: Number(match[1]),
-        lat: Number(match[2]),
-      };
-    }
-  }
-
-  if (typeof gps === "object") {
-    const record = gps as Record<string, unknown>;
-    const coordinates = record["coordinates"];
-    if (
-      Array.isArray(coordinates) &&
-      coordinates.length >= 2 &&
-      typeof coordinates[0] === "number" &&
-      typeof coordinates[1] === "number"
-    ) {
-      return { lng: coordinates[0], lat: coordinates[1] };
-    }
-
-    if (typeof record["lat"] === "number" && typeof record["lng"] === "number") {
-      return { lat: record["lat"], lng: record["lng"] };
-    }
-
-    if (typeof record["latitude"] === "number" && typeof record["longitude"] === "number") {
-      return { lat: record["latitude"], lng: record["longitude"] };
-    }
-  }
-
-  return null;
-}
-
 function leadToCandidate(lead: Lead): DiscoveryCandidate {
   const gps = parseLeadGps(lead.gps);
   return {
@@ -304,7 +268,16 @@ function mergeFieldEvidenceRows(
     const key = `${row.field_name}::${row.value}`;
     const existing = merged.get(key);
     if (!existing) {
-      merged.set(key, { ...row, lead_id: primaryLeadId });
+      // Omitimos `id` (igual que en source refs): el upsert genera el uuid por default.
+      merged.set(key, {
+        lead_id: primaryLeadId,
+        field_name: row.field_name,
+        value: row.value,
+        sources: row.sources,
+        confidence: row.confidence,
+        first_seen: row.first_seen,
+        last_seen: row.last_seen,
+      });
       continue;
     }
 
@@ -401,13 +374,32 @@ export async function reconcileLeadIntoPrimary(
   const dataConfidenceScore = calculateDataConfidence(mergedLead);
   const contactReliabilityScore = calculateContactReliability(mergedLead);
 
-  const mergedSourceRefs = [
-    ...primaryRefs,
-    sourceReferenceFromLead(secondaryLead),
-    ...secondaryRefs,
-  ]
-    .filter((row) => row.source !== primaryLead.source)
-    .map((row) => ({ ...row, lead_id: primaryLeadId }));
+  // Se omite `id` deliberadamente: las filas sintéticas no lo tienen y, al hacer
+  // upsert, pasar `id: null` viola el NOT NULL (el default gen_random_uuid solo
+  // aplica cuando la columna se omite). El conflicto se resuelve por (lead_id, source).
+  // Dedup por source: el upsert resuelve conflictos por (lead_id, source), así que
+  // no puede recibir dos filas de la misma source en el mismo batch ("cannot affect
+  // row a second time"). Conservamos la de mayor confianza (y la más reciente).
+  const sourceRefByKey = new Map<string, LeadSourceReferenceRow>();
+  for (const row of [sourceReferenceFromLead(secondaryLead), ...secondaryRefs, ...primaryRefs]) {
+    if (row.source === primaryLead.source) continue;
+    const existing = sourceRefByKey.get(row.source);
+    if (
+      !existing ||
+      (row.source_confidence ?? 0) > (existing.source_confidence ?? 0) ||
+      ((row.source_confidence ?? 0) === (existing.source_confidence ?? 0) && row.seen_at > existing.seen_at)
+    ) {
+      sourceRefByKey.set(row.source, row);
+    }
+  }
+  const mergedSourceRefs = Array.from(sourceRefByKey.values()).map((row) => ({
+    lead_id: primaryLeadId,
+    source: row.source,
+    external_id: row.external_id,
+    source_confidence: row.source_confidence,
+    raw_data: row.raw_data,
+    seen_at: row.seen_at,
+  }));
 
   if (mergedSourceRefs.length > 0) {
     const { error } = await db
@@ -427,6 +419,16 @@ export async function reconcileLeadIntoPrimary(
     if (error) throw new Error(`lead_field_evidences upsert failed: ${error.message}`);
   }
 
+  // Transferir GPS del secundario al primario si éste no tenía coordenadas.
+  // Preserva la mejor señal de cruce cuando el primario es una fuente sin GPS
+  // (ej. mintur/yelu) que absorbe un secundario con coordenadas (ej. osm).
+  const primaryGps = parseLeadGps(primaryLead.gps);
+  const secondaryGps = parseLeadGps(secondaryLead.gps);
+  const gpsTransfer =
+    primaryGps == null && secondaryGps != null
+      ? { gps: `SRID=4326;POINT(${secondaryGps.lng} ${secondaryGps.lat})` }
+      : {};
+
   const { error: updateError } = await db
     .from("leads")
     .update({
@@ -435,6 +437,7 @@ export async function reconcileLeadIntoPrimary(
       canonical_source: canonicalSource,
       data_confidence_score: dataConfidenceScore,
       contact_reliability_score: contactReliabilityScore,
+      ...gpsTransfer,
       updated_at: new Date().toISOString(),
     })
     .eq("id", primaryLeadId);

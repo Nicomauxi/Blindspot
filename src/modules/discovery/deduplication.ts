@@ -1,4 +1,5 @@
 import type { DiscoveryCandidate, Lead } from "../../shared/types.js";
+import { extractAddressCity, haversineMeters, normalizeAddress, parseLeadGps } from "./geo-text.js";
 
 const DEFAULT_GEO_RADIUS_METERS = 500;
 
@@ -38,54 +39,6 @@ export function nameSimilarity(a: string, b: string): number {
   return 1 - dist / Math.max(normA.length, normB.length);
 }
 
-function normalizeAddress(value: string | null | undefined): string | null {
-  if (!value) return null;
-  const normalized = value
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")
-    .replace(/\b(avenida|av|calle|ruta|km|kilometro|numero|nro|esquina)\b/g, " ")
-    .replace(/[^a-z0-9,]+/g, " ")
-    .replace(/\s*,\s*/g, ", ")
-    .replace(/\s+/g, " ")
-    .trim();
-  return normalized.length > 0 ? normalized : null;
-}
-
-function extractAddressCity(value: string | null | undefined): string | null {
-  const normalized = normalizeAddress(value);
-  if (!normalized) return null;
-
-  const parts = normalized.split(",").map((part) => part.trim()).filter(Boolean);
-  if (parts.length > 1) return parts[parts.length - 1] ?? null;
-
-  const cityHints = [
-    "montevideo",
-    "maldonado",
-    "punta del este",
-    "punta del diablo",
-    "la barra",
-    "atlantida",
-    "ciudad de la costa",
-    "colonia",
-    "piriapolis",
-    "salto",
-    "rocha",
-    "canelones",
-    "paysandu",
-    "rivera",
-    "tacuarembo",
-    "minas",
-    "mercedes",
-  ];
-
-  for (const hint of cityHints) {
-    if (normalized.includes(hint)) return hint;
-  }
-
-  return null;
-}
-
 const WILDCARD_NICHE_SOURCES = new Set<Lead["source"]>(["mintur", "imm_habilitaciones"]);
 
 function nichesCompatible(
@@ -119,62 +72,6 @@ function addressesCompatible(
   }
 
   return nameSimilarity(normalizedCandidate, normalizedLead) >= 0.65;
-}
-
-function parseLeadGps(gps: Lead["gps"]): { lat: number; lng: number } | null {
-  if (!gps) return null;
-
-  if (typeof gps === "string") {
-    const match = gps.match(/POINT\((-?\d+(?:\.\d+)?) (-?\d+(?:\.\d+)?)\)/);
-    if (match) {
-      return {
-        lng: Number(match[1]),
-        lat: Number(match[2]),
-      };
-    }
-  }
-
-  if (typeof gps === "object") {
-    const record = gps as Record<string, unknown>;
-    const coordinates = record["coordinates"];
-    if (
-      Array.isArray(coordinates) &&
-      coordinates.length >= 2 &&
-      typeof coordinates[0] === "number" &&
-      typeof coordinates[1] === "number"
-    ) {
-      return { lng: coordinates[0], lat: coordinates[1] };
-    }
-
-    if (typeof record["lat"] === "number" && typeof record["lng"] === "number") {
-      return { lat: record["lat"], lng: record["lng"] };
-    }
-
-    if (typeof record["latitude"] === "number" && typeof record["longitude"] === "number") {
-      return { lat: record["latitude"], lng: record["longitude"] };
-    }
-  }
-
-  return null;
-}
-
-function haversineMeters(
-  a: { lat: number; lng: number },
-  b: { lat: number; lng: number }
-): number {
-  const earthRadiusMeters = 6371000;
-  const toRadians = (degrees: number): number => (degrees * Math.PI) / 180;
-  const dLat = toRadians(b.lat - a.lat);
-  const dLng = toRadians(b.lng - a.lng);
-  const lat1 = toRadians(a.lat);
-  const lat2 = toRadians(b.lat);
-
-  const sinLat = Math.sin(dLat / 2);
-  const sinLng = Math.sin(dLng / 2);
-  const h = sinLat * sinLat +
-    Math.cos(lat1) * Math.cos(lat2) * sinLng * sinLng;
-
-  return 2 * earthRadiusMeters * Math.asin(Math.sqrt(h));
 }
 
 function gpsCompatible(

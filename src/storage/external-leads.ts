@@ -1,6 +1,7 @@
 import { getSupabase } from "../shared/supabase.js";
 import type { CorroboratingSource, DiscoveryCandidate, Lead } from "../shared/types.js";
 import { calculateContactReliability, calculateDataConfidence } from "../modules/scoring/confidence.js";
+import { isValidCoord } from "../modules/discovery/geo-text.js";
 
 interface InsertExternalLeadOpts {
   dryRun?: boolean;
@@ -41,6 +42,11 @@ export async function insertExternalLead(
         passed_filter: true,
         rejection_reasons: [],
         tags: opts.extraTags ?? [],
+        ...(candidate.latitude != null &&
+        candidate.longitude != null &&
+        isValidCoord(candidate.latitude, candidate.longitude)
+          ? { gps: `SRID=4326;POINT(${candidate.longitude} ${candidate.latitude})` }
+          : {}),
       },
       { onConflict: "place_id", ignoreDuplicates: false }
     )
@@ -52,10 +58,13 @@ export async function insertExternalLead(
 
   if (candidate.email) {
     const existing = (lead.canonical_fields ?? {}) as Record<string, unknown>;
-    await db
+    const { error: emailError } = await db
       .from("leads")
       .update({ canonical_fields: { ...existing, email: candidate.email } })
       .eq("id", lead.id);
+    if (emailError) {
+      throw new Error(`insertExternalLead email persist failed: ${emailError.message}`);
+    }
   }
 
   return lead;
@@ -259,5 +268,23 @@ export async function addCorroboratingSource(
     .single();
 
   if (updateError) throw new Error(`addCorroboratingSource update failed: ${updateError.message}`);
-  return data as Lead;
+
+  // GPS backfill: si el lead primario no tenía coordenadas y la fuente corroborante
+  // sí las trae, completamos el gps (la mejor señal para futuros cruces).
+  // Se chequea contra el lead ya leído (primaryLead), no contra la respuesta del RPC,
+  // para no pisar un gps existente si el RPC no devuelve la columna.
+  const mergedResult = data as Lead;
+  if (
+    lead.gps == null &&
+    candidate.latitude != null &&
+    candidate.longitude != null &&
+    isValidCoord(candidate.latitude, candidate.longitude)
+  ) {
+    const gps = `SRID=4326;POINT(${candidate.longitude} ${candidate.latitude})`;
+    const { error: gpsError } = await db.from("leads").update({ gps }).eq("id", leadId);
+    if (gpsError) throw new Error(`addCorroboratingSource gps backfill failed: ${gpsError.message}`);
+    return { ...mergedResult, gps };
+  }
+
+  return mergedResult;
 }
