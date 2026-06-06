@@ -2,6 +2,7 @@ import { getSupabase } from "../shared/supabase.js";
 import type { CorroboratingSource, DiscoveryCandidate, Lead } from "../shared/types.js";
 import { calculateContactReliability, calculateDataConfidence } from "../modules/scoring/confidence.js";
 import { isValidCoord } from "../modules/discovery/geo-text.js";
+import { candidateHasContact, qualifyExternalLead } from "../modules/discovery/qualification.js";
 
 interface InsertExternalLeadOpts {
   dryRun?: boolean;
@@ -24,6 +25,14 @@ export async function insertExternalLead(
   const db = getSupabase();
   const placeId = `${candidate.source}:${candidate.external_id}`;
 
+  // Gate de calidad: un lead externo nuevo (aún sin corroborar) solo es "visible" si
+  // tiene contacto accionable y no es una fuente-señal standalone.
+  const qualification = qualifyExternalLead({
+    source: candidate.source,
+    hasContact: candidateHasContact(candidate),
+    corroborated: false,
+  });
+
   const { data, error } = await db
     .from("leads")
     .upsert(
@@ -39,8 +48,8 @@ export async function insertExternalLead(
         website: candidate.website,
         niche: candidate.niche ?? "other",
         state: "discovered",
-        passed_filter: true,
-        rejection_reasons: [],
+        passed_filter: qualification.passed_filter,
+        rejection_reasons: qualification.rejection_reasons,
         tags: opts.extraTags ?? [],
         ...(candidate.latitude != null &&
         candidate.longitude != null &&
