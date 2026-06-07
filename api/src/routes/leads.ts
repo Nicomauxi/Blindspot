@@ -54,11 +54,21 @@ const enrichCollectionSchema = z.object({
   concurrency: z.number().int().min(1).max(8).default(4),
 });
 
+const REJECTION_REASONS = ["no_pertenece_al_lead", "dato_desactualizado", "fuera_de_servicio", "otro"] as const;
+
 const leadFeedbackCreateSchema = z.object({
   field_key: z.string().trim().min(1).max(80),
   field_value: z.unknown().optional(),
   verdict: z.enum(["good", "bad"]),
   comment: z.string().trim().min(1).max(1000).optional(),
+  rejection_reason: z.enum(REJECTION_REASONS).optional(),
+  reassign_to_lead_id: z.string().uuid().optional(),
+});
+
+const favoriteContactsSchema = z.object({
+  favorite_contacts: z
+    .array(z.object({ kind: z.string().trim().min(1).max(40), value: z.string().trim().min(1).max(400) }))
+    .max(50),
 });
 
 const leadFeedbackListQuerySchema = z.object({
@@ -1713,12 +1723,29 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
         return reply.status(404).send({ error: "Lead not found", error_code: "not_found" });
       }
 
+      // Reasignación: solo válida marcando "bad" + "no pertenece al lead", a un lead distinto que exista.
+      const reassignTo = parseResult.data.reassign_to_lead_id;
+      if (reassignTo) {
+        if (parseResult.data.verdict !== "bad" || parseResult.data.rejection_reason !== "no_pertenece_al_lead") {
+          return reply.status(400).send({ error: "Reassign requires verdict=bad and reason=no_pertenece_al_lead", error_code: "invalid_reassign" });
+        }
+        if (reassignTo === id) {
+          return reply.status(400).send({ error: "Cannot reassign to the same lead", error_code: "invalid_reassign_target" });
+        }
+        const { data: target } = await getDb().from("leads").select("id").eq("id", reassignTo).maybeSingle();
+        if (!target) {
+          return reply.status(400).send({ error: "Reassign target lead not found", error_code: "reassign_target_not_found" });
+        }
+      }
+
       const payload = {
         lead_id: id,
         field_key: parseResult.data.field_key,
         field_value: parseResult.data.field_value ?? null,
         verdict: parseResult.data.verdict,
         comment: parseResult.data.comment ?? null,
+        rejection_reason: parseResult.data.rejection_reason ?? null,
+        reassign_to_lead_id: reassignTo ?? null,
         actor_user_id: authUser.id,
         actor_role: authUser.role,
       };
@@ -1737,6 +1764,40 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
       });
 
       return reply.status(201).send({ data, lead_id: lead["id"] });
+    }
+  );
+
+  // Reemplazo total del array de contactos favoritos (idempotente por naturaleza).
+  app.patch(
+    "/leads/:id/favorite-contacts",
+    { preHandler: requireAuth },
+    async (request, reply) => {
+      const authUser = getAuthUser(request);
+      const { id } = request.params as { id: string };
+      if (!permissiveUuid.safeParse(id).success) {
+        return reply.status(404).send({ error: "Lead not found", error_code: "not_found" });
+      }
+      const parsed = favoriteContactsSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.status(400).send({ error: "Validation error", error_code: "validation_error", details: parsed.error.flatten().fieldErrors });
+      }
+      const lead = await loadAccessibleLeadForFeedback(authUser, id, false);
+      if (!lead) {
+        return reply.status(404).send({ error: "Lead not found", error_code: "not_found" });
+      }
+      const markedAt = new Date().toISOString();
+      const favorites = parsed.data.favorite_contacts.map((c) => ({
+        kind: c.kind,
+        value: c.value,
+        marked_by: authUser.email ?? authUser.id,
+        marked_at: markedAt,
+      }));
+      const { error } = await getDb().from("leads").update({ favorite_contacts: favorites }).eq("id", id);
+      if (error) {
+        request.log.error({ error, leadId: id }, "favorite-contacts update error");
+        return reply.status(500).send({ error: "Database error", error_code: "db_error" });
+      }
+      return reply.status(200).send({ data: { lead_id: id, favorite_contacts: favorites } });
     }
   );
 
@@ -1787,6 +1848,12 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
       }
 
       const normalizedLead = normalizeLeadRow(lead as JsonRecord);
+
+      // favorite_contacts vive en la tabla leads (no en la vista lead_dashboard): se adjunta aparte.
+      if (normalizedLead["favorite_contacts"] === undefined) {
+        const { data: favRow } = await db.from("leads").select("favorite_contacts").eq("id", id).maybeSingle();
+        normalizedLead["favorite_contacts"] = (favRow as { favorite_contacts?: unknown } | null)?.favorite_contacts ?? [];
+      }
 
       // CM filter check — 404 (not 403) to not reveal existence
       if (authUser.role === "cm") {

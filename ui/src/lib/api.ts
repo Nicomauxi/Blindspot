@@ -2366,6 +2366,8 @@ export type SocialHistoryPlatform = {
   posts_per_month: number | null;
   churn_risk: boolean;
   engagement_trend: number | null;
+  recency_days: number | null;
+  engagement_ratio: number | null;
   series: Array<{ captured_at: string; followers: number | null }>;
   point_count: number;
 };

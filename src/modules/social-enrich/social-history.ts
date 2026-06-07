@@ -16,6 +16,10 @@ export interface SocialDerivedMetrics {
   posts_per_month: number | null;
   churn_risk: boolean;
   engagement_trend: number | null;
+  // Días desde la última captura (recencia del dato). null si no hay capturas.
+  recency_days: number | null;
+  // Engagement aproximado FB (talking_about / likes) de la última captura. null si no aplica.
+  engagement_ratio: number | null;
   series: Array<{ captured_at: string; followers: number | null }>;
   point_count: number;
 }
@@ -104,11 +108,33 @@ export function deriveSocialMetrics(
     engagement_trend = (b.talking_about as number) - (a.talking_about as number);
   }
 
+  // recency_days: días desde la última captura.
+  let recency_days: number | null = null;
+  if (sorted.length > 0) {
+    const last = sorted[sorted.length - 1]!;
+    const nowMs = ts(opts.nowIso);
+    if (Number.isFinite(nowMs)) {
+      recency_days = Math.max(0, Math.round((nowMs - ts(last.captured_at)) / DAY_MS));
+    }
+  }
+
+  // engagement_ratio (FB): talking_about / likes de la última captura con ambos datos.
+  let engagement_ratio: number | null = null;
+  for (let i = sorted.length - 1; i >= 0; i--) {
+    const s = sorted[i]!;
+    if (s.likes != null && s.likes > 0 && s.talking_about != null) {
+      engagement_ratio = Number((s.talking_about / s.likes).toFixed(4));
+      break;
+    }
+  }
+
   return {
     followers_growth_30d,
     posts_per_month,
     churn_risk,
     engagement_trend,
+    recency_days,
+    engagement_ratio,
     series,
     point_count: sorted.length,
   };

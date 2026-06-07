@@ -234,6 +234,7 @@ vi.mock("../../api/src/db/client.js", () => ({
                 val === mockRejectedLeadRow.id
                   ? { data: mockRejectedLeadRow, error: null }
                   : { data: null, error: { code: "PGRST116" } },
+              maybeSingle: async () => ({ data: { favorite_contacts: [] }, error: null }),
             }),
             in: (_col: string, values: string[]) => Promise.resolve({
               data: _mockLeadQueryRows
