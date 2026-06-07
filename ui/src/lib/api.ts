@@ -2359,3 +2359,21 @@ export async function rejectMergeCandidate(token: string, id: string) {
     token
   );
 }
+
+// Histórico social (crecimiento, posts/mes, churn) por plataforma
+export type SocialHistoryPlatform = {
+  followers_growth_30d: { abs: number; pct: number | null } | null;
+  posts_per_month: number | null;
+  churn_risk: boolean;
+  engagement_trend: number | null;
+  series: Array<{ captured_at: string; followers: number | null }>;
+  point_count: number;
+};
+
+export async function getSocialHistory(token: string, leadId: string) {
+  return request<{ data: { lead_id: string; platforms: Record<string, SocialHistoryPlatform> }; meta: { platform_count: number } }>(
+    `/api/v1/leads/${leadId}/social-history`,
+    {},
+    token
+  );
+}

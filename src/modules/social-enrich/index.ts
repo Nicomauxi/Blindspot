@@ -26,6 +26,7 @@ import {
   instagramProfile,
   type SocialActivityProfile,
 } from "./social-activity.js";
+import { recordSocialSnapshots } from "../../storage/social-snapshots.js";
 
 export interface SocialEnrichOptions {
   run?: string;
@@ -146,6 +147,11 @@ async function processLead(
         : undefined;
 
     await updateLeadSocialSearch(lead.id, socialSearch, derived.tags, derived.whatsapp, socialActivity);
+
+    // Histórico append-only (best-effort): solo inserta si cambió el estado/audiencia/conteos.
+    if (activityProfiles.length > 0) {
+      await recordSocialSnapshots(lead.id, activityProfiles, ranAt).catch(() => undefined);
+    }
     await updateLeadSocialEnrichStatus(lead.id, "ok");
     return { processed: true, error: false, blocked: false };
   } catch (err: unknown) {

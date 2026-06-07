@@ -532,7 +532,9 @@ describe("GET /api/v1/leads", () => {
     });
 
     expect(res.statusCode).toBe(200);
-    expect(res.json().data.map((lead: { name: string }) => lead.name)).toEqual(["Lead marketing"]);
+    // Filtro inclusivo: "marketing" incluye al lead de doble oferta (Lead mixto, primary=software
+    // pero con marketing_score > 0). "Lead software" (marketing 0) queda fuera.
+    expect(res.json().data.map((lead: { name: string }) => lead.name)).toEqual(["Lead marketing", "Lead mixto"]);
     await app.close();
   });
 

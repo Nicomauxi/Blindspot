@@ -11,8 +11,10 @@ import {
   generateOffer,
   getLead,
   getOwnerGroup,
+  getSocialHistory,
   listOutreach,
   type LeadAssistantBrief,
+  type SocialHistoryPlatform,
   type LeadDetail,
   type LeadFieldSource,
   type OfferPackage,
@@ -88,6 +90,172 @@ const SOCIAL_STATUS_LABELS: Record<string, string> = {
   abandoned: "Abandonada",
   unknown: "Sin confirmar",
 };
+
+const SOCIAL_TIER_LABELS: Record<string, string> = {
+  high: "Audiencia alta",
+  medium: "Audiencia media",
+  low: "Audiencia baja",
+};
+
+const SOCIAL_STATUS_ACCENT: Record<string, string> = {
+  active: "text-emerald-700 bg-emerald-50 border-emerald-200",
+  abandoned: "text-amber-700 bg-amber-50 border-amber-200",
+  unknown: "text-slate-600 bg-slate-50 border-slate-200",
+};
+
+function Sparkline({ values }: { values: number[] }) {
+  if (values.length < 2) return null;
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const range = max - min || 1;
+  const w = 160;
+  const h = 36;
+  const step = w / (values.length - 1);
+  const points = values
+    .map((v, i) => `${(i * step).toFixed(1)},${(h - ((v - min) / range) * h).toFixed(1)}`)
+    .join(" ");
+  return (
+    <svg width={w} height={h} className="overflow-visible">
+      <polyline points={points} fill="none" stroke="#0ea5e9" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function SocialGrowthChart({ leadId }: { leadId: string }) {
+  const token = useAuthStore((s) => s.token);
+  const [platforms, setPlatforms] = useState<Record<string, SocialHistoryPlatform> | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!token) return;
+    let active = true;
+    getSocialHistory(token, leadId)
+      .then((res) => {
+        if (active) setPlatforms(res.data.platforms);
+      })
+      .catch(() => {
+        if (active) setPlatforms({});
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [token, leadId]);
+
+  if (loading) return null;
+  const entries = Object.entries(platforms ?? {});
+  const withSeries = entries.filter(([, p]) => p.point_count > 0);
+
+  if (withSeries.length === 0) {
+    return (
+      <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500">
+        📈 Crecimiento de seguidores: empezamos a medir. La gráfica aparece tras la próxima medición.
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-2">
+      <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Crecimiento de seguidores</div>
+      {withSeries.map(([platform, p]) => {
+        const followers = p.series.map((s) => s.followers).filter((v): v is number => v != null);
+        const growth = p.followers_growth_30d;
+        return (
+          <div key={platform} className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2">
+            <div className="flex flex-col">
+              <span className="text-xs font-medium capitalize text-slate-700">{platform}</span>
+              {growth ? (
+                <span className={cn("text-xs font-semibold", growth.abs >= 0 ? "text-emerald-600" : "text-rose-600")}>
+                  {growth.abs >= 0 ? "+" : ""}{growth.abs.toLocaleString("es-UY")}
+                  {growth.pct != null ? ` (${growth.pct >= 0 ? "+" : ""}${growth.pct}%)` : ""} en ~30d
+                </span>
+              ) : p.point_count < 2 ? (
+                <span className="text-xs text-slate-400">1 medición — sin tendencia aún</span>
+              ) : (
+                <span className="text-xs text-slate-400">sin datos de ventana</span>
+              )}
+              {p.posts_per_month != null ? (
+                <span className="text-[11px] text-slate-500">{p.posts_per_month} posts/mes</span>
+              ) : null}
+              {p.churn_risk ? <span className="text-[11px] font-semibold text-amber-600">⚠ Riesgo de abandono</span> : null}
+            </div>
+            <Sparkline values={followers} />
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function SocialActivityBlock({ activity, leadId }: { activity: SocialActivityView | null; leadId: string }) {
+  // Estados derivables de campos ya persistidos (sin backend nuevo):
+  // pendiente (no analizado) / sin presencia / con datos.
+  if (!activity || !activity.ran_at) {
+    return (
+      <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-center text-sm text-slate-500">
+        Actividad social no analizada todavía. Se completa al correr el análisis de redes.
+      </div>
+    );
+  }
+  if (!activity.summary?.has_social_presence) {
+    return (
+      <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-center text-sm text-slate-500">
+        Sin presencia social detectada. <span className="text-slate-400">(Señal comercial: negocio mayormente offline.)</span>
+      </div>
+    );
+  }
+
+  const profiles = Object.values(activity.profiles ?? {});
+  const best = activity.summary.best_platform ? activity.profiles?.[activity.summary.best_platform] : null;
+  const verdictParts = [
+    activity.summary.audience_tier ? SOCIAL_TIER_LABELS[activity.summary.audience_tier] : null,
+    best ? SOCIAL_STATUS_LABELS[best.activity_status] ?? best.activity_status : null,
+  ].filter(Boolean);
+  const accent = SOCIAL_STATUS_ACCENT[best?.activity_status ?? "unknown"] ?? SOCIAL_STATUS_ACCENT.unknown;
+
+  return (
+    <div className="space-y-3">
+      {verdictParts.length > 0 ? (
+        <div className={cn("inline-flex items-center gap-2 rounded-lg border px-3 py-1.5 text-sm font-semibold", accent)}>
+          {verdictParts.join(" · ")}
+        </div>
+      ) : null}
+
+      <div className="flex flex-wrap gap-2">
+        {(activity.summary.commercial_signals ?? []).map((signal) => (
+          <span key={signal} className="rounded-full bg-sky-100 px-2.5 py-1 text-xs font-semibold text-sky-700">
+            {SOCIAL_SIGNAL_LABELS[signal] ?? signal}
+          </span>
+        ))}
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-2">
+        {profiles.map((profile) => (
+          <div key={profile.platform} className="rounded-xl border border-slate-200 bg-white p-3">
+            <div className="flex items-center justify-between">
+              <span className="text-sm font-semibold capitalize text-slate-900">{profile.platform}</span>
+              <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600">
+                {SOCIAL_STATUS_LABELS[profile.activity_status] ?? profile.activity_status}
+              </span>
+            </div>
+            <div className="mt-1 flex flex-wrap gap-3 text-xs text-slate-500">
+              {profile.followers != null ? <span>{profile.followers.toLocaleString("es-UY")} seguidores</span> : null}
+              {profile.likes != null ? <span>{profile.likes.toLocaleString("es-UY")} likes</span> : null}
+              {profile.posts != null ? <span>{profile.posts.toLocaleString("es-UY")} posts (total)</span> : null}
+            </div>
+            <a href={profile.url} target="_blank" rel="noreferrer" className="mt-1 block truncate text-xs text-sky-600 hover:underline">
+              {profile.url}
+            </a>
+          </div>
+        ))}
+      </div>
+
+      <SocialGrowthChart leadId={leadId} />
+    </div>
+  );
+}
 
 function formatSectionError(error: unknown, fallbackMessage: string) {
   if (error instanceof ApiError) {
@@ -439,42 +607,9 @@ export default function LeadDetailPage() {
         </div>
       </SectionCard>
 
-      {socialActivity?.summary?.has_social_presence ? (
-        <SectionCard title="Actividad social" description="Presencia y audiencia detectadas en redes (datos públicos).">
-          <div className="mb-3 flex flex-wrap gap-2">
-            {(socialActivity.summary.commercial_signals ?? []).map((signal) => (
-              <span key={signal} className="rounded-full bg-sky-100 px-2.5 py-1 text-xs font-semibold text-sky-700">
-                {SOCIAL_SIGNAL_LABELS[signal] ?? signal}
-              </span>
-            ))}
-            {socialActivity.summary.audience_tier ? (
-              <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600">
-                Audiencia: {socialActivity.summary.audience_tier}
-              </span>
-            ) : null}
-          </div>
-          <div className="grid gap-3 sm:grid-cols-2">
-            {Object.values(socialActivity.profiles ?? {}).map((profile) => (
-              <div key={profile.platform} className="rounded-xl border border-slate-200 bg-white p-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm font-semibold capitalize text-slate-900">{profile.platform}</span>
-                  <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600">
-                    {SOCIAL_STATUS_LABELS[profile.activity_status] ?? profile.activity_status}
-                  </span>
-                </div>
-                <div className="mt-1 flex flex-wrap gap-3 text-xs text-slate-500">
-                  {profile.followers != null ? <span>{profile.followers.toLocaleString("es-UY")} seguidores</span> : null}
-                  {profile.likes != null ? <span>{profile.likes.toLocaleString("es-UY")} likes</span> : null}
-                  {profile.posts != null ? <span>{profile.posts.toLocaleString("es-UY")} posts</span> : null}
-                </div>
-                <a href={profile.url} target="_blank" rel="noreferrer" className="mt-1 block truncate text-xs text-sky-600 hover:underline">
-                  {profile.url}
-                </a>
-              </div>
-            ))}
-          </div>
-        </SectionCard>
-      ) : null}
+      <SectionCard title="Actividad social" description="Presencia y audiencia detectadas en redes (datos públicos, sin login).">
+        <SocialActivityBlock activity={socialActivity} leadId={lead.id} />
+      </SectionCard>
 
       {/* 4. Historial de seguimiento (si existe) */}
       {outreach.length > 0 ? (

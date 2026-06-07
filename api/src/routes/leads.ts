@@ -8,6 +8,8 @@ import { expandNiche } from "../../../src/storage/niches.js";
 import { startFilterEnrichmentJob } from "../../../src/cli/commands/enrich.js";
 import { startReDiscoveryJob } from "../../../src/cli/commands/re-discover.js";
 import { summarizeFeedbackRows, computeFeedbackAdjustedConfidence } from "../../../src/modules/feedback/summary.js";
+import { loadSocialSnapshots } from "../../../src/storage/social-snapshots.js";
+import { deriveSocialMetrics } from "../../../src/modules/social-enrich/social-history.js";
 import {
   buildCommercialOfferings,
   buildCommercialOfferingsSummary,
@@ -1565,6 +1567,37 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
       }
 
       return reply.status(200).send({ data: data ?? [], total: count ?? 0, lead_id: lead["id"] });
+    }
+  );
+
+  // Histórico social: serie de seguidores + métricas derivadas (crecimiento, posts/mes, churn)
+  // por plataforma. Devuelve serie vacía si todavía no hay capturas acumuladas.
+  app.get(
+    "/leads/:id/social-history",
+    { preHandler: requireAuth },
+    async (request, reply) => {
+      const authUser = getAuthUser(request);
+      const { id } = request.params as { id: string };
+      if (!permissiveUuid.safeParse(id).success) {
+        return reply.status(404).send({ error: "Lead not found", error_code: "not_found" });
+      }
+      const lead = await loadAccessibleLeadForFeedback(authUser, id, false);
+      if (!lead) {
+        return reply.status(404).send({ error: "Lead not found", error_code: "not_found" });
+      }
+
+      try {
+        const byPlatform = await loadSocialSnapshots(id);
+        const nowIso = new Date().toISOString();
+        const platforms: Record<string, unknown> = {};
+        for (const [platform, snapshots] of Object.entries(byPlatform)) {
+          platforms[platform] = deriveSocialMetrics(snapshots, { nowIso });
+        }
+        return reply.status(200).send({ data: { lead_id: id, platforms }, meta: { platform_count: Object.keys(platforms).length } });
+      } catch (err) {
+        request.log.error({ err, leadId: id }, "social-history query error");
+        return reply.status(500).send({ error: "Database error", error_code: "db_error" });
+      }
     }
   );
 
