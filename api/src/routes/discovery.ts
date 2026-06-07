@@ -134,6 +134,7 @@ const recommendationsQuerySchema = z.object({
 
 const LEAD_DENSITY_CONTACT_TIERS = ["A", "B", "C", "D", "X"] as const;
 const LEAD_DENSITY_GPS_SOURCES = ["real", "inferred", "google"] as const;
+const LEAD_DENSITY_HEAT_METRICS = ["mixed", "marketing", "software", "combined"] as const;
 const GEO_ZONE_KIND_OPTIONS = ["departamento", "ciudad", "barrio", "zona_turistica", "polo_industrial", "avenida"] as const;
 
 const geoFilterQueryFields = {
@@ -177,6 +178,19 @@ const geoFilterQueryFields = {
     .optional()
     .transform((value) => parseMultiValue(value)),
   zone: z.string().trim().min(1).max(120).optional(),
+  zoom: z
+    .string()
+    .optional()
+    .transform((value) => {
+      if (value == null || value.trim() === "") return undefined;
+      return Number(value);
+    })
+    .pipe(z.number().min(0).max(22).optional()),
+  south: z.string().optional().transform((value) => value == null || value.trim() === "" ? undefined : Number(value)).pipe(z.number().min(-90).max(90).optional()),
+  west: z.string().optional().transform((value) => value == null || value.trim() === "" ? undefined : Number(value)).pipe(z.number().min(-180).max(180).optional()),
+  north: z.string().optional().transform((value) => value == null || value.trim() === "" ? undefined : Number(value)).pipe(z.number().min(-90).max(90).optional()),
+  east: z.string().optional().transform((value) => value == null || value.trim() === "" ? undefined : Number(value)).pipe(z.number().min(-180).max(180).optional()),
+  heat_metric: z.enum(LEAD_DENSITY_HEAT_METRICS).optional(),
 } satisfies z.ZodRawShape;
 
 const leadDensityQuerySchema = recommendationsQuerySchema.extend(geoFilterQueryFields);
@@ -254,6 +268,15 @@ function buildLocationKey(input: string): string {
     .replace(/^-+|-+$/g, "");
 }
 
+function asNullableNumber(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim() !== "") {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
 function asNumber(value: unknown): number {
   if (typeof value === "number" && Number.isFinite(value)) return value;
   if (typeof value === "string" && value.trim() !== "") {
@@ -261,6 +284,28 @@ function asNumber(value: unknown): number {
     return Number.isFinite(parsed) ? parsed : 0;
   }
   return 0;
+}
+
+function isValidMapPoint(point: { lat: number; lng: number } | null | undefined): point is { lat: number; lng: number } {
+  return Boolean(
+    point &&
+    Number.isFinite(point.lat) &&
+    Number.isFinite(point.lng) &&
+    point.lat >= -90 &&
+    point.lat <= 90 &&
+    point.lng >= -180 &&
+    point.lng <= 180 &&
+    point.lat !== 0 &&
+    point.lng !== 0
+  );
+}
+
+function gridCellForRequestedKey(point: { lat: number; lng: number }, gridLocationKey: string) {
+  const aggregationLevel = gridLocationKey.split(":", 1)[0];
+  if (aggregationLevel === "country") return buildGridCell(point, 0.45, "country");
+  if (aggregationLevel === "regional") return buildGridCell(point, 0.12, "regional");
+  if (aggregationLevel === "local") return buildGridCell(point, 0.04, "local");
+  return buildGridCell(point);
 }
 
 async function resolveZoneLocationMatch(
@@ -272,14 +317,20 @@ async function resolveZoneLocationMatch(
   if (parentLocationKey !== requestedParentLocationKey) return null;
 
   const rawCoordinate = getPrimaryCoordinate(lead);
-  const geocodedCoordinate = !rawCoordinate && typeof lead.address === "string" && lead.address.trim() !== ""
-    ? await leadGeocodingService.geocodeAddress(lead.address)
-    : null;
+  let geocodedCoordinate: { lat: number; lng: number } | null = null;
+  if (!rawCoordinate && typeof lead.address === "string" && lead.address.trim() !== "") {
+    try {
+      const point = await leadGeocodingService.geocodeAddress(lead.address);
+      geocodedCoordinate = isValidMapPoint(point) ? point : null;
+    } catch {
+      geocodedCoordinate = null;
+    }
+  }
   const coordinate = rawCoordinate ?? (geocodedCoordinate ? { ...geocodedCoordinate, source: "geocoded" as const } : null);
   if (!coordinate) return null;
   if (!requestedGridLocationKey) return { lat: coordinate.lat, lng: coordinate.lng };
 
-  return buildGridCell(coordinate).gridKey === requestedGridLocationKey ? { lat: coordinate.lat, lng: coordinate.lng } : null;
+  return gridCellForRequestedKey(coordinate, requestedGridLocationKey).gridKey === requestedGridLocationKey ? { lat: coordinate.lat, lng: coordinate.lng } : null;
 }
 function isDiscoveryBatchSchemaMissing(error: { code?: string; message?: string; details?: string; hint?: string } | null | undefined): boolean {
   if (!error) return false;
@@ -388,7 +439,7 @@ async function loadZoneLeadRows(request: { log: FastifyInstance["log"] }) {
   const db = getDb();
   const baseQuery = await db
     .from("lead_dashboard")
-    .select("id, name, niche, contact_tier, prospect_score, address, source, corroborating_sources, created_at, website, phone, whatsapp, rating, review_count, primary_offer, pitch_hook, contact_ready, tags")
+    .select("id, name, niche, contact_tier, prospect_score, address, source, corroborating_sources, created_at, website, phone, whatsapp, rating, review_count, primary_offer, pitch_hook, contact_ready, tags, score_breakdown, digital_footprint")
     .order("created_at", { ascending: false })
     .limit(5000);
 
@@ -396,7 +447,7 @@ async function loadZoneLeadRows(request: { log: FastifyInstance["log"] }) {
     request.log.warn({ error: baseQuery.error }, "zone-leads fallback to legacy leads table");
     const legacyQuery = await db
       .from("leads")
-      .select("id, name, niche, address, gps, source, corroborating_sources, created_at")
+      .select("id, name, niche, address, gps, source, corroborating_sources, created_at, website, phone, whatsapp, rating, review_count, tags, score_breakdown, digital_footprint")
       .order("created_at", { ascending: false })
       .limit(5000);
 
@@ -522,6 +573,7 @@ function resolveZoneIds(query: Pick<GeoFilterQueryData, "zone_id" | "zone_ids" |
 }
 
 function buildLeadDensityFiltersFromQuery(query: GeoFilterQueryData) {
+  const hasBounds = [query.south, query.west, query.north, query.east].every((value) => typeof value === "number" && Number.isFinite(value));
   return {
     filters: {
       sources: query.source,
@@ -531,6 +583,9 @@ function buildLeadDensityFiltersFromQuery(query: GeoFilterQueryData) {
       primary_offer: query.primary_offer ?? null,
       commercial_offer_type: query.commercial_offer_type ?? null,
       gps_sources: query.gps_source as Array<"real" | "inferred" | "google"> | undefined,
+      ...(hasBounds ? { bbox: { south: query.south!, west: query.west!, north: query.north!, east: query.east! } } : {}),
+      ...(typeof query.zoom === "number" ? { zoom: query.zoom } : {}),
+      ...(query.heat_metric ? { heat_metric: query.heat_metric } : {}),
     },
     zoneIds: resolveZoneIds(query),
   };
@@ -1208,9 +1263,9 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
       });
     }
 
-    let leads: LeadInsightRow[];
+    let leads: GeoZoneLeadRow[];
     try {
-      ({ data: leads } = await loadLeadDensityRows(request));
+      leads = await loadZoneLeadRows(request) as GeoZoneLeadRow[];
     } catch {
       return reply.status(500).send({ error: "Database error", error_code: "db_error" });
     }
@@ -1224,7 +1279,9 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
           locationFilter: parsedQuery.data.location ?? null,
           filters: densityFilters,
           geocodeAddress: leadGeocodingService.geocodeAddress,
-          maxGeocodes: Math.min(160, Math.max(parsedQuery.data.limit * 8, 40)),
+          maxGeocodes: typeof parsedQuery.data.zoom === "number" && parsedQuery.data.zoom >= 14
+            ? Math.min(240, Math.max(parsedQuery.data.limit * 10, 80))
+            : Math.min(160, Math.max(parsedQuery.data.limit * 8, 40)),
         }
       );
     } catch (err) {
@@ -1384,7 +1441,13 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
       if (!matchesLeadDensityFilters(lead, densityFilters, rawCoordinate)) continue;
       const mapPoint = await resolveZoneLocationMatch(lead, requestedParentLocationKey, requestedGridLocationKey);
       if (mapPoint) {
-        matching.push({ ...lead, map_point: mapPoint });
+        matching.push({
+          ...lead,
+          prospect_score: asNullableNumber(lead.prospect_score),
+          rating: asNullableNumber(lead.rating),
+          review_count: asNullableNumber(lead.review_count),
+          map_point: mapPoint,
+        });
       }
     }
 

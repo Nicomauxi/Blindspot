@@ -802,6 +802,52 @@ describe("Discovery routes", () => {
     await app.close();
   });
 
+  it("GET /admin/geo/lead-density does not 500 when geocoding one lead fails", async () => {
+    geocodeAddress.mockImplementation(async (address: string) => {
+      if (address.includes("Falla")) throw new Error("geocoder unavailable");
+      return null;
+    });
+    _mockLeads = [
+      {
+        id: "lead-gps-ok",
+        source: "yelu",
+        niche: "restaurant",
+        address: "Montevideo, Uruguay",
+        prospect_score: 72,
+        contact_tier: "A",
+        gps: { lat: -34.9, lng: -56.2 },
+        corroborating_sources: [],
+      },
+      {
+        id: "lead-geocode-fails",
+        source: "osm",
+        niche: "restaurant",
+        address: "Calle Falla 123, Montevideo",
+        prospect_score: 65,
+        contact_tier: "B",
+        gps: null,
+        corroborating_sources: [],
+      },
+    ];
+
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/admin/geo/lead-density?prospect_score_gte=0&limit=30",
+      headers: { authorization: "Bearer " + token },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.data.meta.filtered_leads).toBe(2);
+    expect(body.data.meta.positioned_leads).toBe(1);
+    expect(body.data.meta.unresolved_address_leads).toBe(1);
+    expect(body.data.locations.length).toBeGreaterThan(0);
+    await app.close();
+  });
+
   it("GET /admin/geo/lead-density applies zone_ids with the same AND semantics as the rest of the filters", async () => {
     _mockLeads = [
       { id: "zone-mvd-match", source: "yelu", niche: "restaurant", address: "Montevideo, Uruguay", prospect_score: 82, contact_tier: "A", gps: { lat: -34.9, lng: -56.2 }, corroborating_sources: [] },
@@ -1469,6 +1515,51 @@ describe("GET /admin/geo/zone-leads — MAP-4 individual mode", () => {
     expect(body.data[0]).toHaveProperty("map_point");
     // lead-2 has address "Salto, Uruguay" → different location_key
     expect(body.data.every((lead: { id: string }) => lead.id !== "lead-2")).toBe(true);
+    await app.close();
+  });
+
+  it("returns zone leads without 500 when geocoding a scoped lead fails", async () => {
+    geocodeAddress.mockImplementation(async () => {
+      throw new Error("geocoder unavailable");
+    });
+    _mockLeads = [
+      {
+        id: "lead-zone-gps",
+        name: "Restaurante GPS",
+        source: "yelu",
+        niche: "restaurant",
+        contact_tier: "A",
+        prospect_score: 80,
+        address: "Montevideo, Uruguay",
+        gps: { lat: -34.9, lng: -56.2 },
+        corroborating_sources: [],
+      },
+      {
+        id: "lead-zone-geocode-fails",
+        name: "Restaurante Sin GPS",
+        source: "osm",
+        niche: "restaurant",
+        contact_tier: "B",
+        prospect_score: 60,
+        address: "Calle Falla 123, Montevideo",
+        gps: null,
+        corroborating_sources: [],
+      },
+    ];
+
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/admin/geo/zone-leads?location_key=montevideo",
+      headers: { authorization: "Bearer " + token },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.total).toBe(1);
+    expect(body.data.map((lead: { id: string }) => lead.id)).toEqual(["lead-zone-gps"]);
     await app.close();
   });
 

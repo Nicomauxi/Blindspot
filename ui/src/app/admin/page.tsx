@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
   getZoneLeads,
@@ -12,8 +12,11 @@ import {
   listNicheAliasGroups,
   listPipelineRuns,
   type DiscoveryGeoZone,
+  type DiscoveryHeatMetric,
   type DiscoveryJob,
   type DiscoveryLeadDensityFilters,
+  type DiscoveryLeadDensityMeta,
+  type DiscoveryMapViewportBounds,
   type NicheAliasGroup,
   type DiscoveryMapDensityLocation,
   type PipelineRun,
@@ -28,7 +31,7 @@ import { LeadExplorer } from "@/components/lead-explorer";
 import { LeadReviewMap } from "@/components/lead-review-map";
 import { areLeadDensityFiltersEqual, buildLeadExplorerGeoSelection, buildZoneLeadRequest } from "@/lib/location-density-map";
 
-const DEFAULT_DENSITY_FILTERS: DiscoveryLeadDensityFilters = { prospect_score_gte: 0, limit: 4000 };
+const DEFAULT_DENSITY_FILTERS: DiscoveryLeadDensityFilters = { prospect_score_gte: 0, limit: 4000, heat_metric: "mixed" };
 
 function aggregateOutreach(rows: StatsOutreachRow[]) {
   return rows.reduce(
@@ -58,10 +61,13 @@ export default function AdminHomePage() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [densityLocations, setDensityLocations] = useState<DiscoveryMapDensityLocation[]>([]);
+  const [densityMeta, setDensityMeta] = useState<DiscoveryLeadDensityMeta | null>(null);
   const [densityLoading, setDensityLoading] = useState(false);
   const [densityError, setDensityError] = useState<string | null>(null);
   const [draftDensityFilters, setDraftDensityFilters] = useState<DiscoveryLeadDensityFilters>(DEFAULT_DENSITY_FILTERS);
   const [appliedDensityFilters, setAppliedDensityFilters] = useState<DiscoveryLeadDensityFilters>(DEFAULT_DENSITY_FILTERS);
+  const [mapViewport, setMapViewport] = useState<{ zoom?: number; bbox?: DiscoveryMapViewportBounds }>({});
+  const [viewportLeads, setViewportLeads] = useState<ZoneLead[]>([]);
   const [draftSelectedLocationKey, setDraftSelectedLocationKey] = useState<string | null>(null);
   const [appliedSelectedLocationKey, setAppliedSelectedLocationKey] = useState<string | null>(null);
   const [appliedLocationSelection, setAppliedLocationSelection] = useState<Pick<DiscoveryMapDensityLocation, "location_key" | "location_label" | "parent_location_key"> | null>(null);
@@ -75,6 +81,7 @@ export default function AdminHomePage() {
   const [zoneLeadsTotal, setZoneLeadsTotal] = useState(0);
   const [zoneLeadsLoading, setZoneLeadsLoading] = useState(false);
   const [zoneLeadsError, setZoneLeadsError] = useState<string | null>(null);
+  const previousDensityFilterKey = useRef<string | null>(null);
 
   useEffect(() => {
     if (!token) return;
@@ -99,20 +106,34 @@ export default function AdminHomePage() {
 
   useEffect(() => {
     if (!token || role !== "admin") return;
+    const filterKey = JSON.stringify(appliedDensityFilters);
+    const filtersChanged = previousDensityFilterKey.current !== filterKey;
+    previousDensityFilterKey.current = filterKey;
     setDensityLoading(true);
-    getLeadDensity(token, appliedDensityFilters)
-      .then((res) => {
-        setDensityLocations(res.data.locations);
-        setDensityError(null);
-        setDraftSelectedLocationKey((current) => res.data.locations.some((location) => location.location_key === current) ? current : null);
-      })
-      .catch((err) => {
-        setDensityLocations([]);
-        setDensityError(err instanceof Error ? err.message : "No se pudo cargar el mapa de leads.");
-        setDraftSelectedLocationKey(null);
-      })
-      .finally(() => setDensityLoading(false));
-  }, [appliedDensityFilters, token, role]);
+    const timeout = window.setTimeout(() => {
+      getLeadDensity(token, { ...appliedDensityFilters, ...mapViewport })
+        .then((res) => {
+          setDensityLocations(res.data.locations);
+          setDensityMeta(res.data.meta);
+          setViewportLeads(res.data.viewport_leads ?? []);
+          setDensityError(null);
+          setDraftSelectedLocationKey((current) => res.data.locations.some((location) => location.location_key === current) ? current : null);
+        })
+        .catch((err) => {
+          setDensityLocations([]);
+          setDensityMeta(null);
+          setViewportLeads([]);
+          setDensityError(err instanceof Error ? err.message : "No se pudo cargar el mapa de leads.");
+          setDraftSelectedLocationKey(null);
+        })
+        .finally(() => setDensityLoading(false));
+    }, filtersChanged ? 0 : 180);
+
+    return () => {
+      window.clearTimeout(timeout);
+      setDensityLoading(false);
+    };
+  }, [appliedDensityFilters, mapViewport, token, role]);
 
   useEffect(() => {
     if (!token) return;
@@ -255,6 +276,7 @@ export default function AdminHomePage() {
         >
           <LeadReviewMap
             locations={densityLocations}
+            meta={densityMeta}
             loadError={densityError}
             selectedLocationKey={draftSelectedLocationKey}
             onSelect={(location) => setDraftSelectedLocationKey(location.location_key)}
@@ -262,6 +284,8 @@ export default function AdminHomePage() {
             filters={draftDensityFilters}
             onFiltersChange={setDraftDensityFilters}
             loading={densityLoading}
+            viewportLeads={viewportLeads}
+            onViewportChange={setMapViewport}
             zones={zoneOptions}
             zoneSearch={zoneSearch}
             onZoneSearchChange={setZoneSearch}

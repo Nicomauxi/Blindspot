@@ -22,6 +22,7 @@ import {
   type NicheAliasGroup,
   type DiscoveryLeadDensityMeta,
   type DiscoveryMapDensityLocation,
+  type DiscoveryMapViewportBounds,
   type DiscoveryRecommendationData,
   type MissingFilters,
   type ZoneLead,
@@ -331,6 +332,8 @@ export default function DiscoveryPage() {
   const [recommendations, setRecommendations] = useState<DiscoveryRecommendationData | null>(null);
   const [density, setDensity] = useState<DiscoveryMapDensityLocation[]>([]);
   const [densityMeta, setDensityMeta] = useState<DiscoveryLeadDensityMeta | null>(null);
+  const [mapViewport, setMapViewport] = useState<{ zoom?: number; bbox?: DiscoveryMapViewportBounds }>({});
+  const [viewportLeads, setViewportLeads] = useState<ZoneLead[]>([]);
   const [densityFilters, setDensityFilters] = useState<DiscoveryLeadDensityFilters>(EMPTY_DENSITY_FILTERS);
   const [densityLoading, setDensityLoading] = useState(false);
   const [zoneOptions, setZoneOptions] = useState<DiscoveryGeoZone[]>([]);
@@ -435,14 +438,16 @@ export default function DiscoveryPage() {
     if (!token) return;
     if (showSpinner) setDensityLoading(true);
     try {
-      const response = await getLeadDensity(token, { ...filters, limit: 30 });
+      const response = await getLeadDensity(token, { ...filters, ...mapViewport, limit: 30 });
       setDensity(response.data.locations);
       setDensityMeta(response.data.meta);
+      setViewportLeads(response.data.viewport_leads ?? []);
       setSectionErrors((current) => ({ ...current, density: null }));
       setSelectedLocationKey((current) => response.data.locations.some((location) => location.location_key === current) ? current : null);
     } catch (err) {
       setDensity([]);
       setDensityMeta(null);
+      setViewportLeads([]);
       setSectionErrors((current) => ({ ...current, density: getErrorMessage(err, "No se pudo cargar el mapa de densidad.") }));
     } finally {
       if (showSpinner) setDensityLoading(false);
@@ -456,7 +461,7 @@ export default function DiscoveryPage() {
       listDiscoveryJobBatches(token, { include_jobs: true, limit: 20 }),
       listDiscoveryJobs(token, { limit: 50 }),
       getDiscoveryRecommendations(token, { sources: composer.sources, location: composer.location || undefined, niche: composer.niche || undefined, limit: 20 }),
-      getLeadDensity(token, { ...densityFilters, limit: 30 }),
+      getLeadDensity(token, { ...densityFilters, ...mapViewport, limit: 30 }),
     ]);
 
     const nextErrors: Record<DiscoverySection, string | null> = {
@@ -492,6 +497,7 @@ export default function DiscoveryPage() {
     if (densityRes.status === "fulfilled") {
       setDensity(densityRes.value.data.locations);
       setDensityMeta(densityRes.value.data.meta);
+      setViewportLeads(densityRes.value.data.viewport_leads ?? []);
       setSelectedLocationKey((current) => densityRes.value.data.locations.some((location) => location.location_key === current) ? current : null);
     } else {
       nextErrors.density = getErrorMessage(densityRes.reason, "No se pudo cargar el mapa de densidad.");
@@ -538,7 +544,7 @@ export default function DiscoveryPage() {
       window.clearTimeout(timeout);
       setDensityLoading(false);
     };
-  }, [densityFilters, token]);
+  }, [densityFilters, mapViewport, token]);
 
   useEffect(() => {
     if (!token) return;
@@ -747,6 +753,8 @@ export default function DiscoveryPage() {
             zonesLoading={zoneOptionsLoading}
             zonesError={zoneOptionsError}
             zoneLeads={zoneLeads}
+            viewportLeads={viewportLeads}
+            onViewportChange={setMapViewport}
             zoneLeadsTotal={zoneLeadsTotal}
             zoneLeadsLoading={zoneLeadsLoading}
             zoneLeadsError={zoneLeadsError}

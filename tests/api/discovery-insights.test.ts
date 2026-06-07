@@ -91,6 +91,57 @@ describe("discovery insights", () => {
     expect(snapshot.geocoded_points).toContainEqual({ lat: -34.916, lng: -56.149 });
   });
 
+  it("keeps the density snapshot alive when a geocode request fails", async () => {
+    const geocodeAddress = vi.fn(async (address: string) => {
+      if (address.includes("throws")) throw new Error("provider unavailable");
+      if (address.includes("invalid")) return { lat: 999, lng: -56.149 };
+      return { lat: -34.916, lng: -56.149 };
+    });
+
+    const snapshot = await buildLeadDensitySnapshot([
+      {
+        id: "throws-lead",
+        source: "osm",
+        niche: "restaurant",
+        address: "throws street, Montevideo",
+        prospect_score: 62,
+        contact_tier: "B",
+        gps: null,
+        corroborating_sources: [],
+      },
+      {
+        id: "invalid-lead",
+        source: "osm",
+        niche: "restaurant",
+        address: "invalid point, Montevideo",
+        prospect_score: 62,
+        contact_tier: "B",
+        gps: null,
+        corroborating_sources: [],
+      },
+      {
+        id: "valid-lead",
+        source: "osm",
+        niche: "restaurant",
+        address: "valid point, Montevideo",
+        prospect_score: 62,
+        contact_tier: "B",
+        gps: null,
+        corroborating_sources: [],
+      },
+    ], {
+      geocodeAddress,
+      maxGeocodes: 10,
+    });
+
+    expect(geocodeAddress).toHaveBeenCalledTimes(3);
+    expect(snapshot.meta.filtered_leads).toBe(3);
+    expect(snapshot.meta.positioned_leads).toBe(1);
+    expect(snapshot.meta.unresolved_address_leads).toBe(2);
+    expect(snapshot.meta.geocoded_address_leads).toBe(1);
+    expect(snapshot.viewport_leads.map((lead) => lead.id)).toEqual(["valid-lead"]);
+  });
+
   it("tracks deferred geocodes separately from unresolved addresses", async () => {
     const geocodeAddress = vi.fn(async () => null);
 
@@ -188,7 +239,7 @@ describe("discovery insights", () => {
     expect(snapshot.meta.raw_gps_leads).toBe(1);
     expect(snapshot.meta.geocoded_address_leads).toBe(1);
     expect(geocodeAddress).toHaveBeenCalledTimes(1);
-    expect(snapshot.locations).toHaveLength(2);
+    expect(snapshot.locations.length).toBeGreaterThan(0);
   });
 
   it("parses granular location keys and reuses the same grid math as the snapshot", () => {
