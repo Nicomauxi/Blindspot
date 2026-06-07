@@ -123,8 +123,12 @@ export function extractLivenessMeta(html: string | null): {
 }
 
 export function detectLiveness(input: LivenessInput): Liveness {
-  // 1. Error HTTP explícito.
+  // 1. Error HTTP. 4xx (salvo 429 rate-limit) = definitivo → dead. 429/5xx = transitorio
+  //    → unverified (no marcar muerta una página por un error temporal del servidor).
   if (input.httpStatus != null && input.httpStatus >= 400) {
+    if (input.httpStatus >= 500 || input.httpStatus === 429) {
+      return build(null, "unverified", input);
+    }
     return build("http_error", "dead", input);
   }
 
@@ -137,18 +141,21 @@ export function detectLiveness(input: LivenessInput): Liveness {
     if (HOME_PATHS.has(finalPath)) return build("redirected_home", "dead", input); // hard
   }
 
-  // 3. Señales de texto SOLO en título/descripcion/h1 (nunca body).
+  // 3. Señales de texto. Las frases de "muerta" se buscan SOLO en título/h1 (nunca en la
+  //    descripción ni el body: una descripción larga puede mencionar "no está disponible"
+  //    legítimamente). "Cuenta privada" sí puede venir en la descripción (IG).
   const titleNorm = normalize(input.ogTitle ?? input.title);
-  const haystack = [input.ogTitle, input.title, input.h1, input.ogDescription].map(normalize).join(" || ");
+  const titleHaystack = [input.ogTitle, input.title, input.h1].map(normalize).join(" || ");
+  const descHaystack = normalize(input.ogDescription);
 
   if (GENERIC_TITLES.has(titleNorm)) {
     return build("generic_title", "dead", input);
   }
   for (const phrase of PRIVATE_PHRASES) {
-    if (haystack.includes(normalize(phrase))) return build("private", "dead", input); // soft
+    if (titleHaystack.includes(normalize(phrase)) || descHaystack.includes(normalize(phrase))) return build("private", "dead", input); // soft
   }
   for (const phrase of DEAD_PHRASES) {
-    if (haystack.includes(normalize(phrase))) return build("deleted", "dead", input); // hard
+    if (titleHaystack.includes(normalize(phrase))) return build("deleted", "dead", input); // hard
   }
 
   // 4. Sin señales pero con título real → viva.

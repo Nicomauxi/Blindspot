@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import {
@@ -266,16 +266,22 @@ export default function LeadDetailPage() {
       seen.add(k);
       return true;
     });
-    await updateFavoriteContacts(token, lead.id, deduped);
-    const refreshed = await getLead(token, lead.id);
-    setLead(refreshed.data);
+    try {
+      await updateFavoriteContacts(token, lead.id, deduped);
+      const refreshed = await getLead(token, lead.id);
+      setLead(refreshed.data);
+    } catch (err) {
+      setError(formatSectionError(err, "No se pudo actualizar el favorito."));
+    }
   }
 
-  async function handleSearchLeads(query: string) {
-    if (!token) return [];
-    const res = await searchLeadsByName(token, query);
-    return res;
-  }
+  const handleSearchLeads = useCallback(
+    async (query: string) => {
+      if (!token) return [];
+      return searchLeadsByName(token, query);
+    },
+    [token]
+  );
 
   async function handleGenerateOffer() {
     if (!token || !lead) return;

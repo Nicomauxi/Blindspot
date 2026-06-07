@@ -77,7 +77,8 @@ async function main(): Promise<void> {
   for (const lead of leads) {
     if (scanned >= limit) break;
     const fp = lead.digital_footprint;
-    const selected = (fp?.["heuristic_discovery"] as { selected?: Record<string, { url?: string; liveness?: Liveness } | null> } | undefined)?.selected;
+    if (!fp) continue;
+    const selected = (fp["heuristic_discovery"] as { selected?: Record<string, { url?: string; liveness?: Liveness } | null> } | undefined)?.selected;
     if (!selected) continue;
 
     let changed = false;

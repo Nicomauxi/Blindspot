@@ -1732,7 +1732,9 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
         if (reassignTo === id) {
           return reply.status(400).send({ error: "Cannot reassign to the same lead", error_code: "invalid_reassign_target" });
         }
-        const { data: target } = await getDb().from("leads").select("id").eq("id", reassignTo).maybeSingle();
+        // Validar el destino respetando el RBAC del usuario (un CM no puede reasignar a
+        // leads fuera de su lead_filter — evita inferir existencia / apuntar fuera de scope).
+        const target = await loadAccessibleLeadForFeedback(authUser, reassignTo, false);
         if (!target) {
           return reply.status(400).send({ error: "Reassign target lead not found", error_code: "reassign_target_not_found" });
         }
@@ -1784,6 +1786,21 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
       const lead = await loadAccessibleLeadForFeedback(authUser, id, false);
       if (!lead) {
         return reply.status(404).send({ error: "Lead not found", error_code: "not_found" });
+      }
+      // Un CM solo puede marcar favoritos en leads que está trabajando (con tracking activo),
+      // coherente con la redacción de contactos del detalle (no marca valores que no ve).
+      if (authUser.role === "cm") {
+        const { data: trackingRow } = await getDb()
+          .from("lead_tracking")
+          .select("id")
+          .eq("lead_id", id)
+          .eq("owner_id", authUser.id)
+          .in("status", [...ACTIVE_TRACKING_STATUSES])
+          .limit(1)
+          .maybeSingle();
+        if (!trackingRow) {
+          return reply.status(403).send({ error: "Lead sin seguimiento activo", error_code: "tracking_required" });
+        }
       }
       const markedAt = new Date().toISOString();
       const favorites = parsed.data.favorite_contacts.map((c) => ({

@@ -72,6 +72,22 @@ describe("detectLiveness", () => {
     expect(r.reason).toBe("http_error");
   });
 
+  it("errores transitorios (429/503) → unverified, no dead", () => {
+    expect(detectLiveness(input({ platform: "facebook", requestedUrl: "https://facebook.com/x", httpStatus: 429 })).state).toBe("unverified");
+    expect(detectLiveness(input({ platform: "facebook", requestedUrl: "https://facebook.com/x", httpStatus: 503 })).state).toBe("unverified");
+  });
+
+  it("no marca muerta por 'no disponible' en la descripción (solo título)", () => {
+    const r = detectLiveness(input({
+      platform: "facebook",
+      requestedUrl: "https://facebook.com/laproa",
+      ogTitle: "Restaurante La Proa",
+      ogDescription: "El delivery no está disponible en tu zona por el momento.",
+      httpStatus: 200,
+    }));
+    expect(r.state).toBe("alive");
+  });
+
   it("cuenta privada → dead/private (soft, no borra confirmaciones)", () => {
     const r = detectLiveness(input({ platform: "instagram", requestedUrl: "https://instagram.com/laproa", ogTitle: "La Proa (@laproa)", ogDescription: "This account is private", httpStatus: 200 }));
     expect(r.reason).toBe("private");

@@ -1157,7 +1157,7 @@ export async function searchLeadsByName(
     id: lead.id,
     name: lead.name,
     niche: (lead as { niche?: string | null }).niche ?? null,
-    city: (lead as { city?: string | null }).city ?? null,
+    city: (lead as { location_label?: string | null }).location_label ?? null,
   }));
 }
 

@@ -178,6 +178,7 @@ export async function extractInstagramProfile(
           external_url,
           has_contact_button,
           og_title: metaTitle,
+          page_title: document.querySelector("title")?.textContent ?? null,
           final_url: document.location?.href ?? null,
         };
       },
@@ -191,6 +192,7 @@ export async function extractInstagramProfile(
       finalUrl: extracted.final_url ?? url,
       httpStatus: 200,
       ogTitle: extracted.og_title,
+      title: extracted.page_title,
       ogDescription: extracted.bio,
       checkedAt: new Date().toISOString(),
     });
