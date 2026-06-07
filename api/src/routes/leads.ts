@@ -1849,12 +1849,6 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
 
       const normalizedLead = normalizeLeadRow(lead as JsonRecord);
 
-      // favorite_contacts vive en la tabla leads (no en la vista lead_dashboard): se adjunta aparte.
-      if (normalizedLead["favorite_contacts"] === undefined) {
-        const { data: favRow } = await db.from("leads").select("favorite_contacts").eq("id", id).maybeSingle();
-        normalizedLead["favorite_contacts"] = (favRow as { favorite_contacts?: unknown } | null)?.favorite_contacts ?? [];
-      }
-
       // CM filter check — 404 (not 403) to not reveal existence
       if (authUser.role === "cm") {
         if (!authUser.lead_filter) {
@@ -1876,6 +1870,13 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
         if (!trackingRow) {
           return reply.status(200).send({ data: redactContactFields(normalizedLead) });
         }
+      }
+
+      // favorite_contacts vive en la tabla leads (no en lead_dashboard): se adjunta aparte,
+      // solo para leads accesibles (después del gate de RBAC).
+      if (normalizedLead["favorite_contacts"] === undefined) {
+        const { data: favRow } = await db.from("leads").select("favorite_contacts").eq("id", id).maybeSingle();
+        normalizedLead["favorite_contacts"] = (favRow as { favorite_contacts?: unknown } | null)?.favorite_contacts ?? [];
       }
 
       return reply.status(200).send({ data: normalizedLead });

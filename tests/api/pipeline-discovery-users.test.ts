@@ -835,7 +835,7 @@ describe("Discovery routes", () => {
     const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
     const res = await app.inject({
       method: "GET",
-      url: "/api/v1/admin/geo/lead-density?prospect_score_gte=0&limit=30",
+      url: "/api/v1/admin/geo/lead-density?prospect_score_gte=0&limit=30&include_geocode=true",
       headers: { authorization: "Bearer " + token },
     });
 
@@ -1630,7 +1630,7 @@ describe("GET /admin/geo/zone-leads — MAP-4 individual mode", () => {
     const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
     const densityRes = await app.inject({
       method: "GET",
-      url: "/api/v1/admin/geo/lead-density?limit=10",
+      url: "/api/v1/admin/geo/lead-density?limit=10&include_geocode=true",
       headers: { authorization: `Bearer ${token}` },
     });
     expect(densityRes.statusCode).toBe(200);
