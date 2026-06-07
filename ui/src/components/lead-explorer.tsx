@@ -1135,7 +1135,7 @@ export function LeadExplorer({ mode, initialFilters, pageSize, geoSelection, onG
         </div>
       </SectionCard>
 
-      <SectionCard title="Mapa como filtro" description="Usá la misma vista cartográfica de Inicio para recortar el listado por zona o cuadrícula antes de aplicar el barrido comercial.">
+      <SectionCard title="Mapa" description="Zonas con mayor densidad de leads. Clic en un cluster o cuadrícula para filtrar el listado.">
         <LeadReviewMap
           locations={densityLocations}
           meta={densityMeta}

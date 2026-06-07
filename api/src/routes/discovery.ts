@@ -193,7 +193,14 @@ const geoFilterQueryFields = {
   heat_metric: z.enum(LEAD_DENSITY_HEAT_METRICS).optional(),
 } satisfies z.ZodRawShape;
 
-const leadDensityQuerySchema = recommendationsQuerySchema.extend(geoFilterQueryFields);
+const leadDensityQuerySchema = recommendationsQuerySchema.extend(geoFilterQueryFields).extend({
+  // Geocoding por request es costoso (bloquea la carga del mapa). Default off:
+  // el mapa carga rápido solo con GPS y reporta los leads sin coordenadas (deferred).
+  include_geocode: z
+    .enum(["true", "false"])
+    .optional()
+    .transform((v) => v === "true"),
+});
 
 const batchActionSchema = z.object({
   action: z.enum(["pause", "resume", "cancel"]),
@@ -1273,15 +1280,20 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
     const { filters: densityFilters, zoneIds } = buildLeadDensityFiltersFromQuery(parsedQuery.data);
     let density;
     try {
+      const includeGeocode = parsedQuery.data.include_geocode === true;
       density = await buildLeadDensitySnapshot(
         zoneIds && zoneIds.length > 0 ? leads.filter((lead) => matchesZoneIdsFilter(lead, zoneIds)) : leads,
         {
           locationFilter: parsedQuery.data.location ?? null,
           filters: densityFilters,
-          geocodeAddress: leadGeocodingService.geocodeAddress,
-          maxGeocodes: typeof parsedQuery.data.zoom === "number" && parsedQuery.data.zoom >= 14
-            ? Math.min(240, Math.max(parsedQuery.data.limit * 10, 80))
-            : Math.min(160, Math.max(parsedQuery.data.limit * 8, 40)),
+          // Solo geocodificar en el request cuando se pide explícitamente (opt-in).
+          // Por defecto el mapa carga rápido con GPS y deja el resto como deferred.
+          ...(includeGeocode ? { geocodeAddress: leadGeocodingService.geocodeAddress } : {}),
+          maxGeocodes: !includeGeocode
+            ? 0
+            : typeof parsedQuery.data.zoom === "number" && parsedQuery.data.zoom >= 14
+              ? Math.min(240, Math.max(parsedQuery.data.limit * 10, 80))
+              : Math.min(160, Math.max(parsedQuery.data.limit * 8, 40)),
         }
       );
     } catch (err) {
