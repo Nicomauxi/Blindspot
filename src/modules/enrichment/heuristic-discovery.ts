@@ -14,7 +14,7 @@ import type {
   Lead,
 } from "../../shared/types.js";
 import { fetchHtml } from "./http.js";
-import { detectLiveness, isHardDead } from "../social-enrich/liveness.js";
+import { detectLiveness, isHardDead, extractLivenessMeta } from "../social-enrich/liveness.js";
 
 const HeuristicConfigSchema = z.object({
   heuristic_discovery: z.object({
@@ -633,28 +633,6 @@ async function probeSocialCandidate(
   };
 }
 
-// Extrae og:title / og:description / <title> / primer <h1> de un HTML crudo para liveness.
-function extractLivenessMeta(html: string | null): {
-  ogTitle: string | null;
-  ogDescription: string | null;
-  title: string | null;
-  h1: string | null;
-} {
-  if (!html) return { ogTitle: null, ogDescription: null, title: null, h1: null };
-  const metaContent = (prop: string): string | null => {
-    const re = new RegExp(`<meta[^>]+(?:property|name)=["']${prop}["'][^>]*content=["']([^"']*)["']`, "i");
-    const alt = new RegExp(`<meta[^>]+content=["']([^"']*)["'][^>]*(?:property|name)=["']${prop}["']`, "i");
-    return html.match(re)?.[1] ?? html.match(alt)?.[1] ?? null;
-  };
-  const title = html.match(/<title[^>]*>([^<]*)<\/title>/i)?.[1]?.trim() ?? null;
-  const h1 = html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i)?.[1]?.replace(/<[^>]+>/g, "").trim() ?? null;
-  return {
-    ogTitle: metaContent("og:title"),
-    ogDescription: metaContent("og:description"),
-    title,
-    h1,
-  };
-}
 
 function bestByScore<T extends { score: number }>(items: T[], threshold: number): T | null {
   const sorted = [...items].sort((a, b) => b.score - a.score);
