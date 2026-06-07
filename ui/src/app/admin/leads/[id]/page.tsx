@@ -956,10 +956,12 @@ function buildContactPoints(lead: LeadDetail | null): ContactPoint[] {
   for (const point of points) {
     point.favorite = isFav(point);
     if (point.kind === "instagram" || point.kind === "facebook") {
-      const profile = socialProfiles[point.kind];
-      if (profile) point.activity = profile;
       const liveness = selected[point.kind]?.liveness ?? null;
       if (liveness) point.liveness = liveness;
+      // No mostrar métricas de actividad de una red muerta (sería contradictorio con el
+      // badge "No disponible"); la actividad solo aplica a redes vivas.
+      const profile = socialProfiles[point.kind];
+      if (profile && liveness?.state !== "dead") point.activity = profile;
     }
   }
 

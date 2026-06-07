@@ -71,8 +71,12 @@ export function leadHasContact(lead: Lead): boolean {
   const contactEmails = footprint["contact_emails"];
   if (Array.isArray(contactEmails) && contactEmails.some(nonEmpty)) return true;
   const social = footprint["social_search"];
+  const tags = new Set(lead.tags ?? []);
   if (social && typeof social === "object") {
     for (const platform of ["facebook", "instagram"]) {
+      // Una red marcada muerta no cuenta como canal de contacto accionable.
+      const deadTag = platform === "facebook" ? "fb-dead" : "ig-dead";
+      if (tags.has(deadTag)) continue;
       const entry = (social as Record<string, unknown>)[platform];
       if (entry && typeof entry === "object" && nonEmpty((entry as { url?: unknown }).url)) {
         return true;
