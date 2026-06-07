@@ -67,10 +67,14 @@ function selectedHeuristicUrl(lead: Lead, platform: "facebook" | "instagram"): s
   return candidate?.url ?? null;
 }
 
-function hasHeuristicTag(lead: Lead): boolean {
+// Un lead es candidato a social-enrich si pasó el filtro y tiene una red para medir:
+// sea por tag heurístico, o porque ya hay una URL FB/IG seleccionada (cubre los leads que
+// tienen candidata pero nunca fueron medidos — antes quedaban fuera por gating de tag).
+function hasSocialCandidate(lead: Lead): boolean {
   if (!lead.passed_filter) return false;
   const tags = new Set(lead.tags);
-  return tags.has("fb-heuristic") || tags.has("ig-heuristic");
+  if (tags.has("fb-heuristic") || tags.has("ig-heuristic")) return true;
+  return selectedHeuristicUrl(lead, "facebook") !== null || selectedHeuristicUrl(lead, "instagram") !== null;
 }
 
 function tagsForResult(
@@ -172,7 +176,7 @@ export async function runSocialEnrich(opts: SocialEnrichOptions): Promise<Social
   const log = getLogger();
   const limitCount = opts.limit ?? DEFAULT_LIMIT;
   const loaded = opts.run ? await loadLeadsByRunId(opts.run) : await loadAllLeads();
-  const candidates = loaded.filter(hasHeuristicTag);
+  const candidates = loaded.filter(hasSocialCandidate);
   const freshSkipped = opts.force
     ? []
     : candidates.filter((lead) => isFreshPlaywrightSearch(lead));
