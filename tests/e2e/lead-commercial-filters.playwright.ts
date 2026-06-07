@@ -169,7 +169,15 @@ await page.route("**/api/v1/leads**", async (route) => {
 
   let data = [...baseLeads];
   if (offerType) {
-    data = data.filter((lead) => lead.commercial_offers_summary.primary_offer_type === offerType);
+    // Semántica inclusiva (espeja el backend): filtrar por una capacidad incluye los de doble oferta.
+    data = data.filter((lead) => {
+      const sum = lead.commercial_offers_summary;
+      if (offerType === "marketing") return sum.marketing_score > 0;
+      if (offerType === "software") return sum.software_score > 0;
+      if (offerType === "both") return sum.marketing_score > 0 && sum.software_score > 0;
+      if (offerType === "unknown") return sum.primary_offer_type === "unknown";
+      return false;
+    });
   }
   if (sortBy === "software_score") {
     data.sort((a, b) => b.commercial_offers_summary.software_score - a.commercial_offers_summary.software_score);
@@ -201,7 +209,10 @@ console.log("LEAD-6 Playwright: cambiar filtros no dispara requests de lista/map
 
 await page.getByRole("button", { name: "Filtrar" }).click();
 await page.getByRole("link", { name: "Lead marketing" }).waitFor();
-await page.getByText("Mostrando 1-1 de 1 leads").waitFor();
+// Filtro inclusivo: "marketing" incluye a todos los leads con marketing_score > 0
+// (Lead marketing, Lead mixto/both y Lead software alto que también tiene señal de marketing).
+await page.getByText("Mostrando 1-3 de 3 leads").waitFor();
+await page.getByRole("link", { name: "Lead mixto" }).waitFor();
 assert.equal(requestLog.some((entry) => entry.includes("commercial_offer_type=marketing")), true);
 assert.equal(densityRequestLog.some((entry) => entry.includes("prospect_score_gte=80")), true);
 assert.equal(densityRequestLog.some((entry) => entry.includes("commercial_offer_type=marketing")), true);

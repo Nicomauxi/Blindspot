@@ -302,10 +302,19 @@ function getLeadCommercialOfferings(lead: JsonRecord) {
 function getLeadCommercialSummary(lead: JsonRecord): CommercialOfferingsSummary {
   const existing = lead["commercial_offers_summary"];
   if (isRecord(existing)) {
+    const primary = (existing["primary_offer_type"] as CommercialOfferType | undefined) ?? "unknown";
+    const software = asNullableNumber(existing["software_score"]) ?? 0;
+    const marketing = asNullableNumber(existing["marketing_score"]) ?? 0;
+    // Salvaguarda: leads viejos pueden tener primary_offer_type no-unknown pero scores en 0
+    // (resumen persistido inconsistente). El filtro inclusivo por score los excluiría
+    // erróneamente; recalculamos desde la evidencia en ese caso.
+    if (primary !== "unknown" && software === 0 && marketing === 0) {
+      return buildCommercialOfferingsSummary(getLeadCommercialOfferings(lead));
+    }
     return {
-      primary_offer_type: (existing["primary_offer_type"] as CommercialOfferType | undefined) ?? "unknown",
-      software_score: asNullableNumber(existing["software_score"]) ?? 0,
-      marketing_score: asNullableNumber(existing["marketing_score"]) ?? 0,
+      primary_offer_type: primary,
+      software_score: software,
+      marketing_score: marketing,
       top_software_offer: asNullableString(existing["top_software_offer"]),
       top_marketing_offer: asNullableString(existing["top_marketing_offer"]),
       top_software_label: asNullableString(existing["top_software_label"]),
@@ -327,12 +336,33 @@ function getLeadSortMetric(lead: JsonRecord, sortBy: LeadSortBy): number | null 
   return null;
 }
 
+// Matching inclusivo por capacidad (no por etiqueta): filtrar por "marketing" debe incluir
+// a los leads de doble oferta (marketing+software). "both" exige ambas capacidades.
+export function commercialSummaryMatchesOffer(
+  summary: Pick<CommercialOfferingsSummary, "primary_offer_type" | "software_score" | "marketing_score">,
+  commercialOfferType: CommercialOfferType | undefined
+): boolean {
+  if (!commercialOfferType) return true;
+  switch (commercialOfferType) {
+    case "marketing":
+      return summary.marketing_score > 0;
+    case "software":
+      return summary.software_score > 0;
+    case "both":
+      return summary.marketing_score > 0 && summary.software_score > 0;
+    case "unknown":
+      return summary.primary_offer_type === "unknown";
+    default:
+      return false;
+  }
+}
+
 function matchesCommercialOfferType(
   lead: JsonRecord,
   commercialOfferType: CommercialOfferType | undefined
 ): boolean {
   if (!commercialOfferType) return true;
-  return getLeadCommercialSummary(lead).primary_offer_type === commercialOfferType;
+  return commercialSummaryMatchesOffer(getLeadCommercialSummary(lead), commercialOfferType);
 }
 
 function isDerivedCommercialSort(sortBy: LeadSortBy): boolean {
