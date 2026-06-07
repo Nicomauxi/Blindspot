@@ -878,7 +878,8 @@ export async function updateLeadSocialSearch(
   leadId: string,
   socialSearch: SocialSearch,
   newTags: string[],
-  whatsappFromSocial: string | null
+  whatsappFromSocial: string | null,
+  socialActivity?: import("../modules/social-enrich/social-activity.js").SocialActivitySnapshot
 ): Promise<void> {
   const db = getSupabase();
   const { data: current, error: fetchErr } = await db
@@ -895,11 +896,13 @@ export async function updateLeadSocialSearch(
     ? {
         ...currentFootprint,
         social_search: socialSearch,
+        ...(socialActivity !== undefined ? { social_activity: socialActivity } : {}),
         ...(contactEmails !== undefined ? { contact_emails: contactEmails } : {}),
       }
     : {
         fetched_at: fetchedAt,
         social_search: socialSearch,
+        ...(socialActivity !== undefined ? { social_activity: socialActivity } : {}),
         ...(contactEmails !== undefined ? { contact_emails: contactEmails } : {}),
       };
   const currentTags: string[] = Array.isArray(current?.tags) ? (current?.tags as string[]) : [];

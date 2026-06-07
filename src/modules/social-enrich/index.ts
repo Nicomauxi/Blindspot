@@ -20,6 +20,12 @@ import { randomBetween } from "../../shared/scraping.js";
 import { openSocialEnrichBrowser } from "./browser.js";
 import { extractFacebookProfile } from "./facebook.js";
 import { extractInstagramProfile } from "./instagram.js";
+import {
+  buildSocialActivitySnapshot,
+  facebookProfile,
+  instagramProfile,
+  type SocialActivityProfile,
+} from "./social-activity.js";
 
 export interface SocialEnrichOptions {
   run?: string;
@@ -118,14 +124,28 @@ async function processLead(
       ? await extractInstagramProfile(page, instagramUrl, lead)
       : null;
 
+    const ranAt = new Date().toISOString();
     const socialSearch: PlaywrightSocialSearch = {
-      ran_at: new Date().toISOString(),
+      ran_at: ranAt,
       source: "playwright",
       facebook,
       instagram,
     };
     const derived = tagsForResult(facebook, instagram);
-    await updateLeadSocialSearch(lead.id, socialSearch, derived.tags, derived.whatsapp);
+
+    // Tracking de actividad/audiencia social desde el og:description público.
+    const activityProfiles: SocialActivityProfile[] = [];
+    if (instagram) activityProfiles.push(instagramProfile(instagram.url, instagram.bio));
+    if (facebook) activityProfiles.push(facebookProfile(facebook.url, facebook.description));
+    const hasWebsite =
+      Boolean(lead.website) ||
+      Boolean(lead.digital_footprint?.heuristic_discovery?.selected.website?.url);
+    const socialActivity =
+      activityProfiles.length > 0
+        ? buildSocialActivitySnapshot(activityProfiles, { ranAt, hasWebsite })
+        : undefined;
+
+    await updateLeadSocialSearch(lead.id, socialSearch, derived.tags, derived.whatsapp, socialActivity);
     await updateLeadSocialEnrichStatus(lead.id, "ok");
     return { processed: true, error: false, blocked: false };
   } catch (err: unknown) {

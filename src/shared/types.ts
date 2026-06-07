@@ -284,6 +284,7 @@ export type DigitalFootprintSkipped = {
   heuristic_discovery?: HeuristicDiscovery;
   directory_discovery?: DirectoryDiscovery;
   social_search?: SocialSearch;
+  social_activity?: import("../modules/social-enrich/social-activity.js").SocialActivitySnapshot;
   social_enrich_status?: "ok" | "blocked";
   last_change_diff?: EnrichmentDiff;
 };
@@ -330,6 +331,7 @@ export interface DigitalFootprintEnriched {
   heuristic_discovery?: HeuristicDiscovery;
   directory_discovery?: DirectoryDiscovery;
   social_search?: SocialSearch;
+  social_activity?: import("../modules/social-enrich/social-activity.js").SocialActivitySnapshot;
   fetch_error?: string;
   attempted_url?: string;
   final_url?: string;

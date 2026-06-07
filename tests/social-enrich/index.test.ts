@@ -183,7 +183,12 @@ describe("runSocialEnrich", () => {
         "whatsapp-derived",
         "whatsapp-confirmed",
       ]),
-      "+59898365592"
+      "+59898365592",
+      expect.objectContaining({
+        source: "playwright_public",
+        profiles: expect.any(Object),
+        summary: expect.any(Object),
+      })
     );
     expect(result.processed).toBe(1);
     const opened = vi.mocked(openSocialEnrichBrowser).mock.results[0];
