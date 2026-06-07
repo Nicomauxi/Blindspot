@@ -1125,12 +1125,40 @@ export async function createLeadFeedback(
     field_value?: unknown;
     verdict: LeadFeedbackVerdict;
     comment?: string;
+    rejection_reason?: "no_pertenece_al_lead" | "dato_desactualizado" | "fuera_de_servicio" | "otro";
+    reassign_to_lead_id?: string;
   }
 ) {
   return request<{ data: LeadFeedbackEntry; lead_id: string }>(`/api/v1/leads/${leadId}/feedback`, {
     method: "POST",
     body: JSON.stringify(data),
   }, token);
+}
+
+export async function updateFavoriteContacts(
+  token: string,
+  leadId: string,
+  favoriteContacts: Array<{ kind: string; value: string }>
+) {
+  return request<{ data: { lead_id: string; favorite_contacts: unknown[] } }>(
+    `/api/v1/leads/${leadId}/favorite-contacts`,
+    { method: "PATCH", body: JSON.stringify({ favorite_contacts: favoriteContacts }) },
+    token
+  );
+}
+
+// Búsqueda liviana de leads por nombre para reasignación de contactos.
+export async function searchLeadsByName(
+  token: string,
+  query: string
+): Promise<Array<{ id: string; name: string; niche: string | null; city: string | null }>> {
+  const res = await listLeads(token, { q: query, limit: 8 });
+  return res.data.map((lead) => ({
+    id: lead.id,
+    name: lead.name,
+    niche: (lead as { niche?: string | null }).niche ?? null,
+    city: (lead as { city?: string | null }).city ?? null,
+  }));
 }
 
 // Outreach — @deprecated: replaced by CRM tracking. Functions kept for FK bridge; do not use in new UI.

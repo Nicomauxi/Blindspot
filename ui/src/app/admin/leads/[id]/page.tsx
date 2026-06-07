@@ -12,6 +12,8 @@ import {
   getLead,
   getOwnerGroup,
   getSocialHistory,
+  updateFavoriteContacts,
+  searchLeadsByName,
   listOutreach,
   type LeadAssistantBrief,
   type SocialHistoryPlatform,
@@ -26,7 +28,13 @@ import { cn, formatRelative } from "@/lib/utils";
 import { AdminPageLayout, EmptyPanel, HelpTip, SectionCard, StatCard } from "@/components/admin-shell";
 import { CollapsibleSection } from "@/components/collapsible-section";
 import { CommercialSummary } from "@/components/lead/commercial-summary";
-import { ContactBlock, type ContactPoint } from "@/components/lead/contact-block";
+import {
+  ContactBlock,
+  type ContactPoint,
+  type ContactSocialActivity,
+  type ContactLiveness,
+  type FeedbackPayload,
+} from "@/components/lead/contact-block";
 
 const TIER_COLORS: Record<string, string> = {
   A: "bg-emerald-100 text-emerald-800",
@@ -53,55 +61,6 @@ const CHANNEL_LABELS: Record<string, string> = {
 };
 
 type ContactPointKind = ContactPoint["kind"];
-
-type SocialActivityProfileView = {
-  platform: string;
-  url: string;
-  followers: number | null;
-  posts: number | null;
-  likes: number | null;
-  audience_tier: "low" | "medium" | "high" | null;
-  activity_status: "active" | "abandoned" | "unknown";
-};
-
-type SocialActivityView = {
-  ran_at: string;
-  profiles: Record<string, SocialActivityProfileView>;
-  summary: {
-    has_social_presence: boolean;
-    active_platforms: string[];
-    abandoned_platforms: string[];
-    best_platform: string | null;
-    audience_tier: "low" | "medium" | "high" | null;
-    commercial_signals: string[];
-  };
-};
-
-const SOCIAL_SIGNAL_LABELS: Record<string, string> = {
-  red_activa: "Red activa",
-  red_abandonada: "Red abandonada",
-  alta_audiencia: "Alta audiencia",
-  audiencia_media: "Audiencia media",
-  alta_audiencia_sin_web: "Alta audiencia sin web",
-};
-
-const SOCIAL_STATUS_LABELS: Record<string, string> = {
-  active: "Activa",
-  abandoned: "Abandonada",
-  unknown: "Sin confirmar",
-};
-
-const SOCIAL_TIER_LABELS: Record<string, string> = {
-  high: "Audiencia alta",
-  medium: "Audiencia media",
-  low: "Audiencia baja",
-};
-
-const SOCIAL_STATUS_ACCENT: Record<string, string> = {
-  active: "text-emerald-700 bg-emerald-50 border-emerald-200",
-  abandoned: "text-amber-700 bg-amber-50 border-amber-200",
-  unknown: "text-slate-600 bg-slate-50 border-slate-200",
-};
 
 function Sparkline({ values }: { values: number[] }) {
   if (values.length < 2) return null;
@@ -189,74 +148,6 @@ function SocialGrowthChart({ leadId }: { leadId: string }) {
   );
 }
 
-function SocialActivityBlock({ activity, leadId }: { activity: SocialActivityView | null; leadId: string }) {
-  // Estados derivables de campos ya persistidos (sin backend nuevo):
-  // pendiente (no analizado) / sin presencia / con datos.
-  if (!activity || !activity.ran_at) {
-    return (
-      <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-center text-sm text-slate-500">
-        Actividad social no analizada todavía. Se completa al correr el análisis de redes.
-      </div>
-    );
-  }
-  if (!activity.summary?.has_social_presence) {
-    return (
-      <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-center text-sm text-slate-500">
-        Sin presencia social detectada. <span className="text-slate-400">(Señal comercial: negocio mayormente offline.)</span>
-      </div>
-    );
-  }
-
-  const profiles = Object.values(activity.profiles ?? {});
-  const best = activity.summary.best_platform ? activity.profiles?.[activity.summary.best_platform] : null;
-  const verdictParts = [
-    activity.summary.audience_tier ? SOCIAL_TIER_LABELS[activity.summary.audience_tier] : null,
-    best ? SOCIAL_STATUS_LABELS[best.activity_status] ?? best.activity_status : null,
-  ].filter(Boolean);
-  const accent = SOCIAL_STATUS_ACCENT[best?.activity_status ?? "unknown"] ?? SOCIAL_STATUS_ACCENT.unknown;
-
-  return (
-    <div className="space-y-3">
-      {verdictParts.length > 0 ? (
-        <div className={cn("inline-flex items-center gap-2 rounded-lg border px-3 py-1.5 text-sm font-semibold", accent)}>
-          {verdictParts.join(" · ")}
-        </div>
-      ) : null}
-
-      <div className="flex flex-wrap gap-2">
-        {(activity.summary.commercial_signals ?? []).map((signal) => (
-          <span key={signal} className="rounded-full bg-sky-100 px-2.5 py-1 text-xs font-semibold text-sky-700">
-            {SOCIAL_SIGNAL_LABELS[signal] ?? signal}
-          </span>
-        ))}
-      </div>
-
-      <div className="grid gap-3 sm:grid-cols-2">
-        {profiles.map((profile) => (
-          <div key={profile.platform} className="rounded-xl border border-slate-200 bg-white p-3">
-            <div className="flex items-center justify-between">
-              <span className="text-sm font-semibold capitalize text-slate-900">{profile.platform}</span>
-              <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600">
-                {SOCIAL_STATUS_LABELS[profile.activity_status] ?? profile.activity_status}
-              </span>
-            </div>
-            <div className="mt-1 flex flex-wrap gap-3 text-xs text-slate-500">
-              {profile.followers != null ? <span>{profile.followers.toLocaleString("es-UY")} seguidores</span> : null}
-              {profile.likes != null ? <span>{profile.likes.toLocaleString("es-UY")} likes</span> : null}
-              {profile.posts != null ? <span>{profile.posts.toLocaleString("es-UY")} posts (total)</span> : null}
-            </div>
-            <a href={profile.url} target="_blank" rel="noreferrer" className="mt-1 block truncate text-xs text-sky-600 hover:underline">
-              {profile.url}
-            </a>
-          </div>
-        ))}
-      </div>
-
-      <SocialGrowthChart leadId={leadId} />
-    </div>
-  );
-}
-
 function formatSectionError(error: unknown, fallbackMessage: string) {
   if (error instanceof ApiError) {
     if (error.error_code === "assistant_unavailable") {
@@ -332,8 +223,6 @@ export default function LeadDetailPage() {
   const scoreBreakdown = lead?.score_breakdown ?? null;
   const inferredState = lead?.inferred_state ?? null;
   const digitalFootprint = lead?.digital_footprint ?? null;
-  const socialActivity =
-    (digitalFootprint as { social_activity?: SocialActivityView } | null)?.social_activity ?? null;
   const companyData = lead?.lead_company_data ?? null;
   const canonicalFields = lead?.canonical_fields ?? null;
 
@@ -350,14 +239,42 @@ export default function LeadDetailPage() {
 
   const contactPoints = useMemo(() => buildContactPoints(lead), [lead]);
 
-  async function handleContactFeedback(fieldKey: string, value: string, verdict: "good" | "bad", comment?: string) {
+  async function handleContactFeedback(payload: FeedbackPayload) {
     if (!token || !lead) return;
     await createLeadFeedback(token, lead.id, {
-      field_key: fieldKey,
-      field_value: value,
-      verdict,
-      comment: comment?.trim() || undefined,
+      field_key: payload.fieldKey,
+      field_value: payload.value,
+      verdict: payload.verdict,
+      comment: payload.comment?.trim() || undefined,
+      rejection_reason: payload.rejectionReason,
+      reassign_to_lead_id: payload.reassignToLeadId,
     });
+  }
+
+  async function handleToggleFavorite(point: ContactPoint, next: boolean) {
+    if (!token || !lead) return;
+    const current = contactPoints.filter((p) => p.favorite).map((p) => ({ kind: p.kind, value: p.value }));
+    const key = (k: string, v: string) => `${k}::${v.trim().toLowerCase()}`;
+    const nextFavorites = next
+      ? [...current, { kind: point.kind, value: point.value }]
+      : current.filter((f) => key(f.kind, f.value) !== key(point.kind, point.value));
+    // Dedup
+    const seen = new Set<string>();
+    const deduped = nextFavorites.filter((f) => {
+      const k = key(f.kind, f.value);
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    });
+    await updateFavoriteContacts(token, lead.id, deduped);
+    const refreshed = await getLead(token, lead.id);
+    setLead(refreshed.data);
+  }
+
+  async function handleSearchLeads(query: string) {
+    if (!token) return [];
+    const res = await searchLeadsByName(token, query);
+    return res;
   }
 
   async function handleGenerateOffer() {
@@ -581,9 +498,14 @@ export default function LeadDetailPage() {
         </div>
       </SectionCard>
 
-      {/* 3. Contacto y datos — full width */}
-      <SectionCard title="Contacto y datos listos para vender" description="Filtrá por tipo, fuente y fiabilidad para priorizar el primer toque.">
-        <ContactBlock points={contactPoints} onFeedback={handleContactFeedback} />
+      {/* 3. Contactos y Redes — master-detail con actividad social integrada */}
+      <SectionCard title="Contactos y Redes" description="Elegí un contacto o red para ver su desglose, actividad y acciones.">
+        <ContactBlock
+          points={contactPoints}
+          onFeedback={handleContactFeedback}
+          onToggleFavorite={handleToggleFavorite}
+          onSearchLeads={handleSearchLeads}
+        />
         <div className="mt-6 grid gap-4 lg:grid-cols-2">
           <div>
             <div className="mb-3 text-xs font-semibold uppercase tracking-[0.15em] text-slate-500">Datos de contacto</div>
@@ -605,11 +527,11 @@ export default function LeadDetailPage() {
             </div>
           </div>
         </div>
+        <div className="mt-6">
+          <SocialGrowthChart leadId={lead.id} />
+        </div>
       </SectionCard>
 
-      <SectionCard title="Actividad social" description="Presencia y audiencia detectadas en redes (datos públicos, sin login).">
-        <SocialActivityBlock activity={socialActivity} leadId={lead.id} />
-      </SectionCard>
 
       {/* 4. Historial de seguimiento (si existe) */}
       {outreach.length > 0 ? (
@@ -1013,6 +935,27 @@ function buildContactPoints(lead: LeadDetail | null): ContactPoint[] {
   }
 
   buckets.forEach((bucket) => visit(bucket.root, [], bucket.source, null));
+
+  // Enriquecer con favorito, liveness y actividad social (datos ya persistidos).
+  const fp = (lead.digital_footprint ?? {}) as {
+    social_activity?: { profiles?: Record<string, ContactSocialActivity> };
+    heuristic_discovery?: { selected?: Record<string, { liveness?: ContactLiveness } | null> };
+  };
+  const socialProfiles = fp.social_activity?.profiles ?? {};
+  const selected = fp.heuristic_discovery?.selected ?? {};
+  const favorites = ((lead as { favorite_contacts?: Array<{ kind: string; value: string }> }).favorite_contacts ?? []);
+  const isFav = (p: ContactPoint): boolean =>
+    favorites.some((f) => f.kind === p.kind && f.value.trim().toLowerCase() === p.value.trim().toLowerCase());
+
+  for (const point of points) {
+    point.favorite = isFav(point);
+    if (point.kind === "instagram" || point.kind === "facebook") {
+      const profile = socialProfiles[point.kind];
+      if (profile) point.activity = profile;
+      const liveness = selected[point.kind]?.liveness ?? null;
+      if (liveness) point.liveness = liveness;
+    }
+  }
 
   const order: ContactPointKind[] = ["whatsapp", "phone", "email", "instagram", "facebook", "website", "address"];
   return points.sort((left, right) => order.indexOf(left.kind) - order.indexOf(right.kind) || left.value.localeCompare(right.value));
