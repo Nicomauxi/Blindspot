@@ -126,6 +126,13 @@ export const adminNavGroups: NavGroup[] = [
         roles: ["admin"],
       },
       {
+        href: "/admin/merge-candidates",
+        label: "Unión de leads",
+        description: "Revisar y confirmar uniones cross-source dudosas",
+        icon: MergeIcon,
+        roles: ["admin"],
+      },
+      {
         href: "/admin/audit-log",
         label: "Auditoría",
         description: "Cambios administrativos y trazabilidad",
@@ -432,6 +439,16 @@ function PlatformIcon({ className }: IconProps) {
       <path d="M7 4v16" />
       <path d="M17 10v10" />
       <path d="M4 17h16" />
+    </svg>
+  );
+}
+
+function MergeIcon({ className }: IconProps) {
+  return (
+    <svg {...iconProps(className)}>
+      <path d="M7 4v6a4 4 0 0 0 4 4h6" />
+      <path d="M17 4v6a4 4 0 0 1-4 4H7" />
+      <path d="M14 11l3 3-3 3" />
     </svg>
   );
 }

@@ -1353,9 +1353,13 @@ export type DiscoveryMapDensityLocation = {
   location_label: string;
   parent_location_key: string;
   parent_location_label: string;
+  aggregation_level: "country" | "regional" | "local" | "individual";
   lead_count: number;
   hot_leads_count: number;
   avg_prospect_score: number;
+  avg_marketing_score: number;
+  avg_software_score: number;
+  intensity_score: number;
   commercial_density_score: number;
   gps_points: Array<{ lat: number; lng: number }>;
   raw_gps_lead_count: number;
@@ -1364,6 +1368,14 @@ export type DiscoveryMapDensityLocation = {
 };
 
 export type DiscoveryLeadDensityGpsSource = "real" | "inferred" | "google";
+export type DiscoveryHeatMetric = "mixed" | "marketing" | "software" | "combined";
+
+export type DiscoveryMapViewportBounds = {
+  south: number;
+  west: number;
+  north: number;
+  east: number;
+};
 
 export type DiscoveryLeadDensityFilters = {
   location?: string;
@@ -1376,6 +1388,9 @@ export type DiscoveryLeadDensityFilters = {
   gps_source?: DiscoveryLeadDensityGpsSource[];
   zone_ids?: string[];
   limit?: number;
+  heat_metric?: DiscoveryHeatMetric;
+  zoom?: number;
+  bbox?: DiscoveryMapViewportBounds;
 };
 
 export type DiscoveryLeadDensityMeta = {
@@ -1386,6 +1401,10 @@ export type DiscoveryLeadDensityMeta = {
   filtered_leads: number;
   positioned_leads: number;
   grid_cell_size_km: number;
+  aggregation_mode: "country" | "regional" | "local" | "individual";
+  zoom_bucket: number;
+  viewport_lead_count: number;
+  cell_size_hint_km: number;
 };
 
 export type DiscoveryLocationSuggestion = {
@@ -1588,6 +1607,14 @@ export function buildDiscoveryGeoFilterQuery(params: DiscoveryLeadDensityFilters
   if (params.gps_source && params.gps_source.length > 0) qp.set("gps_source", params.gps_source.join(","));
   if (params.zone_ids && params.zone_ids.length > 0) qp.set("zone_ids", params.zone_ids.join(","));
   if (params.limit) qp.set("limit", String(params.limit));
+  if (params.heat_metric) qp.set("heat_metric", params.heat_metric);
+  if (params.zoom != null) qp.set("zoom", String(params.zoom));
+  if (params.bbox) {
+    qp.set("south", String(params.bbox.south));
+    qp.set("west", String(params.bbox.west));
+    qp.set("north", String(params.bbox.north));
+    qp.set("east", String(params.bbox.east));
+  }
   return qp;
 }
 
@@ -1596,7 +1623,7 @@ export async function getLeadDensity(
   params: DiscoveryLeadDensityFilters = {}
 ) {
   const qp = buildDiscoveryGeoFilterQuery(params);
-  return request<{ data: { locations: DiscoveryMapDensityLocation[]; exact_points: Array<{ lat: number; lng: number }>; geocoded_points: Array<{ lat: number; lng: number }>; meta: DiscoveryLeadDensityMeta } }>(`/api/v1/admin/geo/lead-density?${qp}`, {}, token);
+  return request<{ data: { locations: DiscoveryMapDensityLocation[]; exact_points: Array<{ lat: number; lng: number }>; geocoded_points: Array<{ lat: number; lng: number }>; viewport_leads: ZoneLead[]; meta: DiscoveryLeadDensityMeta } }>(`/api/v1/admin/geo/lead-density?${qp}`, {}, token);
 }
 
 // Costs
@@ -2283,4 +2310,52 @@ export async function deleteNicheAliasGroup(token: string, id: string) {
   return request<{ data: { deleted: string } }>(`/api/v1/admin/niches/groups/${id}`, {
     method: "DELETE",
   }, token);
+}
+
+// Merge candidates (cola de revisión de uniones cross-source)
+export type MergeCandidateLead = {
+  id: string;
+  name: string;
+  source: string;
+  address: string | null;
+  phone: string | null;
+  website: string | null;
+  niche: string | null;
+  prospect_score: number | null;
+};
+
+export type MergeCandidate = {
+  id: string;
+  match_kind: "phone" | "domain" | "email";
+  match_key: string;
+  same_city: boolean;
+  name_similarity: number;
+  reason: string;
+  created_at: string;
+  primary: MergeCandidateLead;
+  secondary: MergeCandidateLead;
+};
+
+export async function listMergeCandidates(token: string) {
+  return request<{ data: MergeCandidate[]; meta: { total: number } }>(
+    "/api/v1/admin/merge-candidates",
+    {},
+    token
+  );
+}
+
+export async function approveMergeCandidate(token: string, id: string) {
+  return request<{ data: { id: string; status: string; primary_lead_id: string } }>(
+    `/api/v1/admin/merge-candidates/${id}/approve`,
+    { method: "POST" },
+    token
+  );
+}
+
+export async function rejectMergeCandidate(token: string, id: string) {
+  return request<{ data: { id: string; status: string } }>(
+    `/api/v1/admin/merge-candidates/${id}/reject`,
+    { method: "POST" },
+    token
+  );
 }
