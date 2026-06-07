@@ -52,6 +52,43 @@ const CHANNEL_LABELS: Record<string, string> = {
 
 type ContactPointKind = ContactPoint["kind"];
 
+type SocialActivityProfileView = {
+  platform: string;
+  url: string;
+  followers: number | null;
+  posts: number | null;
+  likes: number | null;
+  audience_tier: "low" | "medium" | "high" | null;
+  activity_status: "active" | "abandoned" | "unknown";
+};
+
+type SocialActivityView = {
+  ran_at: string;
+  profiles: Record<string, SocialActivityProfileView>;
+  summary: {
+    has_social_presence: boolean;
+    active_platforms: string[];
+    abandoned_platforms: string[];
+    best_platform: string | null;
+    audience_tier: "low" | "medium" | "high" | null;
+    commercial_signals: string[];
+  };
+};
+
+const SOCIAL_SIGNAL_LABELS: Record<string, string> = {
+  red_activa: "Red activa",
+  red_abandonada: "Red abandonada",
+  alta_audiencia: "Alta audiencia",
+  audiencia_media: "Audiencia media",
+  alta_audiencia_sin_web: "Alta audiencia sin web",
+};
+
+const SOCIAL_STATUS_LABELS: Record<string, string> = {
+  active: "Activa",
+  abandoned: "Abandonada",
+  unknown: "Sin confirmar",
+};
+
 function formatSectionError(error: unknown, fallbackMessage: string) {
   if (error instanceof ApiError) {
     if (error.error_code === "assistant_unavailable") {
@@ -127,6 +164,8 @@ export default function LeadDetailPage() {
   const scoreBreakdown = lead?.score_breakdown ?? null;
   const inferredState = lead?.inferred_state ?? null;
   const digitalFootprint = lead?.digital_footprint ?? null;
+  const socialActivity =
+    (digitalFootprint as { social_activity?: SocialActivityView } | null)?.social_activity ?? null;
   const companyData = lead?.lead_company_data ?? null;
   const canonicalFields = lead?.canonical_fields ?? null;
 
@@ -399,6 +438,43 @@ export default function LeadDetailPage() {
           </div>
         </div>
       </SectionCard>
+
+      {socialActivity?.summary?.has_social_presence ? (
+        <SectionCard title="Actividad social" description="Presencia y audiencia detectadas en redes (datos públicos).">
+          <div className="mb-3 flex flex-wrap gap-2">
+            {(socialActivity.summary.commercial_signals ?? []).map((signal) => (
+              <span key={signal} className="rounded-full bg-sky-100 px-2.5 py-1 text-xs font-semibold text-sky-700">
+                {SOCIAL_SIGNAL_LABELS[signal] ?? signal}
+              </span>
+            ))}
+            {socialActivity.summary.audience_tier ? (
+              <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600">
+                Audiencia: {socialActivity.summary.audience_tier}
+              </span>
+            ) : null}
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            {Object.values(socialActivity.profiles ?? {}).map((profile) => (
+              <div key={profile.platform} className="rounded-xl border border-slate-200 bg-white p-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-semibold capitalize text-slate-900">{profile.platform}</span>
+                  <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600">
+                    {SOCIAL_STATUS_LABELS[profile.activity_status] ?? profile.activity_status}
+                  </span>
+                </div>
+                <div className="mt-1 flex flex-wrap gap-3 text-xs text-slate-500">
+                  {profile.followers != null ? <span>{profile.followers.toLocaleString("es-UY")} seguidores</span> : null}
+                  {profile.likes != null ? <span>{profile.likes.toLocaleString("es-UY")} likes</span> : null}
+                  {profile.posts != null ? <span>{profile.posts.toLocaleString("es-UY")} posts</span> : null}
+                </div>
+                <a href={profile.url} target="_blank" rel="noreferrer" className="mt-1 block truncate text-xs text-sky-600 hover:underline">
+                  {profile.url}
+                </a>
+              </div>
+            ))}
+          </div>
+        </SectionCard>
+      ) : null}
 
       {/* 4. Historial de seguimiento (si existe) */}
       {outreach.length > 0 ? (
