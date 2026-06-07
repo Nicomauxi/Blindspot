@@ -14,6 +14,7 @@ import type {
   Lead,
 } from "../../shared/types.js";
 import { fetchHtml } from "./http.js";
+import { detectLiveness, isHardDead } from "../social-enrich/liveness.js";
 
 const HeuristicConfigSchema = z.object({
   heuristic_discovery: z.object({
@@ -596,6 +597,29 @@ async function probeSocialCandidate(
     score += schemaCrossRef ? 0.2 : 0.3;
   }
 
+  // Liveness: descartar páginas muertas (borradas, redirigidas, título genérico). El og:title
+  // suele quedar cacheado; sin este chequeo una página muerta sumaba score por puro ruido.
+  const meta = extractLivenessMeta(fetched.html);
+  const liveness = detectLiveness({
+    platform: kind,
+    requestedUrl: url,
+    finalUrl: fetched.finalUrl,
+    httpStatus: fetched.status,
+    ogTitle: meta.ogTitle,
+    ogDescription: meta.ogDescription,
+    title: meta.title,
+    h1: meta.h1,
+    checkedAt: new Date().toISOString(),
+  });
+
+  // hard-dead anula el candidato (no debe asignarse ni confirmarse). soft-dead lo atenúa.
+  if (isHardDead(liveness)) {
+    score = 0;
+    signals.length = 0;
+  } else if (liveness.state === "dead") {
+    score = Number((score * 0.4).toFixed(2));
+  }
+
   return {
     kind,
     url,
@@ -604,7 +628,31 @@ async function probeSocialCandidate(
     status: "probed",
     http_status: fetched.status,
     final_url: fetched.finalUrl,
+    liveness,
     ...(fetched.error ? { error: fetched.error } : {}),
+  };
+}
+
+// Extrae og:title / og:description / <title> / primer <h1> de un HTML crudo para liveness.
+function extractLivenessMeta(html: string | null): {
+  ogTitle: string | null;
+  ogDescription: string | null;
+  title: string | null;
+  h1: string | null;
+} {
+  if (!html) return { ogTitle: null, ogDescription: null, title: null, h1: null };
+  const metaContent = (prop: string): string | null => {
+    const re = new RegExp(`<meta[^>]+(?:property|name)=["']${prop}["'][^>]*content=["']([^"']*)["']`, "i");
+    const alt = new RegExp(`<meta[^>]+content=["']([^"']*)["'][^>]*(?:property|name)=["']${prop}["']`, "i");
+    return html.match(re)?.[1] ?? html.match(alt)?.[1] ?? null;
+  };
+  const title = html.match(/<title[^>]*>([^<]*)<\/title>/i)?.[1]?.trim() ?? null;
+  const h1 = html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i)?.[1]?.replace(/<[^>]+>/g, "").trim() ?? null;
+  return {
+    ogTitle: metaContent("og:title"),
+    ogDescription: metaContent("og:description"),
+    title,
+    h1,
   };
 }
 

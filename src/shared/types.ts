@@ -116,6 +116,8 @@ export interface HeuristicCandidate {
   http_status?: number | null;
   final_url?: string | null;
   error?: string;
+  // Estado de "vida" de la red (FB/IG): si la página realmente existe y es funcional.
+  liveness?: import("../modules/social-enrich/liveness.js").Liveness;
 }
 
 export interface HeuristicWhatsappCandidate {
@@ -238,6 +240,7 @@ export interface PlaywrightFacebookSearchResult {
   whatsapp_button: boolean;
   confidence: number;
   signals: PlaywrightSocialSignal[];
+  liveness?: import("../modules/social-enrich/liveness.js").Liveness;
 }
 
 export interface PlaywrightInstagramSearchResult {
@@ -250,6 +253,7 @@ export interface PlaywrightInstagramSearchResult {
   has_contact_button: boolean;
   confidence: number;
   signals: PlaywrightSocialSignal[];
+  liveness?: import("../modules/social-enrich/liveness.js").Liveness;
 }
 
 export interface PlaywrightSocialSearch {
