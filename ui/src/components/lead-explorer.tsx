@@ -13,8 +13,11 @@ import {
   listNicheAliasGroups,
   type CommercialOfferType,
   type DiscoveryGeoZone,
+  type DiscoveryHeatMetric,
   type DiscoveryLeadDensityFilters,
+  type DiscoveryLeadDensityMeta,
   type DiscoveryMapDensityLocation,
+  type DiscoveryMapViewportBounds,
   type LeadDashboard,
   type LeadGeoSelection,
   type NicheAliasGroup,
@@ -76,7 +79,7 @@ const FULL_PAGE_SIZE = 50;
 const EMBEDDED_PAGE_SIZE = 10;
 const EMBEDDED_LIST_VIEWPORT_CLASS = "max-h-[52rem] overflow-y-auto pr-1";
 const DEFAULT_SORT = "created_at:desc";
-const DEFAULT_DENSITY_FILTERS: DiscoveryLeadDensityFilters = { prospect_score_gte: 0, limit: 4000 };
+const DEFAULT_DENSITY_FILTERS: DiscoveryLeadDensityFilters = { prospect_score_gte: 0, limit: 4000, heat_metric: "mixed" };
 const SOURCE_OPTIONS = [
   { value: "", label: "Todas las fuentes" },
   { value: "yelu", label: "Yelu" },
@@ -112,8 +115,12 @@ const SORT_OPTIONS = [
   { value: "offer_balance:desc", label: "Mayor diferencia de señal" },
 ] as const;
 
+// Umbral canónico de "hot lead" (prospect_score). Alineado con el backend
+// (discovery-insights, performance, costs usan >= 55).
+const HOT_LEAD_THRESHOLD = 55;
+
 const PRESETS = [
-  { id: "hot", label: "Hot leads", description: "Score 70+", apply: () => ({ minScore: "70" }) },
+  { id: "hot", label: "Hot leads", description: `Score ${HOT_LEAD_THRESHOLD}+`, apply: () => ({ minScore: String(HOT_LEAD_THRESHOLD) }) },
   { id: "tier_a", label: "Tier A", description: "Mejor base de contacto", apply: () => ({ tier: "A" }) },
   { id: "google", label: "Google Places", description: "Barrido por fuente", apply: () => ({ source: "google_places" }) },
   { id: "offer", label: "Oferta sugerida", description: "Ordenar por score", apply: () => ({ sortValue: "prospect_score:desc" }) },
@@ -515,6 +522,7 @@ export function LeadExplorer({ mode, initialFilters, pageSize, geoSelection, onG
   const [pageIndex, setPageIndex] = useState(0);
 
   const [densityLocations, setDensityLocations] = useState<DiscoveryMapDensityLocation[]>([]);
+  const [densityMeta, setDensityMeta] = useState<DiscoveryLeadDensityMeta | null>(null);
   const [densityLoading, setDensityLoading] = useState(false);
   const [densityError, setDensityError] = useState<string | null>(null);
   const [zoneOptions, setZoneOptions] = useState<DiscoveryGeoZone[]>([]);
@@ -526,6 +534,10 @@ export function LeadExplorer({ mode, initialFilters, pageSize, geoSelection, onG
   const [zoneLeadsTotal, setZoneLeadsTotal] = useState(0);
   const [zoneLeadsLoading, setZoneLeadsLoading] = useState(false);
   const [zoneLeadsError, setZoneLeadsError] = useState<string | null>(null);
+  const [draftHeatMetric, setDraftHeatMetric] = useState<DiscoveryHeatMetric>("mixed");
+  const [appliedHeatMetric, setAppliedHeatMetric] = useState<DiscoveryHeatMetric>("mixed");
+  const [mapViewport, setMapViewport] = useState<{ zoom?: number; bbox?: DiscoveryMapViewportBounds }>({});
+  const [viewportLeads, setViewportLeads] = useState<ZoneLead[]>([]);
   const [draftGeoSelection, setDraftGeoSelection] = useState<GeoSelectionDraft>({
     zoneIds: zoneIdsFromFilters(initialState),
     selectedLocationKey: selectedLocationKeyFromFilters(initialState),
@@ -539,6 +551,7 @@ export function LeadExplorer({ mode, initialFilters, pageSize, geoSelection, onG
   const previousFilterKey = useRef<string | null>(null);
   const previousCursor = useRef<string | null>(pageCursors[0] ?? null);
   const latestUrlRef = useRef<string | null>(null);
+  const previousDensityFilterKey = useRef<string | null>(null);
 
   const currentCursor = pageCursors[pageIndex] ?? null;
   const loading = loadingPhase !== null;
@@ -549,8 +562,8 @@ export function LeadExplorer({ mode, initialFilters, pageSize, geoSelection, onG
   const currentEnd = total === 0 ? 0 : pageIndex * effectivePageSize + leads.length;
   const sortParams = useMemo(() => parseSortValue(appliedFilters.sortValue), [appliedFilters.sortValue]);
 
-  const draftDensityFilters = useMemo(() => buildDensityFilters(draftFilters, draftGeoSelection.zoneIds), [draftFilters, draftGeoSelection.zoneIds]);
-  const appliedDensityFilters = useMemo(() => buildDensityFilters(appliedFilters, appliedGeoSelection.zoneIds), [appliedFilters, appliedGeoSelection.zoneIds]);
+  const draftDensityFilters = useMemo(() => ({ ...buildDensityFilters(draftFilters, draftGeoSelection.zoneIds), heat_metric: draftHeatMetric }), [draftFilters, draftGeoSelection.zoneIds, draftHeatMetric]);
+  const appliedDensityFilters = useMemo(() => ({ ...buildDensityFilters(appliedFilters, appliedGeoSelection.zoneIds), heat_metric: appliedHeatMetric }), [appliedFilters, appliedGeoSelection.zoneIds, appliedHeatMetric]);
   const draftGeoAppliedValues = useMemo(
     () => buildEffectiveGeoFilters(draftGeoSelection.selectedLocationKey, densityLocations, draftGeoSelection.zoneIds, zoneOptions),
     [densityLocations, draftGeoSelection.selectedLocationKey, draftGeoSelection.zoneIds, zoneOptions]
@@ -574,7 +587,7 @@ export function LeadExplorer({ mode, initialFilters, pageSize, geoSelection, onG
     : null;
   const geoSelectionLabel = geoSelection?.label ?? (effectiveDraftFilters.gridLocationKeys.length > 0 || effectiveDraftFilters.parentLocationKeys.length > 0 ? "Zona geográfica" : "");
   const fullExplorerHref = useMemo(() => buildExplorerHref(effectiveDraftFilters), [effectiveDraftFilters]);
-  const hasPendingChanges = serializeExplorerFilters(effectiveDraftFilters) !== serializeExplorerFilters(appliedFilters);
+  const hasPendingChanges = serializeExplorerFilters(effectiveDraftFilters) !== serializeExplorerFilters(appliedFilters) || draftHeatMetric !== appliedHeatMetric;
   const appliedFilterCount = buildSelectedFilters(
     appliedFilters,
     appliedGeoAppliedValues.label,
@@ -700,6 +713,8 @@ export function LeadExplorer({ mode, initialFilters, pageSize, geoSelection, onG
 
     setDraftFilters(nextFilters);
     setAppliedFilters(nextFilters);
+    setDraftHeatMetric("mixed");
+    setAppliedHeatMetric("mixed");
     setDraftGeoSelection({
       zoneIds: zoneIdsFromFilters(nextFilters),
       selectedLocationKey: selectedLocationKeyFromFilters(nextFilters),
@@ -721,6 +736,8 @@ export function LeadExplorer({ mode, initialFilters, pageSize, geoSelection, onG
     });
     setDraftFilters(nextFilters);
     setAppliedFilters(nextFilters);
+    setDraftHeatMetric("mixed");
+    setAppliedHeatMetric("mixed");
     resetToFirstPage();
   }, [geoSelection?.grid_location_keys, geoSelection?.parent_location_keys, isFull, resetToFirstPage]);
 
@@ -752,31 +769,45 @@ export function LeadExplorer({ mode, initialFilters, pageSize, geoSelection, onG
   useEffect(() => {
     if (!token || !isFull) return;
 
+    const filterKey = JSON.stringify(appliedDensityFilters);
+    const filtersChanged = previousDensityFilterKey.current !== filterKey;
+    previousDensityFilterKey.current = filterKey;
     setDensityLoading(true);
-    getLeadDensity(token, appliedDensityFilters)
-      .then((res) => {
-        setDensityLocations(res.data.locations);
-        setDensityError(null);
-        setDraftGeoSelection((current) => ({
-          ...current,
-          selectedLocationKey: res.data.locations.some((location) => location.location_key === current.selectedLocationKey)
-            ? current.selectedLocationKey
-            : null,
-        }));
-        setAppliedGeoSelection((current) => ({
-          ...current,
-          selectedLocationKey: res.data.locations.some((location) => location.location_key === current.selectedLocationKey)
-            ? current.selectedLocationKey
-            : null,
-        }));
-      })
-      .catch((err) => {
-        setDensityLocations([]);
-        setDensityError(err instanceof Error ? err.message : "No se pudo cargar el mapa de leads.");
-        setDraftGeoSelection((current) => ({ ...current, selectedLocationKey: null }));
-      })
-      .finally(() => setDensityLoading(false));
-  }, [appliedDensityFilters, isFull, token]);
+    const timeout = window.setTimeout(() => {
+      getLeadDensity(token, { ...appliedDensityFilters, ...mapViewport })
+        .then((res) => {
+          setDensityLocations(res.data.locations);
+          setDensityMeta(res.data.meta);
+          setViewportLeads(res.data.viewport_leads ?? []);
+          setDensityError(null);
+          setDraftGeoSelection((current) => ({
+            ...current,
+            selectedLocationKey: res.data.locations.some((location) => location.location_key === current.selectedLocationKey)
+              ? current.selectedLocationKey
+              : null,
+          }));
+          setAppliedGeoSelection((current) => ({
+            ...current,
+            selectedLocationKey: res.data.locations.some((location) => location.location_key === current.selectedLocationKey)
+              ? current.selectedLocationKey
+              : null,
+          }));
+        })
+        .catch((err) => {
+          setDensityLocations([]);
+          setDensityMeta(null);
+          setViewportLeads([]);
+          setDensityError(err instanceof Error ? err.message : "No se pudo cargar el mapa de leads.");
+          setDraftGeoSelection((current) => ({ ...current, selectedLocationKey: null }));
+        })
+        .finally(() => setDensityLoading(false));
+    }, filtersChanged ? 0 : 180);
+
+    return () => {
+      window.clearTimeout(timeout);
+      setDensityLoading(false);
+    };
+  }, [appliedDensityFilters, isFull, mapViewport, token]);
 
   useEffect(() => {
     if (!token || !isFull) return;
@@ -841,6 +872,7 @@ export function LeadExplorer({ mode, initialFilters, pageSize, geoSelection, onG
       : effectiveDraftFilters;
 
     setAppliedFilters(nextAppliedFilters);
+    setAppliedHeatMetric(draftHeatMetric);
     if (isFull) {
       setAppliedGeoSelection({ ...draftGeoSelection });
     }
@@ -851,6 +883,8 @@ export function LeadExplorer({ mode, initialFilters, pageSize, geoSelection, onG
     const empty = createEmptyFilterState();
     setDraftFilters(empty);
     setAppliedFilters(empty);
+    setDraftHeatMetric("mixed");
+    setAppliedHeatMetric("mixed");
     if (isFull) {
       setDraftGeoSelection({ zoneIds: [], selectedLocationKey: null });
       setAppliedGeoSelection({ zoneIds: [], selectedLocationKey: null });
@@ -967,6 +1001,23 @@ export function LeadExplorer({ mode, initialFilters, pageSize, geoSelection, onG
             onChange={(event) => setDraftFilters((current) => buildFilterState({ ...current, minScore: event.target.value }))}
             className="w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500"
           />
+          <div className="mt-2">
+            <FilterChip
+              label={`🔥 Solo hot leads (${HOT_LEAD_THRESHOLD}+)`}
+              active={draftFilters.minScore.trim() !== "" && Number(draftFilters.minScore) >= HOT_LEAD_THRESHOLD}
+              onClick={() =>
+                setDraftFilters((current) =>
+                  buildFilterState({
+                    ...current,
+                    minScore:
+                      current.minScore.trim() !== "" && Number(current.minScore) >= HOT_LEAD_THRESHOLD
+                        ? ""
+                        : String(HOT_LEAD_THRESHOLD),
+                  })
+                )
+              }
+            />
+          </div>
         </div>
         <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
           <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Fuente</p>
@@ -1087,11 +1138,15 @@ export function LeadExplorer({ mode, initialFilters, pageSize, geoSelection, onG
       <SectionCard title="Mapa como filtro" description="Usá la misma vista cartográfica de Inicio para recortar el listado por zona o cuadrícula antes de aplicar el barrido comercial.">
         <LeadReviewMap
           locations={densityLocations}
+          meta={densityMeta}
           loadError={densityError}
           selectedLocationKey={draftGeoSelection.selectedLocationKey}
           onSelect={(location) => setDraftGeoSelection((current) => ({ ...current, selectedLocationKey: location.location_key }))}
           filters={draftDensityFilters}
-          onFiltersChange={(filters) => setDraftGeoSelection((current) => ({ ...current, zoneIds: filters.zone_ids ?? [] }))}
+          onFiltersChange={(filters) => {
+            setDraftGeoSelection((current) => ({ ...current, zoneIds: filters.zone_ids ?? [] }));
+            if (filters.heat_metric) setDraftHeatMetric(filters.heat_metric);
+          }}
           nicheSuggestions={[]}
           nicheGroups={nicheGroups}
           loading={densityLoading}
@@ -1101,6 +1156,8 @@ export function LeadExplorer({ mode, initialFilters, pageSize, geoSelection, onG
           zonesLoading={zoneOptionsLoading}
           zonesError={zoneOptionsError}
           zoneLeads={zoneLeads}
+          viewportLeads={viewportLeads}
+          onViewportChange={setMapViewport}
           zoneLeadsTotal={zoneLeadsTotal}
           zoneLeadsLoading={zoneLeadsLoading}
           zoneLeadsError={zoneLeadsError}
