@@ -8,6 +8,26 @@ La fuente operativa del modelo real sigue siendo:
 - contratos y restricciones resumidos en `context/ARCHITECTURE.md`
 - convenciones de datos relevantes en `context/FUTURE.md`
 
+## Liveness de redes (FB/IG)
+
+`digital_footprint.heuristic_discovery.selected.{facebook,instagram}.liveness` guarda si la
+red realmente existe: `{ state: alive|dead|unverified, reason, http_status, final_url,
+checked_at, detector_version }`. **hard-dead** (`deleted`/`redirected_home`/`generic_title`/
+`http_error`) descarta la red y limpia los tags `*-confirmed`/`*-heuristic`, agregando `*-dead`.
+**soft-dead** (`private`/`login_wall`) solo atenúa. Una red `*-dead` no cuenta como contacto
+accionable (`qualifyExternalLead`) ni muestra actividad social.
+
+## `leads.favorite_contacts`
+
+Array JSONB `[{ kind, value, marked_by, marked_at }]` de contactos/redes marcados como
+favoritos para seguimiento. Reemplazo total vía `PATCH /leads/:id/favorite-contacts`.
+
+## `lead_feedback.rejection_reason` / `reassign_to_lead_id`
+
+Al marcar un dato incorrecto: `rejection_reason` (CHECK: `no_pertenece_al_lead` |
+`dato_desactualizado` | `fuera_de_servicio` | `otro`) y, solo con `no_pertenece_al_lead`,
+`reassign_to_lead_id` (FK) como **señal auditada** — no muta el lead destino.
+
 ## `gps` en fuentes externas
 
 `leads.gps` (`geography(Point,4326)`) ahora se persiste también para fuentes externas
