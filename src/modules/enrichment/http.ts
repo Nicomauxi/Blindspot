@@ -3,7 +3,9 @@ import pRetry from "p-retry";
 import { getLogger } from "../../shared/logger.js";
 
 export const USER_AGENT = "blindspot/1.0";
-export const FETCH_TIMEOUT_MS = 8_000;
+// Configurables por env para reprocesos masivos (fail-fast en dominios muertos).
+export const FETCH_TIMEOUT_MS = Number(process.env["FETCH_TIMEOUT_MS"] ?? "8000");
+export const FETCH_RETRIES = Number(process.env["FETCH_RETRIES"] ?? "2");
 export const MAX_BODY_BYTES = 2 * 1024 * 1024;
 
 export interface FetchHtmlResult {
@@ -111,7 +113,7 @@ export async function fetchHtml(url: string): Promise<FetchHtmlResult> {
   const log = getLogger();
   try {
     return await pRetry(() => attemptFetch(url), {
-      retries: 2,
+      retries: FETCH_RETRIES,
       factor: 2,
       minTimeout: 500,
       onFailedAttempt: (ctx) => {
