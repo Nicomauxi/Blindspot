@@ -19,6 +19,7 @@ export async function createRun(params: {
       profile: params.profile,
       config: params.config,
       status: "running",
+      kind: "discovery",
     })
     .select()
     .single();
@@ -150,7 +151,7 @@ export async function createEnrichmentRun(params: {
 
   const { data, error } = await getSupabase()
     .from("runs")
-    .insert({ niche, location, profile, config, status: "running" })
+    .insert({ niche, location, profile, config, status: "running", kind: "enrichment" })
     .select()
     .single();
 
@@ -184,6 +185,7 @@ export async function createScoringRun(params: {
         dry_run: dryRun,
       },
       status: "running",
+      kind: "scoring",
     })
     .select()
     .single();
