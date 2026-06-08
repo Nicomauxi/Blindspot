@@ -297,8 +297,18 @@ export async function buildMonitoringOverview() {
     db.from("discovery_jobs").select("*", { count: "exact", head: true }).eq("status", "running"),
     db.from("discovery_jobs").select("*", { count: "exact", head: true }).eq("status", "completed"),
     db.from("discovery_jobs").select("*", { count: "exact", head: true }).eq("status", "failed"),
+    // Runs activos de la tabla `runs` (enrichment/scoring/social, incluye los lanzados por terminal).
+    db
+      .from("runs")
+      .select("id, kind, status, started_at, niche, location")
+      .eq("status", "running")
+      .order("started_at", { ascending: false })
+      .limit(50),
   ]);
   const dbLatency = round(diffMs(dbStartedAt, Date.now()), 1);
+  const activeRunsTableRows = settled[11]?.status === "fulfilled"
+    ? ((settled[11].value as { data: unknown }).data as Array<{ id: string; kind: string | null; status: string; started_at: string; niche: string | null; location: string | null }> ?? [])
+    : [];
 
   const settled0 = settled[0].status === "fulfilled" ? settled[0].value : { data: null, error: new Error("query failed") };
   const settled1 = settled[1].status === "fulfilled" ? settled[1].value : { data: null, error: new Error("query failed") };
@@ -334,6 +344,24 @@ export async function buildMonitoringOverview() {
     isWithinRange(row.occurred_at, performanceWindow.start, performanceWindow.end)
   );
   const lastRun = runsRecent[0] ?? null;
+
+  // Lista UNIFICADA de runs activos: pipeline + enrichment/scoring/social (tabla runs,
+  // incluye los lanzados por terminal) + discovery jobs en curso. El "run activo" es el más
+  // nuevo y active_run_count es cuántos corren en simultáneo.
+  type ActiveRun = { id: string; kind: string; status: string; started_at: string | null; label: string | null };
+  const activeRunsUnified: ActiveRun[] = [];
+  if (activeRun) {
+    activeRunsUnified.push({ id: activeRun.id, kind: "pipeline", status: activeRun.status, started_at: activeRun.started_at ?? activeRun.created_at ?? null, label: null });
+  }
+  for (const r of activeRunsTableRows) {
+    activeRunsUnified.push({ id: r.id, kind: r.kind ?? "enrichment", status: r.status, started_at: r.started_at, label: [r.niche, r.location].filter(Boolean).join(" · ") || null });
+  }
+  for (const j of discoveryRecent) {
+    if (j.status === "running" || j.status === "queued") {
+      activeRunsUnified.push({ id: j.id, kind: "discovery", status: j.status, started_at: j.started_at ?? j.created_at ?? null, label: [j.source, j.location].filter(Boolean).join(" · ") || null });
+    }
+  }
+  activeRunsUnified.sort((a, b) => (b.started_at ?? "").localeCompare(a.started_at ?? ""));
 
   const cronMissed =
     config?.enabled &&
@@ -485,7 +513,9 @@ export async function buildMonitoringOverview() {
       last_run_at: lastRun?.completed_at ?? lastRun?.created_at ?? null,
       last_completed_at: config?.last_completed_at ?? null,
       last_status: lastRun?.status ?? null,
-      active_run: activeRun,
+      active_run: activeRunsUnified[0] ?? activeRun,
+      active_runs: activeRunsUnified,
+      active_run_count: activeRunsUnified.length,
       recent: runsRecent.slice(0, 10),
       runs_by_trigger: summarizeRuns(runsRecent),
     },
