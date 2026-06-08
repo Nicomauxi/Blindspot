@@ -211,8 +211,12 @@ async function executeEnrichmentRun(
 ): Promise<EnrichCommandResult> {
   const log = getLogger();
   const startedAt = Date.now();
+  // El modo heurístico dispara muchos sub-requests por lead, por eso se capa la
+  // concurrencia. El tope es configurable por env (ENRICH_HEURISTIC_MAX_CONCURRENCY,
+  // default 2) para poder acelerar reprocesos cuando hay recursos disponibles.
+  const heuristicCap = Math.max(1, Number(process.env["ENRICH_HEURISTIC_MAX_CONCURRENCY"] ?? "2"));
   const effectiveConcurrency = options.withHeuristic
-    ? Math.min(options.concurrency, 2)
+    ? Math.min(options.concurrency, heuristicCap)
     : options.concurrency;
 
   try {

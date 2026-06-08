@@ -12,7 +12,9 @@ NODE="node --env-file=.env --import tsx/esm"
 log "REPROCESS START"
 
 log "1/4 ENRICH (heuristic + HTML + WHOIS + inferred-state) START"
-$NODE src/cli/index.ts enrich --all --with-heuristic --force-refresh --concurrency 16 \
+# ENRICH_FORCE: "--force-refresh" (default, reproceso total) o "" (resume: saltea frescos).
+# ENRICH_CONC: concurrencia base. ENRICH_HEURISTIC_MAX_CONCURRENCY: cap efectivo en modo heurístico.
+$NODE src/cli/index.ts enrich --all --with-heuristic ${ENRICH_FORCE---force-refresh} --concurrency "${ENRICH_CONC:-16}" \
   && log "1/4 ENRICH DONE" || log "1/4 ENRICH FALLO (continuo)"
 
 log "2/4 SOCIAL-ENRICH (actividad + liveness) START"
