@@ -280,7 +280,22 @@ export function MonitoringSection() {
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
             <StatCard label="Estado global" value={overview.status === "degraded" ? "Degradado" : "Operativo"} hint={`DB ${overview.health.db_connected ? "conectada" : "con error"}`} tone={statusTone} />
             <StatCard label="Latencia DB" value={`${overview.health.db_latency_ms.toFixed(1)} ms`} hint={overview.health.cron_missed ? "Cron atrasado" : "Cron dentro de ventana"} tone={overview.health.cron_missed ? "warn" : "info"} />
-            <StatCard label="Run activo" value={overview.pipeline.active_run ? overview.pipeline.active_run.status : "Ninguno"} hint={overview.pipeline.active_run ? overview.pipeline.active_run.id.slice(0, 8) : "Sin ejecución en curso"} tone={overview.pipeline.active_run ? "warn" : "default"} />
+            {(() => {
+              const ar = overview.pipeline.active_runs?.[0] ?? null;
+              const count = overview.pipeline.active_run_count ?? (overview.pipeline.active_run ? 1 : 0);
+              const value = ar ? ar.status : overview.pipeline.active_run?.status ?? "Ninguno";
+              const hint = ar ? `${ar.kind}${ar.label ? " · " + ar.label : ""}` : overview.pipeline.active_run ? overview.pipeline.active_run.id.slice(0, 8) : "Sin ejecución en curso";
+              return (
+                <div className="relative">
+                  <StatCard label="Run activo" value={value} hint={hint} tone={count > 0 ? "warn" : "default"} />
+                  {count > 0 ? (
+                    <span className="absolute bottom-2 right-2 rounded-full bg-sky-600 px-2 py-0.5 text-[11px] font-semibold text-white shadow-sm">
+                      {count} en simultáneo
+                    </span>
+                  ) : null}
+                </div>
+              );
+            })()}
             <StatCard label="Budget GP" value={overview.costs.google_places.budget_remaining != null ? `USD ${overview.costs.google_places.budget_remaining.toFixed(2)}` : "n/a"} hint={`${overview.costs.google_places.request_count} requests este mes`} tone={overview.costs.google_places.over_alert ? "warn" : "good"} />
             <StatCard label="Errores recientes" value={overview.logs.recent.length} hint={`Ventana ${overview.performance.window_days} días`} tone={overview.logs.recent.length > 0 ? "warn" : "default"} />
           </div>

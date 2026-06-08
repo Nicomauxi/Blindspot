@@ -184,6 +184,8 @@ export type AdminSystemStatus = {
     last_status: string | null;
     missed: boolean;
     active_run: PipelineRun | null;
+    active_runs?: Array<{ id: string; kind: string; status: string; started_at: string | null; label: string | null }>;
+    active_run_count?: number;
     runs_recent: Record<string, { total: number; last_status: string | null; last_run_at: string | null }>;
     recent: PipelineRun[];
   };
@@ -314,6 +316,8 @@ export type MonitoringOverview = {
     last_completed_at: string | null;
     last_status: string | null;
     active_run: PipelineRun | null;
+    active_runs?: Array<{ id: string; kind: string; status: string; started_at: string | null; label: string | null }>;
+    active_run_count?: number;
     recent: PipelineRun[];
     runs_by_trigger: Record<string, { total: number; last_status: string | null; last_run_at: string | null }>;
   };
