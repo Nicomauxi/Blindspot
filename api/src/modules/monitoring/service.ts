@@ -244,6 +244,118 @@ async function safeBackupOverview(): Promise<BackupOverview | null> {
   }
 }
 
+// ─── Lista unificada de runs (Estado del run, IA Parte A) ────────────────────────
+// pipeline_runs (con fases) + tabla runs (enrichment/scoring/social) + discovery_jobs,
+// normalizados a un shape común para la UI — incluye terminados, no sólo activos.
+
+export const UNIFIED_RUN_KINDS = ["pipeline", "enrichment", "scoring", "social", "discovery"] as const;
+
+export interface UnifiedRunItem {
+  id: string;
+  kind: string;
+  status: string;
+  started_at: string | null;
+  finished_at: string | null;
+  label: string | null;
+  // Encadenamiento (p. ej. scoring post-enrich): id del run que lo originó.
+  source_run_id: string | null;
+  progress: Record<string, unknown> | null;
+  phases: unknown;
+}
+
+// Los runs de enrichment por filtro usan sentinels __enrichment_*__ en niche/location:
+// no son labels visibles.
+function cleanRunLabel(parts: Array<string | null | undefined>): string | null {
+  const visible = parts.filter(
+    (p): p is string => typeof p === "string" && p.length > 0 && !p.startsWith("__")
+  );
+  return visible.length > 0 ? visible.join(" · ") : null;
+}
+
+export async function listUnifiedRuns(
+  opts: { types?: string[]; limit?: number } = {}
+): Promise<UnifiedRunItem[]> {
+  const db = getDb();
+  const limit = Math.max(1, Math.min(opts.limit ?? 30, 100));
+
+  const [pipelineRes, runsRes, discoveryRes] = await Promise.allSettled([
+    db
+      .from("pipeline_runs")
+      .select("id, status, triggered_by, created_at, started_at, completed_at, phase_results")
+      .order("created_at", { ascending: false })
+      .limit(limit),
+    db
+      .from("runs")
+      .select("id, kind, status, started_at, finished_at, niche, location, config, stats")
+      .order("started_at", { ascending: false })
+      .limit(limit),
+    db
+      .from("discovery_jobs")
+      .select("id, source, location, niche, status, created_at, started_at, completed_at")
+      .order("created_at", { ascending: false })
+      .limit(limit),
+  ]);
+
+  const items: UnifiedRunItem[] = [];
+
+  if (pipelineRes.status === "fulfilled") {
+    type PipelineRow = { id: string; status: string; triggered_by: string | null; created_at: string | null; started_at: string | null; completed_at: string | null; phase_results: unknown };
+    for (const r of (((pipelineRes.value as { data: unknown }).data ?? []) as PipelineRow[])) {
+      items.push({
+        id: r.id,
+        kind: "pipeline",
+        status: r.status,
+        started_at: r.started_at ?? r.created_at ?? null,
+        finished_at: r.completed_at ?? null,
+        label: cleanRunLabel([r.triggered_by ? `por ${r.triggered_by}` : null]),
+        source_run_id: null,
+        progress: null,
+        phases: r.phase_results ?? null,
+      });
+    }
+  }
+
+  if (runsRes.status === "fulfilled") {
+    type RunRow = { id: string; kind: string | null; status: string; started_at: string | null; finished_at: string | null; niche: string | null; location: string | null; config: Record<string, unknown> | null; stats: Record<string, unknown> | null };
+    for (const r of (((runsRes.value as { data: unknown }).data ?? []) as RunRow[])) {
+      const sourceRunId = r.config?.["source_run_id"];
+      items.push({
+        id: r.id,
+        kind: r.kind ?? "enrichment",
+        status: r.status,
+        started_at: r.started_at,
+        finished_at: r.finished_at ?? null,
+        label: cleanRunLabel([r.niche, r.location]),
+        source_run_id: typeof sourceRunId === "string" ? sourceRunId : null,
+        progress: r.stats ?? null,
+        phases: null,
+      });
+    }
+  }
+
+  if (discoveryRes.status === "fulfilled") {
+    type DiscoveryRow = { id: string; source: string | null; location: string | null; niche: string | null; status: string; created_at: string | null; started_at: string | null; completed_at: string | null };
+    for (const r of (((discoveryRes.value as { data: unknown }).data ?? []) as DiscoveryRow[])) {
+      items.push({
+        id: r.id,
+        kind: "discovery",
+        status: r.status,
+        started_at: r.started_at ?? r.created_at ?? null,
+        finished_at: r.completed_at ?? null,
+        label: cleanRunLabel([r.source, r.location, r.niche]),
+        source_run_id: null,
+        progress: null,
+        phases: null,
+      });
+    }
+  }
+
+  const filtered =
+    opts.types && opts.types.length > 0 ? items.filter((i) => opts.types!.includes(i.kind)) : items;
+  filtered.sort((a, b) => (b.started_at ?? "").localeCompare(a.started_at ?? ""));
+  return filtered.slice(0, limit);
+}
+
 export async function buildMonitoringOverview() {
   const db = getDb();
   const dbStartedAt = Date.now();

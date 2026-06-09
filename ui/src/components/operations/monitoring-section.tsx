@@ -13,7 +13,7 @@ import {
   getApiLogs,
   startScheduler,
   restartScheduler,
-  listPipelineRuns,
+  listMonitoringRuns,
   resetDatabase,
   restartAll,
   restartSystemProcess,
@@ -25,6 +25,7 @@ import {
   type PipelineRun,
   type SchedulerStatusData,
   type SchedulerLogLine,
+  type UnifiedRun,
 } from "@/lib/api";
 import { useAuthStore } from "@/lib/auth-store";
 import { formatBackupSize } from "@/lib/backups";
@@ -48,6 +49,96 @@ const PHASE_STATUS_COLORS: Record<string, string> = {
   partial: "bg-amber-100 text-amber-700",
   failed: "bg-rose-100 text-rose-700",
 };
+
+const RUN_KIND_FILTERS = ["all", "pipeline", "enrichment", "scoring", "social", "discovery"] as const;
+
+const KIND_COLORS: Record<string, string> = {
+  pipeline: "bg-indigo-50 text-indigo-700",
+  enrichment: "bg-sky-50 text-sky-700",
+  scoring: "bg-emerald-50 text-emerald-700",
+  social: "bg-pink-50 text-pink-700",
+  discovery: "bg-amber-50 text-amber-700",
+};
+
+// Labels legibles para las stats de progreso de runs no-pipeline (tabla runs).
+const PROGRESS_LABELS: Record<string, string> = {
+  leads_processed: "Leads procesados",
+  leads_scored: "Leads re-scoreados",
+  significant_changes: "Cambios significativos",
+  fetched_ok: "Fetch OK",
+  fetched_error: "Fetch error",
+  processed: "Procesados",
+  errors: "Errores",
+  blocked: "Bloqueados",
+  skipped_cache_hit: "Cache hit",
+  skipped_no_website: "Sin website",
+  places_requests: "Requests Places",
+  leads_discovered: "Leads descubiertos",
+};
+
+function normalizeRunStatus(status: string): string {
+  return status === "pending" ? "queued" : status;
+}
+
+function runDurationLabel(run: UnifiedRun): string {
+  if (!run.started_at) return "en cola";
+  if (!run.finished_at) return "en curso";
+  const min = Math.max(Math.round((new Date(run.finished_at).getTime() - new Date(run.started_at).getTime()) / 60000), 0);
+  return `${min} min`;
+}
+
+function GenericRunDetail({ run }: { run: UnifiedRun }) {
+  const stats = Object.entries(run.progress ?? {}).filter(
+    (entry): entry is [string, number] => typeof entry[1] === "number" && Boolean(PROGRESS_LABELS[entry[0]])
+  );
+  return (
+    <div className="space-y-3">
+      <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className={cn("rounded-full px-2 py-1 text-xs font-semibold", KIND_COLORS[run.kind] ?? "bg-slate-100 text-slate-700")}>{run.kind}</span>
+          <span className={cn("rounded-full px-2 py-1 text-xs font-semibold", RUN_STATUS_COLORS[normalizeRunStatus(run.status)] ?? "bg-slate-100 text-slate-700")}>{normalizeRunStatus(run.status)}</span>
+          {run.source_run_id ? (
+            <span className="rounded-full bg-violet-50 px-2 py-1 text-[11px] font-semibold text-violet-700" title={run.source_run_id}>
+              ⛓ encadenado a {run.source_run_id.slice(0, 8)}
+            </span>
+          ) : null}
+        </div>
+        <p className="mt-3 font-mono text-xs text-slate-500">{run.id}</p>
+        {run.label ? <p className="mt-1 text-sm font-semibold text-slate-900">{run.label}</p> : null}
+      </div>
+
+      <div className="grid gap-3 md:grid-cols-3">
+        {[
+          { label: "Inicio", value: run.started_at ? formatRelative(run.started_at) : "En cola" },
+          { label: "Fin", value: run.finished_at ? formatRelative(run.finished_at) : "—" },
+          { label: "Duración", value: runDurationLabel(run) },
+        ].map(({ label, value }) => (
+          <div key={label} className="rounded-xl border px-3 py-3 theme-panel">
+            <div className="text-xs font-semibold uppercase tracking-wide theme-text-muted">{label}</div>
+            <div className="mt-1 text-sm theme-text-strong">{value}</div>
+          </div>
+        ))}
+      </div>
+
+      {stats.length > 0 ? (
+        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+          {stats.slice(0, 8).map(([key, value]) => (
+            <div key={key} className="rounded-xl bg-slate-50 px-3 py-2 text-xs text-slate-600">
+              <div className="font-semibold uppercase tracking-wide text-slate-400">{PROGRESS_LABELS[key]}</div>
+              <div className="mt-1 text-sm font-medium text-slate-800">{value}</div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="text-sm text-slate-500">
+          {normalizeRunStatus(run.status) === "running" || normalizeRunStatus(run.status) === "queued"
+            ? "En curso — sin stats todavía."
+            : "Sin stats registradas."}
+        </p>
+      )}
+    </div>
+  );
+}
 
 function ResourceBar({ label, used, total, pct }: { label: string; used: number; total: number; pct: number }) {
   const color = pct > 85 ? "bg-rose-500" : pct > 60 ? "bg-amber-500" : "bg-emerald-500";
@@ -74,10 +165,10 @@ export function MonitoringSection() {
   const [restartMessage, setRestartMessage] = useState<string | null>(null);
   const [schedulerStatus, setSchedulerStatus] = useState<SchedulerStatusData | null>(null);
   const [schedulerActionLoading, setSchedulerActionLoading] = useState(false);
-  const [runs, setRuns] = useState<PipelineRun[]>([]);
-  const [runsHasMore, setRunsHasMore] = useState(false);
-  const [runsCursor, setRunsCursor] = useState<string | null>(null);
+  const [unifiedRuns, setUnifiedRuns] = useState<UnifiedRun[]>([]);
+  const [runTypeFilter, setRunTypeFilter] = useState<string>("all");
   const [runsStatusFilter, setRunsStatusFilter] = useState<string>("all");
+  const [selectedUnified, setSelectedUnified] = useState<UnifiedRun | null>(null);
   const [selectedRun, setSelectedRun] = useState<PipelineRun | null>(null);
   const [runLogs, setRunLogs] = useState<PipelineLogLine[]>([]);
   const runPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -133,23 +224,20 @@ export function MonitoringSection() {
     return () => clearInterval(id);
   }, [token]);
 
-  const loadRuns = useCallback(async (statusFilter = runsStatusFilter, cursor?: string) => {
+  const loadUnifiedRuns = useCallback(async (typeFilter = runTypeFilter) => {
     if (!token) return;
     try {
-      const params: Parameters<typeof listPipelineRuns>[1] = { limit: 10 };
-      if (statusFilter !== "all") params.status = statusFilter;
-      if (cursor) params.cursor = cursor;
-      const res = await listPipelineRuns(token, params);
-      setRuns((prev) => cursor ? [...prev, ...res.data] : res.data);
-      setRunsHasMore(res.next_cursor !== null);
-      setRunsCursor(res.next_cursor);
-      if (!cursor) {
-        setSelectedRun((current) => current ? res.data.find((run) => run.id === current.id) ?? current : res.data[0] ?? null);
-      }
+      const params: { type?: string; limit?: number } = { limit: 30 };
+      if (typeFilter !== "all") params.type = typeFilter;
+      const res = await listMonitoringRuns(token, params);
+      setUnifiedRuns(res.data);
+      setSelectedUnified((current) =>
+        current ? res.data.find((run) => run.id === current.id) ?? current : res.data[0] ?? null
+      );
     } catch {
       // non-blocking: run status is best-effort
     }
-  }, [token, runsStatusFilter]);
+  }, [token, runTypeFilter]);
 
   const loadRunDetail = useCallback(async (runId: string) => {
     if (!token) return;
@@ -166,27 +254,43 @@ export function MonitoringSection() {
   }, [token]);
 
   useEffect(() => {
-    void loadRuns(runsStatusFilter);
-  }, [loadRuns, runsStatusFilter]);
+    void loadUnifiedRuns(runTypeFilter);
+  }, [loadUnifiedRuns, runTypeFilter]);
 
+  // El panel detallado de pipeline (fases + log en vivo) sólo aplica a runs de pipeline;
+  // el resto de los tipos se muestra con el panel genérico (label + progreso/stats).
   useEffect(() => {
-    if (!selectedRun?.id) return;
-    void loadRunDetail(selectedRun.id);
-  }, [loadRunDetail, selectedRun?.id]);
+    if (selectedUnified?.kind !== "pipeline") {
+      setSelectedRun(null);
+      setRunLogs([]);
+      return;
+    }
+    void loadRunDetail(selectedUnified.id);
+  }, [loadRunDetail, selectedUnified?.id, selectedUnified?.kind]);
 
-  const isActiveRun = selectedRun?.status === "running" || selectedRun?.status === "pending";
+  const isActiveSelected =
+    selectedUnified?.status === "running" ||
+    selectedUnified?.status === "pending" ||
+    selectedUnified?.status === "queued";
 
   useEffect(() => {
     // Only poll run detail when the selected run is actively executing.
     // Terminal runs (aborted/completed/partial/failed) never change — no need to re-fetch.
     runPollRef.current = setInterval(() => {
-      void loadRuns();
-      if (selectedRun?.id && isActiveRun) void loadRunDetail(selectedRun.id);
+      void loadUnifiedRuns();
+      if (selectedUnified?.kind === "pipeline" && selectedUnified?.id && isActiveSelected) {
+        void loadRunDetail(selectedUnified.id);
+      }
     }, 10000); // 10s instead of 5s — halves the request rate
     return () => {
       if (runPollRef.current) clearInterval(runPollRef.current);
     };
-  }, [isActiveRun, loadRunDetail, loadRuns, selectedRun?.id]);
+  }, [isActiveSelected, loadRunDetail, loadUnifiedRuns, selectedUnified?.id, selectedUnified?.kind]);
+
+  // Filtro de estado client-side sobre la lista unificada (≤30 items).
+  const visibleRuns = unifiedRuns.filter(
+    (run) => runsStatusFilter === "all" || normalizeRunStatus(run.status) === runsStatusFilter
+  );
 
   const loadJobsSummary = useCallback(async () => {
     if (!token) return;
@@ -521,10 +625,89 @@ export function MonitoringSection() {
             </div>
           </SectionCard>
 
-          <SectionCard title="Estado del run" description="Seguimiento en vivo del último run o el seleccionado — actualizado cada 5 s.">
-            {!selectedRun ? (
-              <p className="text-sm theme-text-muted">Sin runs recientes.</p>
-            ) : (
+          <SectionCard title="Estado del run" description="Todos los runs — pipeline, enrichment, scoring, social y discovery — actualizado cada 10 s.">
+            <div className="space-y-4">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Tipo</span>
+                {RUN_KIND_FILTERS.map((k) => (
+                  <button
+                    key={k}
+                    type="button"
+                    onClick={() => setRunTypeFilter(k)}
+                    className={cn(
+                      "rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors",
+                      runTypeFilter === k
+                        ? "border-sky-300 bg-sky-50 text-sky-700"
+                        : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"
+                    )}
+                  >
+                    {k === "all" ? "todos" : k}
+                  </button>
+                ))}
+                <span className="ml-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Estado</span>
+                {(["all", "running", "queued", "completed", "partial", "failed", "aborted"] as const).map((s) => (
+                  <button
+                    key={s}
+                    type="button"
+                    onClick={() => setRunsStatusFilter(s)}
+                    className={cn(
+                      "rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors",
+                      runsStatusFilter === s
+                        ? "border-sky-300 bg-sky-50 text-sky-700"
+                        : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"
+                    )}
+                  >
+                    {s === "all" ? "todos" : s}
+                  </button>
+                ))}
+              </div>
+
+              <div className="overflow-x-auto pb-2">
+                <div className="flex min-w-max gap-3">
+                  {visibleRuns.length === 0 && (
+                    <p className="text-sm text-slate-500 py-2">Sin runs para este filtro.</p>
+                  )}
+                  {visibleRuns.map((run) => {
+                    const active = selectedUnified?.id === run.id;
+                    return (
+                      <button
+                        key={`${run.kind}-${run.id}`}
+                        onClick={() => setSelectedUnified(run)}
+                        className={cn(
+                          "w-[20rem] shrink-0 rounded-2xl border px-4 py-3 text-left transition-colors",
+                          active ? "border-sky-300 bg-sky-50 text-sky-900" : "border-slate-200 bg-white hover:border-sky-200 hover:bg-sky-50/40"
+                        )}
+                      >
+                        <div className="flex items-start gap-3">
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <span className={cn("rounded-full px-2 py-1 text-[11px] font-semibold", KIND_COLORS[run.kind] ?? "bg-slate-100 text-slate-700")}>{run.kind}</span>
+                              <span className={cn("rounded-full px-2 py-1 text-[11px] font-semibold", RUN_STATUS_COLORS[normalizeRunStatus(run.status)] ?? "bg-slate-100 text-slate-700")}>{normalizeRunStatus(run.status)}</span>
+                              {run.source_run_id ? (
+                                <span className="rounded-full bg-violet-50 px-1.5 py-0.5 text-[10px] font-semibold text-violet-700" title={`Encadenado a ${run.source_run_id}`}>⛓</span>
+                              ) : null}
+                            </div>
+                            <p className="mt-2 font-mono text-[11px] text-slate-500">{run.id.slice(0, 8)}</p>
+                            <p className="mt-1 truncate text-sm font-semibold text-slate-900" title={run.label ?? undefined}>{run.label ?? "—"}</p>
+                          </div>
+                          <div className="ml-auto shrink-0 text-right text-xs text-slate-500">
+                            <div>{run.started_at ? formatRelative(run.started_at) : "en cola"}</div>
+                            <div className="mt-1">{runDurationLabel(run)}</div>
+                          </div>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {!selectedUnified ? (
+                <p className="text-sm theme-text-muted">Sin runs recientes.</p>
+              ) : selectedUnified.kind !== "pipeline" ? (
+                <GenericRunDetail run={selectedUnified} />
+              ) : !selectedRun ? (
+                <p className="text-sm theme-text-muted">Cargando detalle del run…</p>
+              ) : (
               <div className="space-y-4">
                 {(() => {
                   const selectedSummary = summarizeRunCard(selectedRun);
@@ -576,81 +759,6 @@ export function MonitoringSection() {
                       </div>
 
                       <div>
-                        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                          <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Runs recientes</span>
-                          <div className="flex flex-wrap gap-1.5">
-                            {(["all", "running", "completed", "partial", "failed", "aborted"] as const).map((s) => (
-                              <button
-                                key={s}
-                                type="button"
-                                onClick={() => { setRunsStatusFilter(s); setRuns([]); }}
-                                className={cn(
-                                  "rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors",
-                                  runsStatusFilter === s
-                                    ? "border-sky-300 bg-sky-50 text-sky-700"
-                                    : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"
-                                )}
-                              >
-                                {s === "all" ? "todos" : s}
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-                        <div className="overflow-x-auto pb-2">
-                          <div className="flex min-w-max gap-3">
-                            {runs.length === 0 && (
-                              <p className="text-sm text-slate-500 py-2">Sin runs para este filtro.</p>
-                            )}
-                            {runs.map((run) => {
-                              const summary = summarizeRunCard(run);
-                              const active = selectedRun?.id === run.id;
-                              return (
-                                <button
-                                  key={run.id}
-                                  onClick={() => void loadRunDetail(run.id)}
-                                  className={cn(
-                                    "w-[20rem] shrink-0 rounded-2xl border px-4 py-3 text-left transition-colors",
-                                    active ? "border-sky-300 bg-sky-50 text-sky-900" : "border-slate-200 bg-white hover:border-sky-200 hover:bg-sky-50/40"
-                                  )}
-                                >
-                                  <div className="flex items-start gap-3">
-                                    <div>
-                                      <span className={cn("rounded-full px-2 py-1 text-[11px] font-semibold", RUN_STATUS_COLORS[run.status === "pending" ? "queued" : run.status] ?? "bg-slate-100 text-slate-700")}>{run.status === "pending" ? "queued" : run.status}</span>
-                                      <p className="mt-3 font-mono text-[11px] text-slate-500">{run.id.slice(0, 8)}</p>
-                                      <p className="mt-1 text-sm font-semibold text-slate-900">{run.triggered_by}</p>
-                                    </div>
-                                    <div className="ml-auto text-right text-xs text-slate-500">
-                                      <div>{formatRelative(run.created_at)}</div>
-                                      <div className="mt-1">{summary.completedPhases}/{summary.phases.length || 0} fases</div>
-                                    </div>
-                                  </div>
-                                  <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-slate-600">
-                                    <div className="rounded-xl bg-slate-50 px-3 py-2">
-                                      <div className="font-semibold uppercase tracking-wide text-slate-400">Activa</div>
-                                      <div className="mt-1 text-slate-800">{summary.runningPhase ?? "sin fase"}</div>
-                                    </div>
-                                    <div className="rounded-xl bg-slate-50 px-3 py-2">
-                                      <div className="font-semibold uppercase tracking-wide text-slate-400">Modo</div>
-                                      <div className="mt-1 text-slate-800">{summary.isDryRun ? "dry run" : "real"}</div>
-                                    </div>
-                                  </div>
-                                </button>
-                              );
-                            })}
-                            {runsHasMore && (
-                              <button
-                                type="button"
-                                onClick={() => void loadRuns(runsStatusFilter, runsCursor ?? undefined)}
-                                className="w-[10rem] shrink-0 rounded-2xl border border-dashed border-slate-300 px-4 py-3 text-sm text-slate-500 hover:border-slate-400 hover:text-slate-700 transition-colors self-center"
-                              >
-                                Cargar más…
-                              </button>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-
-                      <div>
                         <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Fases</div>
                         {selectedSummary.phases.length === 0 ? (
                           <p className="text-sm text-slate-500">Sin phase_results todavía.</p>
@@ -693,7 +801,8 @@ export function MonitoringSection() {
                     </div>
                 </div>
               </div>
-            )}
+              )}
+            </div>
           </SectionCard>
 
           {jobsSummary ? (

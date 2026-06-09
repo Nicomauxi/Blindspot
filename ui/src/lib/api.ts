@@ -450,6 +450,31 @@ export async function getMonitoringDiscoveryJobs(token: string) {
   return request<{ data: DiscoveryJobsSummary }>("/api/v1/admin/monitoring/discovery-jobs", {}, token);
 }
 
+export type UnifiedRunKind = "pipeline" | "enrichment" | "scoring" | "social" | "discovery";
+
+export type UnifiedRun = {
+  id: string;
+  kind: UnifiedRunKind | string;
+  status: string;
+  started_at: string | null;
+  finished_at: string | null;
+  label: string | null;
+  source_run_id: string | null;
+  progress: Record<string, unknown> | null;
+  phases: unknown;
+};
+
+export async function listMonitoringRuns(
+  token: string,
+  opts: { type?: string; limit?: number } = {}
+) {
+  const params = new URLSearchParams();
+  if (opts.type) params.set("type", opts.type);
+  if (opts.limit) params.set("limit", String(opts.limit));
+  const qs = params.toString();
+  return request<{ data: UnifiedRun[] }>(`/api/v1/admin/monitoring/runs${qs ? `?${qs}` : ""}`, {}, token);
+}
+
 export type BackupRun = {
   id: string;
   trigger: "manual" | "scheduled";
