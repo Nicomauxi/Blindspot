@@ -125,6 +125,9 @@ vi.mock("../../api/src/db/client.js", () => ({
                   google_places_budget_total: 200,
                   google_places_budget_spent: 40,
                   google_places_alert_threshold: 10,
+                  fetch_timeout_ms: 5000,
+                  fetch_retries: 1,
+                  enrich_heuristic_max_concurrency: 6,
                 },
                 error: null,
               }),
@@ -799,6 +802,32 @@ describe("Discovery routes", () => {
     const body = res.json();
     expect(body.error_code).toBe("lead_limit_exceeded");
     expect(body.details).toEqual({ lead_count: 10001, limit: 10000 });
+    await app.close();
+  });
+
+  it("POST /admin/enrichment/filter-jobs settea los knobs de velocidad del config en el env del proceso", async () => {
+    delete process.env["FETCH_TIMEOUT_MS"];
+    delete process.env["FETCH_RETRIES"];
+    delete process.env["ENRICH_HEURISTIC_MAX_CONCURRENCY"];
+    countLeadsByFilterSelection.mockResolvedValue(2);
+    startFilterEnrichmentJob.mockResolvedValue({ runId: "filter-run-5" });
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/admin/enrichment/filter-jobs",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ source: "google_places", with_heuristic: true, concurrency: 4 }),
+    });
+    expect(res.statusCode).toBe(202);
+    // El mock de pipeline_config define 5000/1/6: el job in-process los lee del env por llamada.
+    expect(process.env["FETCH_TIMEOUT_MS"]).toBe("5000");
+    expect(process.env["FETCH_RETRIES"]).toBe("1");
+    expect(process.env["ENRICH_HEURISTIC_MAX_CONCURRENCY"]).toBe("6");
+    delete process.env["FETCH_TIMEOUT_MS"];
+    delete process.env["FETCH_RETRIES"];
+    delete process.env["ENRICH_HEURISTIC_MAX_CONCURRENCY"];
     await app.close();
   });
 

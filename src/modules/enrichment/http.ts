@@ -3,10 +3,26 @@ import pRetry from "p-retry";
 import { getLogger } from "../../shared/logger.js";
 
 export const USER_AGENT = "blindspot/1.0";
-// Configurables por env para reprocesos masivos (fail-fast en dominios muertos).
-export const FETCH_TIMEOUT_MS = Number(process.env["FETCH_TIMEOUT_MS"] ?? "8000");
-export const FETCH_RETRIES = Number(process.env["FETCH_RETRIES"] ?? "2");
 export const MAX_BODY_BYTES = 2 * 1024 * 1024;
+
+// Knobs de velocidad leídos del env POR LLAMADA (no const fija al arranque): la API
+// los settea desde pipeline_config (Variables) al lanzar jobs, sin reiniciar el proceso.
+const DEFAULT_FETCH_TIMEOUT_MS = 8000;
+const DEFAULT_FETCH_RETRIES = 2;
+
+export function getFetchTimeoutMs(): number {
+  const raw = process.env["FETCH_TIMEOUT_MS"];
+  if (raw === undefined || raw.trim() === "") return DEFAULT_FETCH_TIMEOUT_MS;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : DEFAULT_FETCH_TIMEOUT_MS;
+}
+
+export function getFetchRetries(): number {
+  const raw = process.env["FETCH_RETRIES"];
+  if (raw === undefined || raw.trim() === "") return DEFAULT_FETCH_RETRIES;
+  const n = Number(raw);
+  return Number.isInteger(n) && n >= 0 ? n : DEFAULT_FETCH_RETRIES;
+}
 
 export interface FetchHtmlResult {
   status: number | null;
@@ -62,7 +78,7 @@ async function attemptFetch(url: string): Promise<FetchHtmlResult> {
   const response = await fetch(url, {
     method: "GET",
     redirect: "follow",
-    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    signal: AbortSignal.timeout(getFetchTimeoutMs()),
     headers: {
       "User-Agent": USER_AGENT,
       Accept: "text/html,application/xhtml+xml,*/*;q=0.5",
@@ -113,7 +129,7 @@ export async function fetchHtml(url: string): Promise<FetchHtmlResult> {
   const log = getLogger();
   try {
     return await pRetry(() => attemptFetch(url), {
-      retries: FETCH_RETRIES,
+      retries: getFetchRetries(),
       factor: 2,
       minTimeout: 500,
       onFailedAttempt: (ctx) => {

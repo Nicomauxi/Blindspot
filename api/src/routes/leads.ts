@@ -54,6 +54,30 @@ async function clampToMaxEnrichThreads(requested: number): Promise<number> {
   }
 }
 
+// Settea en el env del proceso los knobs de velocidad configurados en Variables, para
+// que el job in-process los lea por llamada (http.ts getters / resolveEffectiveConcurrency).
+// Best-effort: si el config no responde, quedan el env actual o los defaults.
+async function applySpeedKnobsFromConfig(): Promise<void> {
+  try {
+    const { data } = await getDb()
+      .from("pipeline_config")
+      .select("fetch_timeout_ms, fetch_retries, enrich_heuristic_max_concurrency")
+      .eq("id", "singleton")
+      .single();
+    if (typeof data?.fetch_timeout_ms === "number") {
+      process.env["FETCH_TIMEOUT_MS"] = String(data.fetch_timeout_ms);
+    }
+    if (typeof data?.fetch_retries === "number") {
+      process.env["FETCH_RETRIES"] = String(data.fetch_retries);
+    }
+    if (typeof data?.enrich_heuristic_max_concurrency === "number") {
+      process.env["ENRICH_HEURISTIC_MAX_CONCURRENCY"] = String(data.enrich_heuristic_max_concurrency);
+    }
+  } catch {
+    /* mantiene env/defaults */
+  }
+}
+
 const enrichCollectionSchema = z.object({
   contact_tier: z.enum(CONTACT_TIERS).optional(),
   prospect_score_gte: z.number().int().min(0).max(100).optional(),
@@ -1558,6 +1582,8 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
           data: { run_id: job.runId, lead_count: leadCount, filters, mode, concurrency: effectiveConcurrency },
         });
       }
+
+      await applySpeedKnobsFromConfig();
 
       const job = await startFilterEnrichmentJob({
         filters,

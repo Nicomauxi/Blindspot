@@ -88,6 +88,30 @@ const VARIABLE_REGISTRY: VariableDef[] = [
     nullable: false,
   },
   {
+    key: "fetch_timeout_ms",
+    label: "Timeout de fetch (ms)",
+    description: "Timeout por request HTTP del enrichment. Bajarlo acelera reprocesos (fail-fast en dominios muertos).",
+    type: "number",
+    sensitive: false,
+    nullable: false,
+  },
+  {
+    key: "fetch_retries",
+    label: "Reintentos de fetch",
+    description: "Reintentos por request HTTP del enrichment. 0 = sin reintentos (más rápido).",
+    type: "number",
+    sensitive: false,
+    nullable: false,
+  },
+  {
+    key: "enrich_heuristic_max_concurrency",
+    label: "Cap heurístico de concurrencia",
+    description: "Tope de hilos efectivos cuando el enrichment corre con heurística (muchos sub-requests por lead).",
+    type: "number",
+    sensitive: false,
+    nullable: false,
+  },
+  {
     key: "webhook_url",
     label: "Webhook URL",
     description: "URL destino de las notificaciones de pipeline.",
@@ -126,13 +150,16 @@ type PipelineConfigRow = {
   max_cpu_pct: number;
   max_ram_pct: number;
   max_enrich_threads: number;
+  fetch_timeout_ms: number;
+  fetch_retries: number;
+  enrich_heuristic_max_concurrency: number;
 };
 
 type VariableValue = boolean | number | string | string[] | null;
 
 export type VariableItem = VariableDef & { value: VariableValue };
 
-const CONFIG_SELECT = "enabled, cron_expression, phases, google_places_budget_total, google_places_alert_threshold, notify_webhook_url, notify_webhook_secret, notify_webhook_events, max_concurrent_runs, max_cpu_pct, max_ram_pct, max_enrich_threads";
+const CONFIG_SELECT = "enabled, cron_expression, phases, google_places_budget_total, google_places_alert_threshold, notify_webhook_url, notify_webhook_secret, notify_webhook_events, max_concurrent_runs, max_cpu_pct, max_ram_pct, max_enrich_threads, fetch_timeout_ms, fetch_retries, enrich_heuristic_max_concurrency";
 
 function readMaxJobs(phases: Record<string, unknown> | null): number {
   const discovery = phases?.["discovery"] as Record<string, unknown> | undefined;
@@ -159,6 +186,9 @@ function buildVariableItems(row: PipelineConfigRow): VariableItem[] {
     max_cpu_pct: row.max_cpu_pct,
     max_ram_pct: row.max_ram_pct,
     max_enrich_threads: row.max_enrich_threads,
+    fetch_timeout_ms: row.fetch_timeout_ms,
+    fetch_retries: row.fetch_retries,
+    enrich_heuristic_max_concurrency: row.enrich_heuristic_max_concurrency,
   };
   return VARIABLE_REGISTRY.map((def) => ({
     ...def,
@@ -178,6 +208,9 @@ const VALUE_VALIDATORS: Record<string, z.ZodTypeAny> = {
   max_cpu_pct: z.number().int().min(10).max(100),
   max_ram_pct: z.number().int().min(10).max(100),
   max_enrich_threads: z.number().int().min(1).max(32),
+  fetch_timeout_ms: z.number().int().min(1000).max(15000),
+  fetch_retries: z.number().int().min(0).max(3),
+  enrich_heuristic_max_concurrency: z.number().int().min(1).max(32),
   webhook_url: z.string().url().nullable(),
   webhook_secret: z.string().min(8).nullable(),
   webhook_events: WEBHOOK_EVENTS_SCHEMA,
@@ -195,6 +228,9 @@ const DB_KEY_MAP: Record<string, string> = {
   max_cpu_pct: "max_cpu_pct",
   max_ram_pct: "max_ram_pct",
   max_enrich_threads: "max_enrich_threads",
+  fetch_timeout_ms: "fetch_timeout_ms",
+  fetch_retries: "fetch_retries",
+  enrich_heuristic_max_concurrency: "enrich_heuristic_max_concurrency",
 };
 
 async function applyUpdate(
