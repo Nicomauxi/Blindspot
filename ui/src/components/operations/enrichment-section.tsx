@@ -6,6 +6,7 @@ import { useAuthStore } from "@/lib/auth-store";
 import { cn } from "@/lib/utils";
 
 const ENRICH_LIMIT = 250;
+const ENRICH_ALL_LIMIT = 10000;
 const DEFAULT_MAX_THREADS = 4;
 const PREVIEW_DEBOUNCE_MS = 450;
 
@@ -34,6 +35,8 @@ export function EnrichmentSection() {
   const [primaryOffer, setPrimaryOffer] = useState("");
   const [q, setQ] = useState("");
   const [withHeuristic, setWithHeuristic] = useState(true);
+  const [scope, setScope] = useState<"selection" | "all">("selection");
+  const [forceRefresh, setForceRefresh] = useState(false);
   const [concurrency, setConcurrency] = useState(String(DEFAULT_MAX_THREADS));
   const [maxThreads, setMaxThreads] = useState(DEFAULT_MAX_THREADS);
   const [loading, setLoading] = useState(false);
@@ -55,8 +58,11 @@ export function EnrichmentSection() {
 
   const guardrail = useMemo(() => {
     if (filterCount === 0) return "Definí al menos un filtro antes de encolar enrichment.";
+    if (scope === "all" && preview != null && preview > ENRICH_ALL_LIMIT) {
+      return `La colección filtrada (${preview}) supera el tope de ${ENRICH_ALL_LIMIT.toLocaleString("es-UY")} leads: acotá los filtros.`;
+    }
     return "";
-  }, [filterCount]);
+  }, [filterCount, scope, preview]);
 
   // Tope de hilos configurado en Variables (max_enrich_threads).
   useEffect(() => {
@@ -124,6 +130,17 @@ export function EnrichmentSection() {
 
   async function handleSubmit() {
     if (!token || guardrail) return;
+    // Sin estimación no hay confirmación informada: bloquear scope=all hasta tener el conteo.
+    if (scope === "all" && preview == null) {
+      setError("Esperá la estimación de leads antes de lanzar sobre toda la colección.");
+      return;
+    }
+    if (scope === "all" && preview != null && preview > ENRICH_LIMIT) {
+      const ok = window.confirm(
+        `Vas a enriquecer toda la colección filtrada: ${preview} leads${forceRefresh ? " (reprocesando también los frescos)" : ""}. ¿Continuar?`
+      );
+      if (!ok) return;
+    }
     setLoading(true);
     setError(null);
     setNotice(null);
@@ -132,6 +149,8 @@ export function EnrichmentSection() {
         ...filters,
         with_heuristic: withHeuristic,
         concurrency: Math.min(Number(concurrency) || DEFAULT_MAX_THREADS, maxThreads),
+        scope,
+        force_refresh: forceRefresh,
       });
       setNotice(`Enrichment encolado para ${response.data.lead_count} leads. Run ${response.data.run_id}.`);
     } catch (err) {
@@ -144,7 +163,7 @@ export function EnrichmentSection() {
   return (
     <div className="space-y-4">
       <p className="text-sm theme-text-muted">
-        Seleccioná un subconjunto de leads por filtros y lanzá enrichment sobre esa colección. Límite operativo: {ENRICH_LIMIT} leads por operación.
+        Seleccioná un subconjunto de leads por filtros y lanzá enrichment sobre esa colección. Límite operativo: {ENRICH_LIMIT} leads por selección, o hasta {ENRICH_ALL_LIMIT.toLocaleString("es-UY")} con &ldquo;Toda la colección&rdquo;.
       </p>
 
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
@@ -219,6 +238,43 @@ export function EnrichmentSection() {
 
       <div className="flex flex-wrap items-center gap-4">
         <div className="flex items-center gap-2">
+          <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Alcance</span>
+          <label className="flex items-center gap-1.5 text-sm text-slate-700">
+            <input
+              type="radio"
+              name="enrich-scope"
+              checked={scope === "selection"}
+              onChange={() => setScope("selection")}
+              className="h-4 w-4 border-slate-300 text-sky-600 focus:ring-sky-500"
+            />
+            <span>Selección (≤{ENRICH_LIMIT})</span>
+          </label>
+          <label className="flex items-center gap-1.5 text-sm text-slate-700">
+            <input
+              type="radio"
+              name="enrich-scope"
+              checked={scope === "all"}
+              onChange={() => setScope("all")}
+              className="h-4 w-4 border-slate-300 text-sky-600 focus:ring-sky-500"
+            />
+            <span>Toda la colección filtrada</span>
+          </label>
+        </div>
+
+        <label className="flex items-center gap-2 text-sm text-slate-700">
+          <input
+            type="checkbox"
+            checked={forceRefresh}
+            onChange={(e) => setForceRefresh(e.target.checked)}
+            className="h-4 w-4 rounded border-slate-300 text-sky-600 focus:ring-sky-500"
+          />
+          <span>Reprocesar todo</span>
+          <span className="text-xs text-slate-500">(apagado = saltear frescos)</span>
+        </label>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-4">
+        <div className="flex items-center gap-2">
           <label className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Hilos simultáneos</label>
           <select
             value={concurrency}
@@ -259,9 +315,17 @@ export function EnrichmentSection() {
           </span>
           <div className="text-sm text-slate-600">
             <div className="font-medium text-slate-700">leads coinciden con los filtros</div>
-            {preview != null && preview > ENRICH_LIMIT ? (
+            {preview != null && scope === "selection" && preview > ENRICH_LIMIT ? (
               <div className="text-xs text-amber-700">
-                Se procesarán los primeros {ENRICH_LIMIT} por operación.
+                Supera el tope de la selección ({ENRICH_LIMIT}): acotá los filtros o elegí &ldquo;Toda la colección&rdquo;.
+              </div>
+            ) : preview != null && scope === "all" && preview > ENRICH_ALL_LIMIT ? (
+              <div className="text-xs text-amber-700">
+                Supera el tope de {ENRICH_ALL_LIMIT.toLocaleString("es-UY")}: acotá los filtros.
+              </div>
+            ) : preview != null && scope === "all" && preview > ENRICH_LIMIT ? (
+              <div className="text-xs text-sky-700">
+                Se procesará toda la colección filtrada ({preview} leads){forceRefresh ? ", reprocesando también los frescos" : ", salteando los frescos"}.
               </div>
             ) : (
               <div className="text-xs text-slate-400">Estimación en vivo según tu selección.</div>

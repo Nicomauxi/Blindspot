@@ -85,6 +85,27 @@ interface EnrichExecutionOptions {
   forceRefresh: boolean;
   withHeuristic: boolean;
   concurrency: number;
+  // Cap heurístico explícito (UI/API). Si falta, rige ENRICH_HEURISTIC_MAX_CONCURRENCY.
+  heuristicConcurrency?: number;
+  // Tope de leads en modo filter. Default 250 (selección); scope=all lo sube desde la API.
+  filterLimit?: number;
+}
+
+const FILTER_MODE_DEFAULT_LIMIT = 250;
+
+// El modo heurístico dispara muchos sub-requests por lead, por eso se capa la concurrencia.
+// El cap puede venir explícito (heuristicConcurrency, desde la UI) o por env
+// (ENRICH_HEURISTIC_MAX_CONCURRENCY, default 2) para reprocesos por CLI.
+export function resolveEffectiveConcurrency(opts: {
+  withHeuristic: boolean;
+  concurrency: number;
+  heuristicConcurrency?: number;
+}): number {
+  if (!opts.withHeuristic) return opts.concurrency;
+  const cap =
+    opts.heuristicConcurrency ??
+    Math.max(1, Number(process.env["ENRICH_HEURISTIC_MAX_CONCURRENCY"] ?? "2"));
+  return Math.min(opts.concurrency, cap);
 }
 
 function normalizeFilterSelection(
@@ -211,13 +232,7 @@ async function executeEnrichmentRun(
 ): Promise<EnrichCommandResult> {
   const log = getLogger();
   const startedAt = Date.now();
-  // El modo heurístico dispara muchos sub-requests por lead, por eso se capa la
-  // concurrencia. El tope es configurable por env (ENRICH_HEURISTIC_MAX_CONCURRENCY,
-  // default 2) para poder acelerar reprocesos cuando hay recursos disponibles.
-  const heuristicCap = Math.max(1, Number(process.env["ENRICH_HEURISTIC_MAX_CONCURRENCY"] ?? "2"));
-  const effectiveConcurrency = options.withHeuristic
-    ? Math.min(options.concurrency, heuristicCap)
-    : options.concurrency;
+  const effectiveConcurrency = resolveEffectiveConcurrency(options);
 
   try {
     const runtime = await loadAllRuntime();
@@ -227,7 +242,10 @@ async function executeEnrichmentRun(
         : options.mode === "source"
           ? await loadLeadsBySource(options.source!, { passedOnly: true })
           : options.mode === "filter"
-            ? await loadLeadsByFilterSelection(options.filters ?? {}, { passedOnly: true, limit: 250 })
+            ? await loadLeadsByFilterSelection(options.filters ?? {}, {
+                passedOnly: true,
+                limit: options.filterLimit ?? FILTER_MODE_DEFAULT_LIMIT,
+              })
             : await loadAllPassedLeads();
     log.info({ count: leads.length, mode: options.mode }, "Leads loaded");
 
@@ -432,6 +450,8 @@ export async function startFilterEnrichmentJob(params: {
   withHeuristic: boolean;
   concurrency: number;
   forceRefresh?: boolean;
+  heuristicConcurrency?: number;
+  leadLimit?: number;
 }): Promise<{ runId: string }> {
   const enrichRun = await createEnrichmentRun({
     mode: "filter",
@@ -447,6 +467,10 @@ export async function startFilterEnrichmentJob(params: {
     forceRefresh: params.forceRefresh ?? false,
     withHeuristic: params.withHeuristic,
     concurrency: params.concurrency,
+    ...(params.heuristicConcurrency !== undefined
+      ? { heuristicConcurrency: params.heuristicConcurrency }
+      : {}),
+    ...(params.leadLimit !== undefined ? { filterLimit: params.leadLimit } : {}),
   }, enrichRun).catch((err) => {
     const log = getLogger();
     log.error({ runId: enrichRun.id, err: err instanceof Error ? err.message : String(err) }, "Background filter enrichment failed");

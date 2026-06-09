@@ -35,6 +35,8 @@ const CONTACT_TIERS = ["A", "B", "C", "D", "X"] as const;
 type ContactTier = (typeof CONTACT_TIERS)[number];
 
 const FILTER_ENRICH_LIMIT = 250;
+// Tope de seguridad para scope=all (toda la colección filtrada) — evita encolar sin control.
+const FILTER_ENRICH_ALL_LIMIT = 10_000;
 const DEFAULT_MAX_ENRICH_THREADS = 4;
 
 // Acota la concurrencia pedida al tope configurado en Variables (max_enrich_threads).
@@ -68,6 +70,10 @@ const enrichCollectionSchema = z.object({
   mode: z.enum(["enrichment", "re_discovery"]).default("enrichment"),
   with_heuristic: z.boolean().default(true),
   concurrency: z.number().int().min(1).max(8).default(4),
+  // selection = comportamiento histórico (≤250); all = toda la colección filtrada (≤10.000).
+  scope: z.enum(["selection", "all"]).default("selection"),
+  // false = saltear frescos (resume); true = reprocesar todo.
+  force_refresh: z.boolean().default(false),
 });
 
 const REJECTION_REASONS = ["no_pertenece_al_lead", "dato_desactualizado", "fuera_de_servicio", "otro"] as const;
@@ -1491,8 +1497,16 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
       const {
         contact_tier, prospect_score_gte, niche, source, primary_offer, q,
         missing_gps, missing_address, missing_phone, missing_whatsapp, missing_email, missing_website,
-        mode, with_heuristic, concurrency,
+        mode, with_heuristic, concurrency, scope, force_refresh,
       } = parseResult.data;
+
+      // scope=all sólo aplica a enrichment (flujo gratis); re_discovery mantiene el tope chico.
+      if (scope === "all" && mode === "re_discovery") {
+        return reply.status(400).send({
+          error: "scope=all is not supported for re_discovery",
+          error_code: "scope_not_supported",
+        });
+      }
       const nicheExpanded = niche !== undefined ? await expandNiche(niche) : undefined;
       const filters: EnrichmentLeadFilterSelection = {
         ...(contact_tier !== undefined && { contact_tier }),
@@ -1525,11 +1539,12 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
         });
       }
 
-      if (leadCount > FILTER_ENRICH_LIMIT) {
+      const leadLimit = scope === "all" ? FILTER_ENRICH_ALL_LIMIT : FILTER_ENRICH_LIMIT;
+      if (leadCount > leadLimit) {
         return reply.status(400).send({
-          error: `Filtered collection exceeds ${FILTER_ENRICH_LIMIT} leads`,
+          error: `Filtered collection exceeds ${leadLimit} leads`,
           error_code: "lead_limit_exceeded",
-          details: { lead_count: leadCount, limit: FILTER_ENRICH_LIMIT },
+          details: { lead_count: leadCount, limit: leadLimit },
         });
       }
 
@@ -1546,6 +1561,11 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
         filters,
         withHeuristic: with_heuristic,
         concurrency: effectiveConcurrency,
+        forceRefresh: force_refresh,
+        // El número elegido en la UI (ya clampado a max_enrich_threads) es el cap real
+        // del modo heurístico cuando el job corre in-process en la API.
+        heuristicConcurrency: effectiveConcurrency,
+        leadLimit,
       });
 
       return reply.status(202).send({
@@ -1556,6 +1576,8 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
           mode,
           with_heuristic,
           concurrency: effectiveConcurrency,
+          scope,
+          force_refresh,
         },
       });
     }

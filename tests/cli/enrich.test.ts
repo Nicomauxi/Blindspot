@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Lead } from "../../src/shared/types.js";
 
 vi.mock("../../src/storage/runs.js", () => ({
@@ -39,7 +39,7 @@ vi.mock("../../src/storage/owner-group.js", () => ({
   detectOwnerGroups: vi.fn(),
 }));
 
-import { enrichCommand } from "../../src/cli/commands/enrich.js";
+import { enrichCommand, startFilterEnrichmentJob, resolveEffectiveConcurrency } from "../../src/cli/commands/enrich.js";
 import { getRunById, createEnrichmentRun, completeRun } from "../../src/storage/runs.js";
 import { loadLeadsByRunId, loadLeadsBySource, loadAllPassedLeads, loadLeadsByFilterSelection, updateLeadEnrichment } from "../../src/storage/leads.js";
 import { recordPipelineError } from "../../src/storage/pipeline-errors.js";
@@ -412,6 +412,71 @@ describe("enrichCommand — change detection and pipeline errors", () => {
         error_type: "timeout",
         recovered: true,
       })
+    );
+  });
+});
+
+describe("resolveEffectiveConcurrency", () => {
+  afterEach(() => {
+    delete process.env["ENRICH_HEURISTIC_MAX_CONCURRENCY"];
+  });
+
+  it("sin heurística usa la concurrencia pedida sin cap", () => {
+    expect(resolveEffectiveConcurrency({ withHeuristic: false, concurrency: 8 })).toBe(8);
+  });
+
+  it("con heurística y sin override aplica el cap de env (default 2)", () => {
+    expect(resolveEffectiveConcurrency({ withHeuristic: true, concurrency: 8 })).toBe(2);
+    process.env["ENRICH_HEURISTIC_MAX_CONCURRENCY"] = "5";
+    expect(resolveEffectiveConcurrency({ withHeuristic: true, concurrency: 8 })).toBe(5);
+  });
+
+  it("con heuristicConcurrency explícito ignora el env y respeta el mínimo", () => {
+    process.env["ENRICH_HEURISTIC_MAX_CONCURRENCY"] = "2";
+    expect(
+      resolveEffectiveConcurrency({ withHeuristic: true, concurrency: 8, heuristicConcurrency: 6 })
+    ).toBe(6);
+    expect(
+      resolveEffectiveConcurrency({ withHeuristic: true, concurrency: 4, heuristicConcurrency: 6 })
+    ).toBe(4);
+  });
+});
+
+describe("startFilterEnrichmentJob — leadLimit y forceRefresh threadeados", () => {
+  it("default: leadLimit 250 al loader y forceRefresh false al run", async () => {
+    await startFilterEnrichmentJob({
+      filters: { niche: "hairdresser" },
+      withHeuristic: true,
+      concurrency: 2,
+    });
+
+    await vi.waitFor(() => expect(loadLeadsByFilterSelection).toHaveBeenCalled());
+    expect(loadLeadsByFilterSelection).toHaveBeenCalledWith(
+      { niche: "hairdresser" },
+      { passedOnly: true, limit: 250 }
+    );
+    expect(createEnrichmentRun).toHaveBeenCalledWith(
+      expect.objectContaining({ forceRefresh: false })
+    );
+  });
+
+  it("scope=all: leadLimit 10000 al loader y forceRefresh true al run", async () => {
+    await startFilterEnrichmentJob({
+      filters: { niche: "hairdresser" },
+      withHeuristic: true,
+      concurrency: 2,
+      forceRefresh: true,
+      leadLimit: 10000,
+      heuristicConcurrency: 2,
+    });
+
+    await vi.waitFor(() => expect(loadLeadsByFilterSelection).toHaveBeenCalled());
+    expect(loadLeadsByFilterSelection).toHaveBeenCalledWith(
+      { niche: "hairdresser" },
+      { passedOnly: true, limit: 10000 }
+    );
+    expect(createEnrichmentRun).toHaveBeenCalledWith(
+      expect.objectContaining({ forceRefresh: true })
     );
   });
 });

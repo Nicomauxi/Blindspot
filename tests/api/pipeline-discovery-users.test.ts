@@ -681,6 +681,9 @@ describe("Discovery routes", () => {
       filters: { source: "google_places", prospect_score_gte: 70, contact_tier: undefined, niche: undefined, primary_offer: undefined, q: undefined },
       withHeuristic: true,
       concurrency: 4,
+      forceRefresh: false,
+      heuristicConcurrency: 4,
+      leadLimit: 250,
     });
     await app.close();
   });
@@ -697,6 +700,100 @@ describe("Discovery routes", () => {
     });
     expect(res.statusCode).toBe(400);
     expect(res.json().error_code).toBe("filters_required");
+    await app.close();
+  });
+
+  it("POST /admin/enrichment/filter-jobs pasa force_refresh y heuristicConcurrency al job", async () => {
+    startFilterEnrichmentJob.mockResolvedValue({ runId: "filter-run-2" });
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/admin/enrichment/filter-jobs",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ source: "google_places", with_heuristic: true, concurrency: 4, force_refresh: true }),
+    });
+    expect(res.statusCode).toBe(202);
+    expect(res.json().data.force_refresh).toBe(true);
+    expect(startFilterEnrichmentJob).toHaveBeenCalledWith(
+      expect.objectContaining({ forceRefresh: true, heuristicConcurrency: 4, leadLimit: 250 })
+    );
+    await app.close();
+  });
+
+  it("POST /admin/enrichment/filter-jobs scope=all acepta colecciones grandes (hasta 10000)", async () => {
+    countLeadsByFilterSelection.mockResolvedValue(1234);
+    startFilterEnrichmentJob.mockResolvedValue({ runId: "filter-run-3" });
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/admin/enrichment/filter-jobs",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ source: "google_places", with_heuristic: true, concurrency: 4, scope: "all" }),
+    });
+    expect(res.statusCode).toBe(202);
+    const body = res.json();
+    expect(body.data.lead_count).toBe(1234);
+    expect(body.data.scope).toBe("all");
+    expect(startFilterEnrichmentJob).toHaveBeenCalledWith(
+      expect.objectContaining({ leadLimit: 10000 })
+    );
+    await app.close();
+  });
+
+  it("POST /admin/enrichment/filter-jobs scope selección (default) mantiene el tope de 250", async () => {
+    countLeadsByFilterSelection.mockResolvedValue(1234);
+    startFilterEnrichmentJob.mockClear();
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/admin/enrichment/filter-jobs",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ source: "google_places", with_heuristic: true, concurrency: 4 }),
+    });
+    expect(res.statusCode).toBe(400);
+    const body = res.json();
+    expect(body.error_code).toBe("lead_limit_exceeded");
+    expect(body.details).toEqual({ lead_count: 1234, limit: 250 });
+    expect(startFilterEnrichmentJob).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it("POST /admin/enrichment/filter-jobs scope=all rechaza más de 10000 leads", async () => {
+    countLeadsByFilterSelection.mockResolvedValue(10001);
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/admin/enrichment/filter-jobs",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ source: "google_places", with_heuristic: true, concurrency: 4, scope: "all" }),
+    });
+    expect(res.statusCode).toBe(400);
+    const body = res.json();
+    expect(body.error_code).toBe("lead_limit_exceeded");
+    expect(body.details).toEqual({ lead_count: 10001, limit: 10000 });
+    await app.close();
+  });
+
+  it("POST /admin/enrichment/filter-jobs scope=all no aplica a re_discovery", async () => {
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/admin/enrichment/filter-jobs",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ source: "google_places", with_heuristic: true, concurrency: 4, scope: "all", mode: "re_discovery" }),
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error_code).toBe("scope_not_supported");
     await app.close();
   });
 
