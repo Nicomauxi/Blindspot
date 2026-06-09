@@ -636,6 +636,7 @@ export type VariableItem = {
   type: "boolean" | "number" | "string" | "string_array";
   sensitive: boolean;
   nullable: boolean;
+  group: "resources" | "pipeline";
   value: boolean | number | string | string[] | null;
 };
 

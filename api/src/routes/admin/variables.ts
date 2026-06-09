@@ -5,6 +5,10 @@ import { getAuthUser, requireAdmin } from "../../auth/middleware.js";
 
 type VarType = "boolean" | "number" | "string" | "string_array";
 
+// group: "pipeline" se edita en la sección Pipeline (no se lista en la UI de Variables);
+// "resources" es gobernanza de recursos sin otro lugar de edición.
+type VariableGroup = "resources" | "pipeline";
+
 type VariableDef = {
   key: string;
   label: string;
@@ -12,6 +16,7 @@ type VariableDef = {
   type: VarType;
   sensitive: boolean;
   nullable: boolean;
+  group: VariableGroup;
 };
 
 const VARIABLE_REGISTRY: VariableDef[] = [
@@ -22,6 +27,7 @@ const VARIABLE_REGISTRY: VariableDef[] = [
     type: "boolean",
     sensitive: false,
     nullable: false,
+    group: "pipeline",
   },
   {
     key: "cron_expression",
@@ -30,6 +36,7 @@ const VARIABLE_REGISTRY: VariableDef[] = [
     type: "string",
     sensitive: false,
     nullable: true,
+    group: "pipeline",
   },
   {
     key: "max_jobs",
@@ -38,6 +45,7 @@ const VARIABLE_REGISTRY: VariableDef[] = [
     type: "number",
     sensitive: false,
     nullable: false,
+    group: "pipeline",
   },
   {
     key: "google_places_budget_total",
@@ -46,6 +54,7 @@ const VARIABLE_REGISTRY: VariableDef[] = [
     type: "number",
     sensitive: false,
     nullable: false,
+    group: "pipeline",
   },
   {
     key: "google_places_alert_threshold",
@@ -54,6 +63,7 @@ const VARIABLE_REGISTRY: VariableDef[] = [
     type: "number",
     sensitive: false,
     nullable: false,
+    group: "pipeline",
   },
   {
     key: "max_concurrent_runs",
@@ -62,6 +72,7 @@ const VARIABLE_REGISTRY: VariableDef[] = [
     type: "number",
     sensitive: false,
     nullable: false,
+    group: "resources",
   },
   {
     key: "max_cpu_pct",
@@ -70,6 +81,7 @@ const VARIABLE_REGISTRY: VariableDef[] = [
     type: "number",
     sensitive: false,
     nullable: false,
+    group: "resources",
   },
   {
     key: "max_ram_pct",
@@ -78,6 +90,7 @@ const VARIABLE_REGISTRY: VariableDef[] = [
     type: "number",
     sensitive: false,
     nullable: false,
+    group: "resources",
   },
   {
     key: "max_enrich_threads",
@@ -86,6 +99,7 @@ const VARIABLE_REGISTRY: VariableDef[] = [
     type: "number",
     sensitive: false,
     nullable: false,
+    group: "resources",
   },
   {
     key: "fetch_timeout_ms",
@@ -94,6 +108,7 @@ const VARIABLE_REGISTRY: VariableDef[] = [
     type: "number",
     sensitive: false,
     nullable: false,
+    group: "resources",
   },
   {
     key: "fetch_retries",
@@ -102,6 +117,7 @@ const VARIABLE_REGISTRY: VariableDef[] = [
     type: "number",
     sensitive: false,
     nullable: false,
+    group: "resources",
   },
   {
     key: "enrich_heuristic_max_concurrency",
@@ -110,6 +126,7 @@ const VARIABLE_REGISTRY: VariableDef[] = [
     type: "number",
     sensitive: false,
     nullable: false,
+    group: "resources",
   },
   {
     key: "webhook_url",
@@ -118,6 +135,7 @@ const VARIABLE_REGISTRY: VariableDef[] = [
     type: "string",
     sensitive: false,
     nullable: true,
+    group: "pipeline",
   },
   {
     key: "webhook_secret",
@@ -126,6 +144,7 @@ const VARIABLE_REGISTRY: VariableDef[] = [
     type: "string",
     sensitive: true,
     nullable: true,
+    group: "pipeline",
   },
   {
     key: "webhook_events",
@@ -134,6 +153,7 @@ const VARIABLE_REGISTRY: VariableDef[] = [
     type: "string_array",
     sensitive: false,
     nullable: false,
+    group: "pipeline",
   },
 ];
 

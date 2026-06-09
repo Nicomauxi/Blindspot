@@ -244,12 +244,17 @@ export function VariablesSection() {
     );
   }
 
+  // Las variables de grupo "pipeline" (cron, budget GP, webhooks, max_jobs) se editan en la
+  // sección Pipeline: acá sólo se lista la gobernanza de recursos para no duplicar edición.
+  const resourceItems = items.filter((item) => item.group !== "pipeline");
+
   return (
     <div className="space-y-3">
       <p className="text-sm theme-text-muted">
-        Variables runtime del pipeline. Los cambios se persisten inmediatamente y quedan registrados en el audit log.
+        Gobernanza de recursos del core. Los cambios se persisten inmediatamente y quedan registrados en el audit log.
+        Cron, budget de Google Places y webhooks se editan en la sección <strong>Pipeline</strong>.
       </p>
-      {items.map((item) => (
+      {resourceItems.map((item) => (
         <VariableRow key={item.key} item={item} onSaved={handleSaved} />
       ))}
     </div>

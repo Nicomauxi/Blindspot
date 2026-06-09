@@ -84,6 +84,42 @@ describe("Variables — knobs de velocidad (F2-ext Fase 4)", () => {
     expect(byKey.get("enrich_heuristic_max_concurrency")).toMatchObject({ type: "number", value: 2 });
   });
 
+  it("GET /admin/variables expone group: las duplicadas de Pipeline vs gobernanza de recursos", async () => {
+    const app = await buildServer();
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/admin/variables",
+      headers: { authorization: `Bearer ${adminToken(app)}` },
+    });
+    expect(res.statusCode).toBe(200);
+    const items = res.json().data as Array<{ key: string; group: string }>;
+    const groups = new Map(items.map((i) => [i.key, i.group]));
+    for (const key of [
+      "cron_enabled", "cron_expression", "max_jobs", "google_places_budget_total",
+      "google_places_alert_threshold", "webhook_url", "webhook_secret", "webhook_events",
+    ]) {
+      expect(groups.get(key), key).toBe("pipeline");
+    }
+    for (const key of [
+      "max_concurrent_runs", "max_cpu_pct", "max_ram_pct", "max_enrich_threads",
+      "fetch_timeout_ms", "fetch_retries", "enrich_heuristic_max_concurrency",
+    ]) {
+      expect(groups.get(key), key).toBe("resources");
+    }
+  });
+
+  it("PATCH sobre una key de grupo pipeline sigue funcionando (la ruta no se rompe)", async () => {
+    const app = await buildServer();
+    const res = await app.inject({
+      method: "PATCH",
+      url: "/api/v1/admin/variables/google_places_budget_total",
+      headers: { authorization: `Bearer ${adminToken(app)}`, "content-type": "application/json" },
+      body: JSON.stringify({ value: 300 }),
+    });
+    expect(res.statusCode).toBe(200);
+    expect(state.lastUpdate).toMatchObject({ google_places_budget_total: 300 });
+  });
+
   it("PATCH fetch_timeout_ms válido persiste en pipeline_config", async () => {
     const app = await buildServer();
     const res = await app.inject({
