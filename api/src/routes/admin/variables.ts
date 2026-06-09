@@ -56,6 +56,38 @@ const VARIABLE_REGISTRY: VariableDef[] = [
     nullable: false,
   },
   {
+    key: "max_concurrent_runs",
+    label: "Runs simultáneos máximos",
+    description: "Cuántos runs puede correr el core a la vez (si los recursos lo permiten).",
+    type: "number",
+    sensitive: false,
+    nullable: false,
+  },
+  {
+    key: "max_cpu_pct",
+    label: "CPU máximo del host (%)",
+    description: "El core no lanza un nuevo run si el CPU del host supera este porcentaje.",
+    type: "number",
+    sensitive: false,
+    nullable: false,
+  },
+  {
+    key: "max_ram_pct",
+    label: "RAM máxima del host (%)",
+    description: "El core no lanza un nuevo run si la RAM usada del host supera este porcentaje.",
+    type: "number",
+    sensitive: false,
+    nullable: false,
+  },
+  {
+    key: "max_enrich_threads",
+    label: "Hilos máximos de enrichment",
+    description: "Tope de concurrencia para los trabajos de enrichment.",
+    type: "number",
+    sensitive: false,
+    nullable: false,
+  },
+  {
     key: "webhook_url",
     label: "Webhook URL",
     description: "URL destino de las notificaciones de pipeline.",
@@ -90,13 +122,17 @@ type PipelineConfigRow = {
   notify_webhook_url: string | null;
   notify_webhook_secret: string | null;
   notify_webhook_events: string[];
+  max_concurrent_runs: number;
+  max_cpu_pct: number;
+  max_ram_pct: number;
+  max_enrich_threads: number;
 };
 
 type VariableValue = boolean | number | string | string[] | null;
 
 export type VariableItem = VariableDef & { value: VariableValue };
 
-const CONFIG_SELECT = "enabled, cron_expression, phases, google_places_budget_total, google_places_alert_threshold, notify_webhook_url, notify_webhook_secret, notify_webhook_events";
+const CONFIG_SELECT = "enabled, cron_expression, phases, google_places_budget_total, google_places_alert_threshold, notify_webhook_url, notify_webhook_secret, notify_webhook_events, max_concurrent_runs, max_cpu_pct, max_ram_pct, max_enrich_threads";
 
 function readMaxJobs(phases: Record<string, unknown> | null): number {
   const discovery = phases?.["discovery"] as Record<string, unknown> | undefined;
@@ -119,6 +155,10 @@ function buildVariableItems(row: PipelineConfigRow): VariableItem[] {
     webhook_url: row.notify_webhook_url,
     webhook_secret: row.notify_webhook_secret,
     webhook_events: row.notify_webhook_events ?? [],
+    max_concurrent_runs: row.max_concurrent_runs,
+    max_cpu_pct: row.max_cpu_pct,
+    max_ram_pct: row.max_ram_pct,
+    max_enrich_threads: row.max_enrich_threads,
   };
   return VARIABLE_REGISTRY.map((def) => ({
     ...def,
@@ -134,6 +174,10 @@ const VALUE_VALIDATORS: Record<string, z.ZodTypeAny> = {
   max_jobs: z.number().int().min(1).max(50),
   google_places_budget_total: z.number().positive(),
   google_places_alert_threshold: z.number().nonnegative(),
+  max_concurrent_runs: z.number().int().min(1).max(8),
+  max_cpu_pct: z.number().int().min(10).max(100),
+  max_ram_pct: z.number().int().min(10).max(100),
+  max_enrich_threads: z.number().int().min(1).max(32),
   webhook_url: z.string().url().nullable(),
   webhook_secret: z.string().min(8).nullable(),
   webhook_events: WEBHOOK_EVENTS_SCHEMA,
@@ -147,6 +191,10 @@ const DB_KEY_MAP: Record<string, string> = {
   webhook_url: "notify_webhook_url",
   webhook_secret: "notify_webhook_secret",
   webhook_events: "notify_webhook_events",
+  max_concurrent_runs: "max_concurrent_runs",
+  max_cpu_pct: "max_cpu_pct",
+  max_ram_pct: "max_ram_pct",
+  max_enrich_threads: "max_enrich_threads",
 };
 
 async function applyUpdate(
