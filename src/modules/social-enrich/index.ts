@@ -108,14 +108,31 @@ function isBlockedError(err: unknown): boolean {
   return BLOCKED_SIGNALS.some((s) => msg.includes(s));
 }
 
+// El browser compartido puede morir a mitad de run (crash de chromium, SIGTERM al process
+// group). En ese caso todo intento posterior falla igual: hay que abortar limpio, no crashear.
+const BROWSER_CLOSED_SIGNALS = ["has been closed", "target closed", "browser closed"];
+
+function isBrowserClosedError(err: unknown): boolean {
+  const msg = (err instanceof Error ? err.message : String(err)).toLowerCase();
+  return BROWSER_CLOSED_SIGNALS.some((s) => msg.includes(s));
+}
+
+interface ProcessLeadResult {
+  processed: boolean;
+  error: boolean;
+  blocked: boolean;
+  browserDead: boolean;
+}
+
 async function processLead(
   lead: Lead,
   context: Awaited<ReturnType<typeof openSocialEnrichBrowser>>["context"],
   sleepFn: (ms: number) => Promise<void>
-): Promise<{ processed: boolean; error: boolean; blocked: boolean }> {
+): Promise<ProcessLeadResult> {
   const scrapingCfg = getScrapingConfig();
-  const page = await context.newPage();
+  let page: Awaited<ReturnType<typeof context.newPage>> | null = null;
   try {
+    page = await context.newPage();
     const facebookUrl = selectedHeuristicUrl(lead, "facebook");
     const instagramUrl = selectedHeuristicUrl(lead, "instagram");
 
@@ -179,18 +196,22 @@ async function processLead(
       await recordSocialSnapshots(lead.id, activityProfiles, ranAt).catch(() => undefined);
     }
     await updateLeadSocialEnrichStatus(lead.id, "ok");
-    return { processed: true, error: false, blocked: false };
+    return { processed: true, error: false, blocked: false, browserDead: false };
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
+    if (isBrowserClosedError(err)) {
+      getLogger().warn({ leadId: lead.id, err: msg }, "social enrich browser closed for lead");
+      return { processed: false, error: true, blocked: false, browserDead: true };
+    }
     if (isBlockedError(err)) {
       getLogger().warn({ leadId: lead.id }, "social enrich blocked for lead");
       await updateLeadSocialEnrichStatus(lead.id, "blocked").catch(() => {});
-      return { processed: false, error: false, blocked: true };
+      return { processed: false, error: false, blocked: true, browserDead: false };
     }
     getLogger().warn({ leadId: lead.id, err: msg }, "social enrich failed for lead");
-    return { processed: false, error: true, blocked: false };
+    return { processed: false, error: true, blocked: false, browserDead: false };
   } finally {
-    await page.close();
+    if (page) await page.close().catch(() => undefined);
   }
 }
 
@@ -225,12 +246,21 @@ export async function runSocialEnrich(opts: SocialEnrichOptions): Promise<Social
   let processed = 0;
   let errors = 0;
   let blocked = 0;
+  let browserDead = false;
   try {
     const limit = pLimit(getConcurrency());
     await Promise.all(
       selected.map((lead) =>
         limit(async () => {
+          if (browserDead) {
+            errors += 1;
+            return;
+          }
           const result = await processLead(lead, session.context, sleepFn);
+          if (result.browserDead && !browserDead) {
+            browserDead = true;
+            log.error({ leadId: lead.id }, "social enrich browser died; aborting remaining leads");
+          }
           if (result.processed) processed += 1;
           if (result.error) errors += 1;
           if (result.blocked) blocked += 1;
@@ -239,7 +269,7 @@ export async function runSocialEnrich(opts: SocialEnrichOptions): Promise<Social
     );
   } finally {
     try { await session.context.close(); } catch { /* ignore */ }
-    await session.browser.close();
+    try { await session.browser.close(); } catch { /* ignore */ }
   }
 
   log.info({ processed, errors, blocked, socialDelayMs: scrapingCfg.social_delay_ms }, "Social enrich complete");

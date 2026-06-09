@@ -239,6 +239,53 @@ describe("runSocialEnrich", () => {
     expect(result.processed).toBe(1);
   });
 
+  it("does not crash when newPage fails; counts the lead as error and continues", async () => {
+    vi.mocked(loadLeadsByRunId).mockResolvedValue([
+      makeLead({ id: "newpage-fails" }),
+      makeLead({ id: "ok-lead" }),
+    ]);
+    const newPage = vi
+      .fn(async () => ({ close: vi.fn(async () => undefined) }))
+      .mockRejectedValueOnce(new Error("boom"));
+    const context = { newPage, close: vi.fn(async () => undefined) };
+    const browser = { close: vi.fn(async () => undefined) };
+    vi.mocked(openSocialEnrichBrowser).mockResolvedValue({
+      browser: browser as unknown as Browser,
+      context: context as unknown as BrowserContext,
+    });
+
+    const result = await runSocialEnrich({ run: RUN_ID, limit: 10, force: true });
+
+    expect(result.errors).toBe(1);
+    expect(result.processed).toBe(1);
+  });
+
+  it("aborts remaining leads gracefully when the browser dies (no unhandled rejection)", async () => {
+    vi.mocked(loadLeadsByRunId).mockResolvedValue([
+      makeLead({ id: "l1" }),
+      makeLead({ id: "l2" }),
+      makeLead({ id: "l3" }),
+      makeLead({ id: "l4" }),
+    ]);
+    const newPage = vi.fn(async () => {
+      throw new Error("browserContext.newPage: Target page, context or browser has been closed");
+    });
+    const context = { newPage, close: vi.fn(async () => undefined) };
+    const browser = { close: vi.fn(async () => undefined) };
+    vi.mocked(openSocialEnrichBrowser).mockResolvedValue({
+      browser: browser as unknown as Browser,
+      context: context as unknown as BrowserContext,
+    });
+
+    const result = await runSocialEnrich({ run: RUN_ID, limit: 10, force: true });
+
+    expect(result.processed).toBe(0);
+    expect(result.errors).toBe(4);
+    // El browser está muerto: los leads restantes cortocircuitan sin pedir páginas nuevas.
+    expect(newPage.mock.calls.length).toBeLessThanOrEqual(2);
+    expect(browser.close).toHaveBeenCalled();
+  });
+
   it("counts blocked leads separately from errors", async () => {
     vi.mocked(loadLeadsByRunId).mockResolvedValue([
       makeLead({ id: "blocked-lead" }),
