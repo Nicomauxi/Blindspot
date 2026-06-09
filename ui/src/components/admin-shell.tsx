@@ -50,16 +50,9 @@ export const adminNavGroups: NavGroup[] = [
         icon: LeadsIcon,
       },
       {
-        href: "/admin/discovery",
-        label: "Discovery",
-        description: "Jobs de discovery y entrada de nuevos leads",
-        icon: DiscoveryIcon,
-        roles: ["admin"],
-      },
-      {
         href: "/admin/operations",
         label: "Operaciones",
-        description: "Pipeline, monitoreo y control del sistema",
+        description: "Pipeline, discovery, monitoreo y control del sistema",
         icon: PipelineIcon,
         roles: ["admin"],
       },
@@ -377,15 +370,6 @@ function LeadsIcon({ className }: IconProps) {
       <path d="M17 7h3" />
       <path d="M14 12h6" />
       <path d="M14 17h4" />
-    </svg>
-  );
-}
-
-function DiscoveryIcon({ className }: IconProps) {
-  return (
-    <svg {...iconProps(className)}>
-      <circle cx="11" cy="11" r="6" />
-      <path d="m20 20-4.2-4.2" />
     </svg>
   );
 }

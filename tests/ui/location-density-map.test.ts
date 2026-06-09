@@ -144,14 +144,15 @@ describe("location density map helpers", () => {
 
   it("keeps both screens mounted on the same shared cartographic base via thin wrappers", () => {
     const leadPage = fs.readFileSync(path.join(repoRoot, "ui/src/app/admin/page.tsx"), "utf8");
-    const discoveryPage = fs.readFileSync(path.join(repoRoot, "ui/src/app/admin/discovery/page.tsx"), "utf8");
+    // Discovery se absorbió en Operaciones: el mapa vive en el componente discovery-ops.
+    const discoveryOps = fs.readFileSync(path.join(repoRoot, "ui/src/components/operations/discovery-ops.tsx"), "utf8");
     const leadWrapper = fs.readFileSync(path.join(repoRoot, "ui/src/components/lead-review-map.tsx"), "utf8");
     const discoveryWrapper = fs.readFileSync(path.join(repoRoot, "ui/src/components/discovery-context-map.tsx"), "utf8");
 
     expect(leadPage).toContain('import { LeadReviewMap } from "@/components/lead-review-map";');
     expect(leadPage).toContain("<LeadReviewMap");
-    expect(discoveryPage).toContain('import { DiscoveryContextMap } from "@/components/discovery-context-map";');
-    expect(discoveryPage).toContain("<DiscoveryContextMap");
+    expect(discoveryOps).toContain('import { DiscoveryContextMap } from "@/components/discovery-context-map";');
+    expect(discoveryOps).toContain("<DiscoveryContextMap");
     expect(leadWrapper).toContain('module.LocationDensityMapBase');
     expect(leadWrapper).toContain('ssr: false');
     expect(leadWrapper).toContain('variant="lead-review"');

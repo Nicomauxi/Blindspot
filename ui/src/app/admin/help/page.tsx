@@ -15,8 +15,8 @@ const modules = [
     text: "Concentra el seguimiento comercial vigente por etapas, owner y timeline de cada oportunidad.",
   },
   {
-    title: "Discovery",
-    text: "Controla cómo entran nuevos leads al sistema y cómo se preparan jobs, recomendaciones y refresh del inventario.",
+    title: "Operaciones · Discovery",
+    text: "Dentro de Operaciones: controla cómo entran nuevos leads al sistema y cómo se preparan jobs, recomendaciones y refresh del inventario.",
   },
   {
     title: "Operaciones y Plataforma",
@@ -68,7 +68,7 @@ export default function HelpPage() {
             <ShortcutRow href="/admin/leads?prospect_score_gte=70" label="Hot leads" text="Priorizar oportunidades con score alto." />
             <ShortcutRow href="/admin/leads?contact_tier=A" label="Tier A" text="Trabajar contactos más fuertes primero." />
             <ShortcutRow href="/admin/crm" label="CRM" text="Seguir etapas, notas, outcomes y ownership comercial." />
-            <ShortcutRow href="/admin/discovery" label="Discovery" text="Ver si están entrando leads nuevos o si hay jobs fallidos." />
+            <ShortcutRow href="/admin/operations" label="Operaciones · Discovery" text="Ver si están entrando leads nuevos o si hay jobs fallidos." />
           </div>
         </SectionCard>
       </div>

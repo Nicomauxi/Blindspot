@@ -309,16 +309,26 @@ function MetricChart({
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-export function ProcessesSection() {
+export function ProcessesSection({
+  schedulerStatus: schedulerStatusProp,
+  onSchedulerStatusChange,
+}: {
+  // Modo controlado (embebido en Monitoreo): el padre ya pollea el status del scheduler
+  // y acá no se duplica el intervalo; las acciones empujan el refresh hacia arriba.
+  schedulerStatus?: SchedulerStatusData | null;
+  onSchedulerStatusChange?: (status: SchedulerStatusData) => void;
+} = {}) {
   const token = useAuthStore((s) => s.token);
+  const controlled = schedulerStatusProp !== undefined;
 
   // Metrics (CPU/mem/uptime)
   const [metricsData, setMetricsData] = useState<ProcessMetricsData | null>(null);
   const [metricsError, setMetricsError] = useState<string | null>(null);
   const [metricsLoading, setMetricsLoading] = useState(true);
 
-  // Scheduler status
-  const [schedulerStatus, setSchedulerStatus] = useState<SchedulerStatusData | null>(null);
+  // Scheduler status (solo en modo standalone)
+  const [schedulerStatusLocal, setSchedulerStatusLocal] = useState<SchedulerStatusData | null>(null);
+  const schedulerStatus = controlled ? schedulerStatusProp : schedulerStatusLocal;
 
   // Selected process for log panel
   const [selectedProcess, setSelectedProcess] = useState<ProcessKey | null>(null);
@@ -332,6 +342,11 @@ export function ProcessesSection() {
   const [actionLoading, setActionLoading] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
 
+  const applySchedulerStatus = useCallback((status: SchedulerStatusData) => {
+    if (controlled) onSchedulerStatusChange?.(status);
+    else setSchedulerStatusLocal(status);
+  }, [controlled, onSchedulerStatusChange]);
+
   // ── Metrics + scheduler status polling ────────────────────────────────────
   const fetchMetrics = useCallback(() => {
     if (!token) return;
@@ -340,10 +355,12 @@ export function ProcessesSection() {
       .catch((err) => setMetricsError(err instanceof Error ? err.message : "Error al cargar métricas."))
       .finally(() => setMetricsLoading(false));
 
-    void getSchedulerStatus(token)
-      .then((res) => setSchedulerStatus(res.data))
-      .catch(() => null); // non-fatal
-  }, [token]);
+    if (!controlled) {
+      void getSchedulerStatus(token)
+        .then((res) => setSchedulerStatusLocal(res.data))
+        .catch(() => null); // non-fatal
+    }
+  }, [token, controlled]);
 
   useEffect(() => {
     if (!token) return;
@@ -383,7 +400,7 @@ export function ProcessesSection() {
     setActionError(null);
     try {
       await startScheduler(token);
-      await getSchedulerStatus(token).then((res) => setSchedulerStatus(res.data));
+      await getSchedulerStatus(token).then((res) => applySchedulerStatus(res.data));
     } catch (err) {
       setActionError(err instanceof Error ? err.message : "No se pudo iniciar el scheduler.");
     } finally {
@@ -397,7 +414,7 @@ export function ProcessesSection() {
     setActionError(null);
     try {
       await restartScheduler(token);
-      await getSchedulerStatus(token).then((res) => setSchedulerStatus(res.data));
+      await getSchedulerStatus(token).then((res) => applySchedulerStatus(res.data));
     } catch (err) {
       setActionError(err instanceof Error ? err.message : "No se pudo reiniciar el scheduler.");
     } finally {
@@ -430,6 +447,14 @@ export function ProcessesSection() {
           ? " — Core embebido activo."
           : " — Agrega EMBED_SCHEDULER=true al .env para controlar el Core desde acá."}
       </p>
+
+      {/* Historical charts — primero, debajo de Recursos de la PC (IA Parte B) */}
+      {metricsData && metricsData.history.length > 1 && (
+        <div className="grid gap-6 md:grid-cols-2">
+          <MetricChart history={metricsData.history} metric="cpu_pct" label="CPU %" unit="%" processes={historyProcesses} />
+          <MetricChart history={metricsData.history} metric="mem_bytes" label="Memoria (MB)" unit=" MB" processes={historyProcesses} />
+        </div>
+      )}
 
       {/* Process control cards */}
       <div className="space-y-2">
@@ -500,14 +525,6 @@ export function ProcessesSection() {
 
       {metricsError && (
         <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{metricsError}</div>
-      )}
-
-      {/* Historical charts */}
-      {metricsData && metricsData.history.length > 1 && (
-        <div className="grid gap-6 md:grid-cols-2">
-          <MetricChart history={metricsData.history} metric="cpu_pct" label="CPU %" unit="%" processes={historyProcesses} />
-          <MetricChart history={metricsData.history} metric="mem_bytes" label="Memoria (MB)" unit=" MB" processes={historyProcesses} />
-        </div>
       )}
     </div>
   );

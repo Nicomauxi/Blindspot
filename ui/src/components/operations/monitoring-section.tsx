@@ -29,6 +29,7 @@ import {
 } from "@/lib/api";
 import { useAuthStore } from "@/lib/auth-store";
 import { formatBackupSize } from "@/lib/backups";
+import { ProcessesSection } from "@/components/operations/processes-section";
 import { summarizeRunCard } from "@/lib/monitoring-runs";
 import { cn, formatDate, formatRelative } from "@/lib/utils";
 import { SectionCard, StatCard } from "@/components/admin-shell";
@@ -475,6 +476,12 @@ export function MonitoringSection() {
               ) : null}
             </SectionCard>
           ) : null}
+
+          {/* Gráficas históricas CPU/mem + control de procesos (API/Core) — movido desde la
+              vieja sección "Procesos" para que todo el monitoreo viva junto. */}
+          <SectionCard title="Procesos del sistema" description="Histórico de CPU/memoria por proceso, control del Core embebido y logs en vivo.">
+            <ProcessesSection schedulerStatus={schedulerStatus} onSchedulerStatusChange={setSchedulerStatus} />
+          </SectionCard>
 
           <div className="grid gap-4 xl:grid-cols-[1.1fr,0.9fr]">
             <SectionCard title="Alertas activas" description="Nada se esconde detrás de un badge verde genérico.">
