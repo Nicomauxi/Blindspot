@@ -21,6 +21,7 @@ import { monitoringRoutes } from "./routes/admin/monitoring.js";
 import { servicePricingRoutes } from "./routes/service-pricing.js";
 import { backupsRoutes } from "./routes/admin/backups.js";
 import { variablesRoutes } from "./routes/admin/variables.js";
+import { socialEnrichRoutes } from "./routes/admin/social-enrich.js";
 import { operationsRoutes } from "./routes/admin/operations.js";
 import { trackingRoutes } from "./routes/tracking.js";
 import { discoveryPlacesRoutes } from "./routes/admin/discovery-places.js";
@@ -97,6 +98,7 @@ export async function buildServer() {
   await app.register(performanceRoutes, { prefix: "/api/v1" });
   await app.register(monitoringRoutes, { prefix: "/api/v1" });
   await app.register(variablesRoutes, { prefix: "/api/v1" });
+  await app.register(socialEnrichRoutes, { prefix: "/api/v1" });
   await app.register(operationsRoutes, { prefix: "/api/v1" });
   await app.register(servicePricingRoutes, { prefix: "/api/v1" });
   await app.register(trackingRoutes, { prefix: "/api/v1" });

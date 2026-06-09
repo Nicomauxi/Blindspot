@@ -44,6 +44,7 @@ import { cn, formatDate, formatRelative } from "@/lib/utils";
 import { SectionCard, StatCard } from "@/components/admin-shell";
 import { CollapsibleSection } from "@/components/collapsible-section";
 import { EnrichmentSection } from "@/components/operations/enrichment-section";
+import { SocialEnrichSection } from "@/components/operations/social-enrich-section";
 import { DiscoveryContextMap } from "@/components/discovery-context-map";
 import { DiscoveryLocationPicker } from "@/components/discovery-location-picker";
 import { buildComposerGeoSelection, buildZoneLeadRequest } from "@/lib/location-density-map";
@@ -748,6 +749,10 @@ export function DiscoveryOps() {
 
       <SectionCard title="Enrichment de colección" description="Lanzá enrichment sobre un subconjunto filtrado o toda la colección, con re-score encadenado opcional.">
         <EnrichmentSection />
+      </SectionCard>
+
+      <SectionCard title="Social-enrich (aislado)" description="Actividad y liveness de redes en un subproceso fuera de la API, gated por los caps de recursos.">
+        <SocialEnrichSection />
       </SectionCard>
 
       <SectionCard title="Composer" description="Un submit crea un batch y un job hijo por fuente seleccionada.">

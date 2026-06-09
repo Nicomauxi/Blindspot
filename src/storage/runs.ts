@@ -159,6 +159,41 @@ export async function createEnrichmentRun(params: {
   return data as Run;
 }
 
+const SOCIAL_ENRICH_SENTINEL = "__social_enrich__";
+
+// Run de social-enrich (kind "social"): da visibilidad en el Estado del run unificado
+// tanto a las corridas por terminal como a las lanzadas por la API vía subproceso.
+export async function createSocialEnrichRun(params: {
+  scope: "run" | "all";
+  sourceRun?: Run;
+  limit: number;
+  force: boolean;
+}): Promise<Run> {
+  const { scope, sourceRun, limit, force } = params;
+
+  const { data, error } = await getSupabase()
+    .from("runs")
+    .insert({
+      niche: sourceRun?.niche ?? SOCIAL_ENRICH_SENTINEL,
+      location: sourceRun?.location ?? SOCIAL_ENRICH_SENTINEL,
+      profile: sourceRun?.profile ?? "a",
+      config: {
+        command: "social-enrich",
+        scope,
+        ...(sourceRun ? { source_run_id: sourceRun.id } : {}),
+        limit,
+        force,
+      },
+      status: "running",
+      kind: "social",
+    })
+    .select()
+    .single();
+
+  if (error) throw new Error(`Failed to create social-enrich run: ${error.message}`);
+  return data as Run;
+}
+
 const SCORING_ALL_SENTINEL = "__scoring_all__";
 
 export async function createScoringRun(params: {

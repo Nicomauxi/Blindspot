@@ -464,6 +464,27 @@ export type UnifiedRun = {
   phases: unknown;
 };
 
+export type SocialEnrichJobState = {
+  running: boolean;
+  pid: number | null;
+  started_at: string | null;
+  log_file: string | null;
+  limit: number | null;
+  force: boolean | null;
+};
+
+export async function getSocialEnrichJob(token: string) {
+  return request<{ data: SocialEnrichJobState }>("/api/v1/admin/social-enrich/jobs/current", {}, token);
+}
+
+export async function launchSocialEnrichJob(token: string, body: { limit?: number; force?: boolean }) {
+  return request<{ data: SocialEnrichJobState }>(
+    "/api/v1/admin/social-enrich/jobs",
+    { method: "POST", body: JSON.stringify(body) },
+    token
+  );
+}
+
 export async function listMonitoringRuns(
   token: string,
   opts: { type?: string; limit?: number } = {}
