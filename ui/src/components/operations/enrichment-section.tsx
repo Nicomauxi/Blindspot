@@ -37,6 +37,7 @@ export function EnrichmentSection() {
   const [withHeuristic, setWithHeuristic] = useState(true);
   const [scope, setScope] = useState<"selection" | "all">("selection");
   const [forceRefresh, setForceRefresh] = useState(false);
+  const [rescoreOnComplete, setRescoreOnComplete] = useState(false);
   const [concurrency, setConcurrency] = useState(String(DEFAULT_MAX_THREADS));
   const [maxThreads, setMaxThreads] = useState(DEFAULT_MAX_THREADS);
   const [loading, setLoading] = useState(false);
@@ -151,6 +152,7 @@ export function EnrichmentSection() {
         concurrency: Math.min(Number(concurrency) || DEFAULT_MAX_THREADS, maxThreads),
         scope,
         force_refresh: forceRefresh,
+        rescore_on_complete: rescoreOnComplete,
       });
       setNotice(`Enrichment encolado para ${response.data.lead_count} leads. Run ${response.data.run_id}.`);
     } catch (err) {
@@ -270,6 +272,17 @@ export function EnrichmentSection() {
           />
           <span>Reprocesar todo</span>
           <span className="text-xs text-slate-500">(apagado = saltear frescos)</span>
+        </label>
+
+        <label className="flex items-center gap-2 text-sm text-slate-700">
+          <input
+            type="checkbox"
+            checked={rescoreOnComplete}
+            onChange={(e) => setRescoreOnComplete(e.target.checked)}
+            className="h-4 w-4 rounded border-slate-300 text-sky-600 focus:ring-sky-500"
+          />
+          <span>Re-score al terminar</span>
+          <span className="text-xs text-slate-500">(run de scoring dependiente)</span>
         </label>
       </div>
 

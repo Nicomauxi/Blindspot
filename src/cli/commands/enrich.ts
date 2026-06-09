@@ -27,6 +27,7 @@ import {
   retroactiveEmailCleanup,
 } from "../../storage/system-lists.js";
 import type { AllRuntime } from "../../storage/system-lists.js";
+import { rescoreLeadsChained } from "./rescore-chain.js";
 import type { EnrichmentRunStats, Run } from "../../shared/types.js";
 
 const UUID_RE =
@@ -89,6 +90,8 @@ interface EnrichExecutionOptions {
   heuristicConcurrency?: number;
   // Tope de leads en modo filter. Default 250 (selección); scope=all lo sube desde la API.
   filterLimit?: number;
+  // Al completar el enrich, re-score encadenado sobre los mismos leads (run dependiente).
+  rescoreOnComplete?: boolean;
 }
 
 const FILTER_MODE_DEFAULT_LIMIT = 250;
@@ -435,6 +438,18 @@ async function executeEnrichmentRun(
       }
     }
     printSummary(enrichRun.id, stats);
+
+    // Re-score encadenado (best-effort): el run de enrich ya quedó completado;
+    // un fallo acá se loguea pero no lo invalida.
+    if (options.rescoreOnComplete && leads.length > 0) {
+      try {
+        await rescoreLeadsChained(enrichRun, leads.map((l) => l.id));
+      } catch (chainErr: unknown) {
+        const chainMsg = chainErr instanceof Error ? chainErr.message : String(chainErr);
+        log.warn({ runId: enrichRun.id, err: chainMsg }, "chained re-score failed — enrich run remains completed");
+      }
+    }
+
     return { runId: enrichRun.id, stats };
   } catch (err: unknown) {
     const duration_ms = Date.now() - startedAt;
@@ -452,6 +467,7 @@ export async function startFilterEnrichmentJob(params: {
   forceRefresh?: boolean;
   heuristicConcurrency?: number;
   leadLimit?: number;
+  rescoreOnComplete?: boolean;
 }): Promise<{ runId: string }> {
   const enrichRun = await createEnrichmentRun({
     mode: "filter",
@@ -471,6 +487,7 @@ export async function startFilterEnrichmentJob(params: {
       ? { heuristicConcurrency: params.heuristicConcurrency }
       : {}),
     ...(params.leadLimit !== undefined ? { filterLimit: params.leadLimit } : {}),
+    ...(params.rescoreOnComplete !== undefined ? { rescoreOnComplete: params.rescoreOnComplete } : {}),
   }, enrichRun).catch((err) => {
     const log = getLogger();
     log.error({ runId: enrichRun.id, err: err instanceof Error ? err.message : String(err) }, "Background filter enrichment failed");

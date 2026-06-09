@@ -38,7 +38,7 @@ interface RawScoreArgs {
   dryRun?: boolean;
 }
 
-function buildTopBottom(scored: Array<{ lead: Lead; prospectScore: number }>): {
+export function buildTopBottom(scored: Array<{ lead: Lead; prospectScore: number }>): {
   top_5: ProspectEntry[];
   bottom_5: ProspectEntry[];
 } {

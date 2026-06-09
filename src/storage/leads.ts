@@ -1154,6 +1154,25 @@ export async function loadLeadsByFilterSelection(
   return leads.sort((a, b) => a.name.localeCompare(b.name));
 }
 
+// Carga leads puntuales por id en lotes (mismo motivo que FILTER_LEADS_ID_CHUNK:
+// un .in() gigante rompe el límite de URL). Usado por el re-score encadenado.
+export async function loadLeadsByIds(ids: string[]): Promise<Lead[]> {
+  if (ids.length === 0) return [];
+  const db = getSupabase();
+  const leads: Lead[] = [];
+  for (let i = 0; i < ids.length; i += FILTER_LEADS_ID_CHUNK) {
+    const chunk = ids.slice(i, i + FILTER_LEADS_ID_CHUNK);
+    const { data, error } = await db
+      .from("leads")
+      .select("*")
+      .in("id", chunk)
+      .limit(chunk.length);
+    if (error) throw new Error(`Failed to load leads by ids: ${error.message}`);
+    leads.push(...((data ?? []) as Lead[]));
+  }
+  return leads;
+}
+
 export async function loadLeadsBySource(
   source: string,
   opts: { passedOnly?: boolean } = { passedOnly: true }

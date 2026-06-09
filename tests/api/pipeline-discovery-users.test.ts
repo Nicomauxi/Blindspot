@@ -684,6 +684,7 @@ describe("Discovery routes", () => {
       forceRefresh: false,
       heuristicConcurrency: 4,
       leadLimit: 250,
+      rescoreOnComplete: false,
     });
     await app.close();
   });
@@ -718,6 +719,25 @@ describe("Discovery routes", () => {
     expect(res.json().data.force_refresh).toBe(true);
     expect(startFilterEnrichmentJob).toHaveBeenCalledWith(
       expect.objectContaining({ forceRefresh: true, heuristicConcurrency: 4, leadLimit: 250 })
+    );
+    await app.close();
+  });
+
+  it("POST /admin/enrichment/filter-jobs pasa rescore_on_complete al job", async () => {
+    startFilterEnrichmentJob.mockResolvedValue({ runId: "filter-run-4" });
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/admin/enrichment/filter-jobs",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ source: "google_places", with_heuristic: true, concurrency: 4, rescore_on_complete: true }),
+    });
+    expect(res.statusCode).toBe(202);
+    expect(res.json().data.rescore_on_complete).toBe(true);
+    expect(startFilterEnrichmentJob).toHaveBeenCalledWith(
+      expect.objectContaining({ rescoreOnComplete: true })
     );
     await app.close();
   });

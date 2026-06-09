@@ -737,6 +737,7 @@ export type EnrichmentFilters = MissingFilters & {
   concurrency?: number;
   scope?: "selection" | "all";
   force_refresh?: boolean;
+  rescore_on_complete?: boolean;
 };
 
 export async function estimateEnrichmentImpact(token: string, filters: Omit<EnrichmentFilters, "with_heuristic" | "concurrency">) {

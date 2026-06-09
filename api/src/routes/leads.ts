@@ -74,6 +74,8 @@ const enrichCollectionSchema = z.object({
   scope: z.enum(["selection", "all"]).default("selection"),
   // false = saltear frescos (resume); true = reprocesar todo.
   force_refresh: z.boolean().default(false),
+  // Al completar el enrich, re-score encadenado sobre la misma colección.
+  rescore_on_complete: z.boolean().default(false),
 });
 
 const REJECTION_REASONS = ["no_pertenece_al_lead", "dato_desactualizado", "fuera_de_servicio", "otro"] as const;
@@ -1497,7 +1499,7 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
       const {
         contact_tier, prospect_score_gte, niche, source, primary_offer, q,
         missing_gps, missing_address, missing_phone, missing_whatsapp, missing_email, missing_website,
-        mode, with_heuristic, concurrency, scope, force_refresh,
+        mode, with_heuristic, concurrency, scope, force_refresh, rescore_on_complete,
       } = parseResult.data;
 
       // scope=all sólo aplica a enrichment (flujo gratis); re_discovery mantiene el tope chico.
@@ -1566,6 +1568,7 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
         // del modo heurístico cuando el job corre in-process en la API.
         heuristicConcurrency: effectiveConcurrency,
         leadLimit,
+        rescoreOnComplete: rescore_on_complete,
       });
 
       return reply.status(202).send({
@@ -1578,6 +1581,7 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
           concurrency: effectiveConcurrency,
           scope,
           force_refresh,
+          rescore_on_complete,
         },
       });
     }
