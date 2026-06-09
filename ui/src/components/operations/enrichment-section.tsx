@@ -1,11 +1,13 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { createFilteredEnrichmentJob } from "@/lib/api";
+import { useEffect, useMemo, useState } from "react";
+import { createFilteredEnrichmentJob, estimateEnrichmentImpact, getAdminVariables } from "@/lib/api";
 import { useAuthStore } from "@/lib/auth-store";
 import { cn } from "@/lib/utils";
 
 const ENRICH_LIMIT = 250;
+const DEFAULT_MAX_THREADS = 4;
+const PREVIEW_DEBOUNCE_MS = 450;
 
 const SOURCE_OPTIONS = [
   { value: "", label: "Todas las fuentes" },
@@ -32,10 +34,13 @@ export function EnrichmentSection() {
   const [primaryOffer, setPrimaryOffer] = useState("");
   const [q, setQ] = useState("");
   const [withHeuristic, setWithHeuristic] = useState(true);
-  const [concurrency, setConcurrency] = useState("4");
+  const [concurrency, setConcurrency] = useState(String(DEFAULT_MAX_THREADS));
+  const [maxThreads, setMaxThreads] = useState(DEFAULT_MAX_THREADS);
   const [loading, setLoading] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [preview, setPreview] = useState<number | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
 
   const filters = useMemo(() => ({
     ...(tier ? { contact_tier: tier } : {}),
@@ -52,6 +57,61 @@ export function EnrichmentSection() {
     if (filterCount === 0) return "Definí al menos un filtro antes de encolar enrichment.";
     return "";
   }, [filterCount]);
+
+  // Tope de hilos configurado en Variables (max_enrich_threads).
+  useEffect(() => {
+    if (!token) return;
+    let cancelled = false;
+    getAdminVariables(token)
+      .then((res) => {
+        if (cancelled) return;
+        const item = res.data.find((v) => v.key === "max_enrich_threads");
+        const value = typeof item?.value === "number" ? item.value : DEFAULT_MAX_THREADS;
+        const bounded = Math.max(1, Math.min(32, value));
+        setMaxThreads(bounded);
+        setConcurrency((prev) => String(Math.min(Number(prev) || DEFAULT_MAX_THREADS, bounded)));
+      })
+      .catch(() => {
+        /* mantiene el default si Variables no responde */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [token]);
+
+  const threadOptions = useMemo(() => {
+    const opts: number[] = [];
+    for (let n = 1; n <= maxThreads; n += 1) opts.push(n);
+    return opts;
+  }, [maxThreads]);
+
+  // Preview de conteo en vivo (debounced) usando el endpoint estimate.
+  useEffect(() => {
+    if (!token || filterCount === 0) {
+      setPreview(null);
+      setPreviewLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setPreviewLoading(true);
+    const handle = setTimeout(() => {
+      estimateEnrichmentImpact(token, filters)
+        .then((res) => {
+          if (cancelled) return;
+          setPreview(res.data.lead_count);
+          setPreviewLoading(false);
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setPreview(null);
+          setPreviewLoading(false);
+        });
+    }, PREVIEW_DEBOUNCE_MS);
+    return () => {
+      cancelled = true;
+      clearTimeout(handle);
+    };
+  }, [token, filters, filterCount]);
 
   function clearFilters() {
     setTier("");
@@ -71,7 +131,7 @@ export function EnrichmentSection() {
       const response = await createFilteredEnrichmentJob(token, {
         ...filters,
         with_heuristic: withHeuristic,
-        concurrency: Number(concurrency) || 4,
+        concurrency: Math.min(Number(concurrency) || DEFAULT_MAX_THREADS, maxThreads),
       });
       setNotice(`Enrichment encolado para ${response.data.lead_count} leads. Run ${response.data.run_id}.`);
     } catch (err) {
@@ -159,16 +219,15 @@ export function EnrichmentSection() {
 
       <div className="flex flex-wrap items-center gap-4">
         <div className="flex items-center gap-2">
-          <label className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Concurrencia</label>
+          <label className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Hilos simultáneos</label>
           <select
             value={concurrency}
             onChange={(e) => setConcurrency(e.target.value)}
             className="rounded-lg border border-slate-300 px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500"
           >
-            <option value="2">2</option>
-            <option value="4">4</option>
-            <option value="6">6</option>
+            {threadOptions.map((n) => <option key={n} value={String(n)}>{n}</option>)}
           </select>
+          <span className="text-xs text-slate-400">máx {maxThreads}</span>
         </div>
 
         <label className="flex items-center gap-2 text-sm text-slate-700">
@@ -192,6 +251,24 @@ export function EnrichmentSection() {
           </button>
         ) : null}
       </div>
+
+      {filterCount > 0 ? (
+        <div className="flex items-center gap-3 rounded-xl border border-sky-100 bg-sky-50/60 px-4 py-3">
+          <span className="text-2xl font-semibold text-sky-700">
+            {previewLoading ? "…" : preview ?? "—"}
+          </span>
+          <div className="text-sm text-slate-600">
+            <div className="font-medium text-slate-700">leads coinciden con los filtros</div>
+            {preview != null && preview > ENRICH_LIMIT ? (
+              <div className="text-xs text-amber-700">
+                Se procesarán los primeros {ENRICH_LIMIT} por operación.
+              </div>
+            ) : (
+              <div className="text-xs text-slate-400">Estimación en vivo según tu selección.</div>
+            )}
+          </div>
+        </div>
+      ) : null}
 
       <div className="flex flex-wrap items-center gap-3">
         <button

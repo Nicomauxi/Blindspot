@@ -1,3 +1,4 @@
+import os from "node:os";
 import cron from "node-cron";
 import { getSupabase } from "../../shared/supabase.js";
 import { getLogger } from "../../shared/logger.js";
@@ -11,12 +12,34 @@ const logger = getLogger();
 
 const PIPELINE_POLL_INTERVAL_MS = 60_000;
 
+// Caps configurables en pipeline_config (ver Variables · Operaciones).
+type ResourceCaps = { max_concurrent_runs?: number; max_cpu_pct?: number; max_ram_pct?: number };
+const DEFAULT_MAX_CONCURRENT_RUNS = 1;
+const DEFAULT_MAX_CPU_PCT = 80;
+const DEFAULT_MAX_RAM_PCT = 80;
+
 function resolveDiscoveryConcurrency(config: (PipelineConfig & { updated_at?: string }) | null): number {
   if (!config) return 1;
   const maxJobs = (config.phases?.discovery as { max_jobs?: number } | undefined)?.max_jobs;
   if (typeof maxJobs === "number" && maxJobs > 0) return maxJobs;
   const cpuBudget = config.cpu_budget as CpuBudget | undefined;
   return cpuBudget ? discoveryJobConcurrencyFromCpuBudget(cpuBudget) : 1;
+}
+
+export function resolveMaxConcurrentRuns(config: (PipelineConfig & ResourceCaps) | null): number {
+  const v = (config as ResourceCaps | null)?.max_concurrent_runs;
+  return typeof v === "number" && v > 0 ? v : DEFAULT_MAX_CONCURRENT_RUNS;
+}
+
+// Uso instantáneo del host (mismo cálculo que el monitor de recursos de la API).
+function hostResourceUsage(): { cpuPct: number; ramPct: number } {
+  const total = os.totalmem();
+  const free = os.freemem();
+  const ramPct = total > 0 ? ((total - free) / total) * 100 : 0;
+  const cores = os.cpus().length || 1;
+  const load1 = os.loadavg()[0] ?? 0;
+  const cpuPct = Math.min(100, (load1 / cores) * 100);
+  return { cpuPct, ramPct };
 }
 const CONFIG_WATCH_INTERVAL_MS = 60_000;
 const DISCOVERY_POLL_INTERVAL_MS = 30_000;
@@ -26,7 +49,7 @@ export class PipelineScheduler {
   private pipelinePollTimer: ReturnType<typeof setInterval> | null = null;
   private configWatchTimer: ReturnType<typeof setInterval> | null = null;
   private discoveryPollTimer: ReturnType<typeof setInterval> | null = null;
-  private activeRunId: string | null = null;
+  private activeRunIds = new Set<string>();
   private lastConfigUpdatedAt: string | null = null;
   private polling = false;
 
@@ -154,8 +177,18 @@ export class PipelineScheduler {
       return;
     }
 
-    if (this.activeRunId) {
-      logger.debug({ activeRunId: this.activeRunId }, "Run already active locally — skipping poll");
+    const config = await this.fetchConfig();
+    const maxConcurrent = resolveMaxConcurrentRuns(config);
+
+    const slots = maxConcurrent - this.activeRunIds.size;
+    if (slots <= 0) {
+      logger.debug({ active: this.activeRunIds.size, maxConcurrent }, "All run slots busy — skipping poll");
+      return;
+    }
+
+    // Guarda de recursos: sólo aplica a runs *adicionales*. El primer run nunca
+    // se bloquea por recursos para no detener todo el trabajo del pipeline.
+    if (this.activeRunIds.size > 0 && !this.resourcesAllowNewRun(config)) {
       return;
     }
 
@@ -165,7 +198,7 @@ export class PipelineScheduler {
       .select("*")
       .eq("status", "pending")
       .order("created_at", { ascending: true })
-      .limit(1);
+      .limit(slots);
 
     if (specificRunId) {
       query = supabase
@@ -184,9 +217,34 @@ export class PipelineScheduler {
 
     if (!data || data.length === 0) return;
 
-    const run = data[0] as PipelineRun;
-    logger.info({ runId: run.id, triggeredBy: run.triggered_by }, "Picked up pending run");
-    await this.executePendingRun(run.id);
+    for (const row of data as PipelineRun[]) {
+      if (this.activeRunIds.has(row.id)) continue;
+      // Reservamos el slot de forma síncrona ANTES de despachar, así el próximo
+      // poll cuenta correctamente los slots ocupados aunque el run aún no haya
+      // hecho el claim atómico en DB (evita reintentos redundantes con cap > 1).
+      this.activeRunIds.add(row.id);
+      logger.info({ runId: row.id, triggeredBy: row.triggered_by }, "Picked up pending run");
+      // Fire-and-forget: cuando maxConcurrent > 1 los runs corren en paralelo.
+      // Con el default (1), sólo se lanza un run por vez (mismo comportamiento previo).
+      void this.executePendingRun(row.id).catch((err) =>
+        logger.error({ err, runId: row.id }, "Pending run execution failed")
+      );
+    }
+  }
+
+  private resourcesAllowNewRun(config: (PipelineConfig & ResourceCaps) | null): boolean {
+    const caps = config as ResourceCaps | null;
+    const maxCpu = caps?.max_cpu_pct ?? DEFAULT_MAX_CPU_PCT;
+    const maxRam = caps?.max_ram_pct ?? DEFAULT_MAX_RAM_PCT;
+    const { cpuPct, ramPct } = hostResourceUsage();
+    if (cpuPct > maxCpu || ramPct > maxRam) {
+      logger.info(
+        { cpuPct: Math.round(cpuPct), ramPct: Math.round(ramPct), maxCpu, maxRam },
+        "Host resources above caps — deferring additional run"
+      );
+      return false;
+    }
+    return true;
   }
 
   private async pollDiscoveryJobs(): Promise<void> {
@@ -202,46 +260,46 @@ export class PipelineScheduler {
     }
   }
 
+  // El slot (activeRunIds) ya fue reservado por el poller antes de llamar acá;
+  // este método libera el slot en TODA salida (claim fallido o run completado).
   private async executePendingRun(runId: string): Promise<void> {
     const supabase = getSupabase();
+    this.activeRunIds.add(runId); // idempotente: garantiza el tracking incluso si se invoca directo
 
-    // Atomic claim via UPDATE-RETURNING: only one worker can transition
-    // pending → running. Prevents two scheduler instances from executing the
-    // same run when running multi-instance.
-    const { data: claimed, error: claimError } = await supabase
-      .from("pipeline_runs")
-      .update({ status: "running", started_at: new Date().toISOString() })
-      .eq("id", runId)
-      .eq("status", "pending")
-      .select("*")
-      .single();
+    try {
+      // Atomic claim via UPDATE-RETURNING: only one worker can transition
+      // pending → running. Prevents two scheduler instances from executing the
+      // same run when running multi-instance.
+      const { data: claimed, error: claimError } = await supabase
+        .from("pipeline_runs")
+        .update({ status: "running", started_at: new Date().toISOString() })
+        .eq("id", runId)
+        .eq("status", "pending")
+        .select("*")
+        .single();
 
-    if (claimError) {
-      // PGRST116 = no rows returned (another worker took it, or it's not pending).
-      if (claimError.code === "PGRST116") {
+      if (claimError) {
+        // PGRST116 = no rows returned (another worker took it, or it's not pending).
+        if (claimError.code === "PGRST116") {
+          logger.debug({ runId }, "Run already claimed by another worker — skipping");
+          return;
+        }
+        logger.error({ runId, error: claimError }, "Failed to claim pending run");
+        return;
+      }
+
+      if (!claimed) {
         logger.debug({ runId }, "Run already claimed by another worker — skipping");
         return;
       }
-      logger.error({ runId, error: claimError }, "Failed to claim pending run");
-      return;
-    }
 
-    if (!claimed) {
-      logger.debug({ runId }, "Run already claimed by another worker — skipping");
-      return;
-    }
-
-    // Tracking only — no longer used as a gate (the DB CAS is the real lock).
-    this.activeRunId = runId;
-
-    try {
       const run = claimed as PipelineRun;
       const config = await this.fetchConfig();
       const runWithConfig: PipelineRun = { ...run, config_snapshot: config };
 
       await executeRun(runWithConfig);
     } finally {
-      this.activeRunId = null;
+      this.activeRunIds.delete(runId);
     }
   }
 

@@ -1,8 +1,15 @@
 import os from "node:os";
-import { exec } from "node:child_process";
 import { promisify } from "node:util";
 
-const execAsync = promisify(exec);
+// `exec` se resuelve de forma diferida (dynamic import) para no acceder al
+// binding al cargar el módulo: así los tests que mockean node:child_process sin
+// `exec` no rompen al importar las rutas de monitoreo.
+async function runShell(command: string, timeout: number): Promise<string> {
+  const { exec } = await import("node:child_process");
+  const execAsync = promisify(exec);
+  const { stdout } = await execAsync(command, { timeout });
+  return stdout;
+}
 
 export interface ResourceSnapshot {
   ram: { used_bytes: number; free_bytes: number; total_bytes: number; pct: number };
@@ -19,7 +26,7 @@ function pct(used: number, total: number): number {
 // Disco del filesystem del proyecto vía `df -kP`.
 async function readDisk(): Promise<ResourceSnapshot["disk"]> {
   try {
-    const { stdout } = await execAsync("df -kP .", { timeout: 4000 });
+    const stdout = await runShell("df -kP .", 4000);
     const line = stdout.trim().split("\n").at(-1) ?? "";
     const cols = line.split(/\s+/);
     // Filesystem 1024-blocks Used Available Capacity Mounted
@@ -36,7 +43,7 @@ async function readDisk(): Promise<ResourceSnapshot["disk"]> {
 // Top procesos por memoria (node/core/api) vía `ps`.
 async function readProcesses(): Promise<ResourceSnapshot["processes"]> {
   try {
-    const { stdout } = await execAsync("ps -eo pid,pcpu,rss,comm --sort=-rss | head -n 12", { timeout: 4000 });
+    const stdout = await runShell("ps -eo pid,pcpu,rss,comm --sort=-rss | head -n 12", 4000);
     return stdout
       .trim()
       .split("\n")

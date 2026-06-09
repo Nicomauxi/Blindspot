@@ -26,7 +26,25 @@ vi.mock("../../src/shared/logger.js", () => ({
   })),
 }));
 
-import { PipelineScheduler } from "../../src/modules/pipeline/scheduler.js";
+import { PipelineScheduler, resolveMaxConcurrentRuns } from "../../src/modules/pipeline/scheduler.js";
+
+describe("resolveMaxConcurrentRuns", () => {
+  it("defaults to 1 when config is null (backward compatible)", () => {
+    expect(resolveMaxConcurrentRuns(null)).toBe(1);
+  });
+
+  it("defaults to 1 when the cap is missing", () => {
+    expect(resolveMaxConcurrentRuns({} as never)).toBe(1);
+  });
+
+  it("uses the configured cap when valid", () => {
+    expect(resolveMaxConcurrentRuns({ max_concurrent_runs: 4 } as never)).toBe(4);
+  });
+
+  it("ignores non-positive caps and falls back to 1", () => {
+    expect(resolveMaxConcurrentRuns({ max_concurrent_runs: 0 } as never)).toBe(1);
+  });
+});
 
 describe("PipelineScheduler discovery polling", () => {
   beforeEach(() => {

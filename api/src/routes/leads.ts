@@ -35,6 +35,22 @@ const CONTACT_TIERS = ["A", "B", "C", "D", "X"] as const;
 type ContactTier = (typeof CONTACT_TIERS)[number];
 
 const FILTER_ENRICH_LIMIT = 250;
+const DEFAULT_MAX_ENRICH_THREADS = 4;
+
+// Acota la concurrencia pedida al tope configurado en Variables (max_enrich_threads).
+async function clampToMaxEnrichThreads(requested: number): Promise<number> {
+  try {
+    const { data } = await getDb()
+      .from("pipeline_config")
+      .select("max_enrich_threads")
+      .eq("id", "singleton")
+      .single();
+    const cap = typeof data?.max_enrich_threads === "number" ? data.max_enrich_threads : DEFAULT_MAX_ENRICH_THREADS;
+    return Math.max(1, Math.min(requested, cap));
+  } catch {
+    return Math.max(1, Math.min(requested, DEFAULT_MAX_ENRICH_THREADS));
+  }
+}
 
 const enrichCollectionSchema = z.object({
   contact_tier: z.enum(CONTACT_TIERS).optional(),
@@ -1507,17 +1523,19 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
         });
       }
 
+      const effectiveConcurrency = await clampToMaxEnrichThreads(concurrency);
+
       if (mode === "re_discovery") {
-        const job = await startReDiscoveryJob({ filters, concurrency });
+        const job = await startReDiscoveryJob({ filters, concurrency: effectiveConcurrency });
         return reply.status(202).send({
-          data: { run_id: job.runId, lead_count: leadCount, filters, mode, concurrency },
+          data: { run_id: job.runId, lead_count: leadCount, filters, mode, concurrency: effectiveConcurrency },
         });
       }
 
       const job = await startFilterEnrichmentJob({
         filters,
         withHeuristic: with_heuristic,
-        concurrency,
+        concurrency: effectiveConcurrency,
       });
 
       return reply.status(202).send({
@@ -1527,7 +1545,7 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
           filters,
           mode,
           with_heuristic,
-          concurrency,
+          concurrency: effectiveConcurrency,
         },
       });
     }
