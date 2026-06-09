@@ -2411,3 +2411,16 @@ export async function getSocialHistory(token: string, leadId: string) {
     token
   );
 }
+
+// Recursos físicos del host (monitoreo)
+export type ResourceSnapshot = {
+  ram: { used_bytes: number; free_bytes: number; total_bytes: number; pct: number };
+  disk: { used_bytes: number; free_bytes: number; total_bytes: number; pct: number } | null;
+  cpu: { load_1m: number; cores: number; pct: number };
+  processes: Array<{ pid: number; cmd: string; cpu_pct: number; mem_mb: number }>;
+  sampled_at: string;
+};
+
+export async function getResourceSnapshot(token: string) {
+  return request<{ data: ResourceSnapshot }>("/api/v1/admin/monitoring/resources", {}, token);
+}

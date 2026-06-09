@@ -17,6 +17,8 @@ import {
   resetDatabase,
   restartAll,
   restartSystemProcess,
+  getResourceSnapshot,
+  type ResourceSnapshot,
   type DiscoveryJobsSummary,
   type MonitoringOverview,
   type PipelineLogLine,
@@ -47,9 +49,25 @@ const PHASE_STATUS_COLORS: Record<string, string> = {
   failed: "bg-rose-100 text-rose-700",
 };
 
+function ResourceBar({ label, used, total, pct }: { label: string; used: number; total: number; pct: number }) {
+  const color = pct > 85 ? "bg-rose-500" : pct > 60 ? "bg-amber-500" : "bg-emerald-500";
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white p-3">
+      <div className="flex items-center justify-between text-xs font-semibold uppercase tracking-wide text-slate-500">
+        <span>{label}</span><span>{pct}%</span>
+      </div>
+      <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-100">
+        <div className={cn("h-full rounded-full", color)} style={{ width: `${Math.min(100, pct)}%` }} />
+      </div>
+      <div className="mt-1 text-xs text-slate-500">{formatBackupSize(used)} / {formatBackupSize(total)}</div>
+    </div>
+  );
+}
+
 export function MonitoringSection() {
   const token = useAuthStore((s) => s.token);
   const [overview, setOverview] = useState<MonitoringOverview | null>(null);
+  const [resources, setResources] = useState<ResourceSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
   const [restartTarget, setRestartTarget] = useState<"core" | "api" | null>(null);
@@ -87,6 +105,20 @@ export function MonitoringSection() {
     const interval = setInterval(() => void refresh(), 10000);
     return () => clearInterval(interval);
   }, [refresh]);
+
+  // Recursos físicos de la PC — polling propio cada 5s.
+  useEffect(() => {
+    if (!token) return;
+    let active = true;
+    const fetchResources = () => {
+      getResourceSnapshot(token)
+        .then((res) => { if (active) setResources(res.data); })
+        .catch(() => { if (active) setResources(null); });
+    };
+    fetchResources();
+    const id = setInterval(fetchResources, 5000);
+    return () => { active = false; clearInterval(id); };
+  }, [token]);
 
   // Poll scheduler status independently (faster than full monitoring refresh)
   useEffect(() => {
@@ -299,6 +331,46 @@ export function MonitoringSection() {
             <StatCard label="Budget GP" value={overview.costs.google_places.budget_remaining != null ? `USD ${overview.costs.google_places.budget_remaining.toFixed(2)}` : "n/a"} hint={`${overview.costs.google_places.request_count} requests este mes`} tone={overview.costs.google_places.over_alert ? "warn" : "good"} />
             <StatCard label="Errores recientes" value={overview.logs.recent.length} hint={`Ventana ${overview.performance.window_days} días`} tone={overview.logs.recent.length > 0 ? "warn" : "default"} />
           </div>
+
+          {resources ? (
+            <SectionCard title="Recursos de la PC" description="Uso físico del host — actualizado cada 5 s.">
+              <div className="grid gap-4 md:grid-cols-3">
+                <ResourceBar label="RAM" used={resources.ram.used_bytes} total={resources.ram.total_bytes} pct={resources.ram.pct} />
+                {resources.disk ? (
+                  <ResourceBar label="Disco" used={resources.disk.used_bytes} total={resources.disk.total_bytes} pct={resources.disk.pct} />
+                ) : (
+                  <div className="rounded-xl border border-slate-200 bg-white p-3 text-sm text-slate-400">Disco: no disponible</div>
+                )}
+                <div className="rounded-xl border border-slate-200 bg-white p-3">
+                  <div className="flex items-center justify-between text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    <span>CPU</span><span>{resources.cpu.pct}%</span>
+                  </div>
+                  <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-100">
+                    <div className={cn("h-full rounded-full", resources.cpu.pct > 85 ? "bg-rose-500" : resources.cpu.pct > 60 ? "bg-amber-500" : "bg-emerald-500")} style={{ width: `${Math.min(100, resources.cpu.pct)}%` }} />
+                  </div>
+                  <div className="mt-1 text-xs text-slate-500">load {resources.cpu.load_1m} · {resources.cpu.cores} cores</div>
+                </div>
+              </div>
+              {resources.processes.length > 0 ? (
+                <details className="mt-3">
+                  <summary className="cursor-pointer text-xs font-medium text-sky-600">Detalle de procesos (top por memoria)</summary>
+                  <table className="mt-2 w-full text-xs">
+                    <thead><tr className="text-left text-slate-400"><th className="py-1">PID</th><th>Proceso</th><th className="text-right">CPU%</th><th className="text-right">MEM</th></tr></thead>
+                    <tbody>
+                      {resources.processes.slice(0, 10).map((p) => (
+                        <tr key={p.pid} className="border-t border-slate-100">
+                          <td className="py-1 text-slate-500">{p.pid}</td>
+                          <td className="truncate text-slate-700">{p.cmd}</td>
+                          <td className="text-right text-slate-600">{p.cpu_pct}</td>
+                          <td className="text-right text-slate-600">{p.mem_mb} MB</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </details>
+              ) : null}
+            </SectionCard>
+          ) : null}
 
           <div className="grid gap-4 xl:grid-cols-[1.1fr,0.9fr]">
             <SectionCard title="Alertas activas" description="Nada se esconde detrás de un badge verde genérico.">

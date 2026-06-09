@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { getDb } from "../../db/client.js";
 import { requireAdmin } from "../../auth/middleware.js";
 import { buildMonitoringOverview } from "../../modules/monitoring/service.js";
+import { buildResourceSnapshot } from "../../modules/monitoring/resources.js";
 
 const JOB_STATUSES = ["queued", "running", "completed", "failed"] as const;
 type JobStatus = typeof JOB_STATUSES[number];
@@ -14,6 +15,16 @@ export async function monitoringRoutes(app: FastifyInstance): Promise<void> {
     } catch (err) {
       request.log.error({ err }, "Failed to build monitoring overview");
       return reply.status(500).send({ error: "Database error", error_code: "db_error" });
+    }
+  });
+
+  app.get("/admin/monitoring/resources", { preHandler: requireAdmin }, async (request, reply) => {
+    try {
+      const data = await buildResourceSnapshot();
+      return reply.status(200).send({ data });
+    } catch (err) {
+      request.log.error({ err }, "Failed to build resource snapshot");
+      return reply.status(500).send({ error: "Resource snapshot error", error_code: "resources_error" });
     }
   });
 
