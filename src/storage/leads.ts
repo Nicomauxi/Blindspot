@@ -879,7 +879,10 @@ export async function updateLeadSocialSearch(
   socialSearch: SocialSearch,
   newTags: string[],
   whatsappFromSocial: string | null,
-  socialActivity?: import("../modules/social-enrich/social-activity.js").SocialActivitySnapshot
+  socialActivity?: import("../modules/social-enrich/social-activity.js").SocialActivitySnapshot,
+  // canonical_fields ya fusionados con la fuente social (P1/P3). Si se provee, se persisten
+  // y se usan para tags/reliability; si no, se conservan los actuales.
+  socialCanonical?: Record<string, unknown> | null
 ): Promise<void> {
   const db = getSupabase();
   const { data: current, error: fetchErr } = await db
@@ -916,7 +919,10 @@ export async function updateLeadSocialSearch(
     mergedTags.push("whatsapp-derived");
   }
   const currentPhone = (current?.phone as string | null) ?? null;
-  const canonicalFields = (current?.canonical_fields as Lead["canonical_fields"]) ?? null;
+  const canonicalFields =
+    socialCanonical !== undefined && socialCanonical !== null
+      ? (socialCanonical as Lead["canonical_fields"])
+      : (current?.canonical_fields as Lead["canonical_fields"]) ?? null;
   const finalTags = dedupeTags(
     mergeClassificationTags(mergedTags, currentPhone, canonicalFields, footprint)
   );
@@ -937,6 +943,9 @@ export async function updateLeadSocialSearch(
       contact_reliability_score,
       tags: finalTags,
       whatsapp: mergedWhatsapp,
+      ...(socialCanonical !== undefined && socialCanonical !== null
+        ? { canonical_fields: socialCanonical }
+        : {}),
     })
     .eq("id", leadId);
   if (error) throw new Error(`Failed to update social search for lead ${leadId}: ${error.message}`);

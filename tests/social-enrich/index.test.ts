@@ -170,20 +170,23 @@ describe("runSocialEnrich", () => {
       "https://instagram.com/salonbella",
       lead
     );
-    expect(updateLeadSocialSearch).toHaveBeenCalledWith(
-      "lead-1",
+    // Validación posicional de los primeros 5 args; el 6º (socialCanonical) es opcional
+    // y varía según lo que parsea de la bio/descripción.
+    expect(updateLeadSocialSearch).toHaveBeenCalled();
+    const socialCall = vi.mocked(updateLeadSocialSearch).mock.calls[0]!;
+    expect(socialCall[0]).toBe("lead-1");
+    expect(socialCall[1]).toEqual(
       expect.objectContaining({
         source: "playwright",
         facebook: expect.objectContaining({ confidence: 0.95 }),
         instagram: expect.objectContaining({ confidence: 0.8 }),
-      }),
-      expect.arrayContaining([
-        "fb-confirmed",
-        "ig-confirmed",
-        "whatsapp-derived",
-        "whatsapp-confirmed",
-      ]),
-      "+59898365592",
+      })
+    );
+    expect(socialCall[2]).toEqual(
+      expect.arrayContaining(["fb-confirmed", "ig-confirmed", "whatsapp-derived", "whatsapp-confirmed"])
+    );
+    expect(socialCall[3]).toBe("+59898365592");
+    expect(socialCall[4]).toEqual(
       expect.objectContaining({
         source: "playwright_public",
         profiles: expect.any(Object),

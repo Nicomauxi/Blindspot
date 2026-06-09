@@ -553,7 +553,11 @@ export type DiscoverySource =
   | "yelu"
   | "osm"
   | "infonegocios"
-  | "dgi";
+  | "dgi"
+  // Fuentes derivadas del scraping de la propia red social descubierta (descripción/bio).
+  // Su confianza es dinámica (ver social-source-confidence.ts), no un valor fijo.
+  | "social_facebook"
+  | "social_instagram";
 
 export interface DiscoveryQuery {
   niche: string;

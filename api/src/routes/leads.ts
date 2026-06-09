@@ -1061,9 +1061,19 @@ function redactContactContainer(value: unknown): unknown {
       key === "label" ||
       key === "role" ||
       key === "external_id" ||
-      key === "note"
+      key === "note" ||
+      // Metadatos de fusión canónica: no-PII (boolean / etiqueta de método).
+      key === "stale" ||
+      key === "method"
     ) {
       next[key] = entry;
+      continue;
+    }
+    // conflict_alternatives en un campo de contacto: cada alternativa lleva un `value`
+    // crudo (tel/email de la fuente perdedora) que DEBE redactarse para no-admin,
+    // preservando confidence/sources/source/method.
+    if (key === "conflict_alternatives" && Array.isArray(entry)) {
+      next[key] = entry.map((alt) => (isRecord(alt) ? { ...alt, value: redactContactValue(alt["value"]) } : alt));
       continue;
     }
     next[key] = isContactFieldKey(key) ? redactContactContainer(entry) : redactContactValue(entry);

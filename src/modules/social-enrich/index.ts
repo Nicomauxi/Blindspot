@@ -26,6 +26,8 @@ import {
   instagramProfile,
   type SocialActivityProfile,
 } from "./social-activity.js";
+import { parseSocialDescription } from "./description-parse.js";
+import { mergeSocialIntoCanonical, type SocialCanonicalInput } from "./social-canonical.js";
 import { recordSocialSnapshots } from "../../storage/social-snapshots.js";
 
 export interface SocialEnrichOptions {
@@ -150,7 +152,27 @@ async function processLead(
         ? buildSocialActivitySnapshot(activityProfiles, { ranAt, hasWebsite })
         : undefined;
 
-    await updateLeadSocialSearch(lead.id, socialSearch, derived.tags, derived.whatsapp, socialActivity);
+    // P1/P3: parsear la descripción social (tel/email/web) y fusionarla a canonical_fields
+    // como fuente ponderada por actividad. Best-effort: si algo falla no rompe el enrich.
+    let socialCanonical: Record<string, unknown> | null | undefined;
+    try {
+      const canonicalInputs: SocialCanonicalInput[] = [];
+      if (instagram) {
+        const parsed = await parseSocialDescription(instagram.bio, "instagram");
+        canonicalInputs.push({ profile: instagramProfile(instagram.url, instagram.bio), parsed, recencyDays: null });
+      }
+      if (facebook) {
+        const parsed = await parseSocialDescription(facebook.description, "facebook");
+        canonicalInputs.push({ profile: facebookProfile(facebook.url, facebook.description), parsed, recencyDays: null });
+      }
+      if (canonicalInputs.length > 0) {
+        socialCanonical = mergeSocialIntoCanonical(lead, canonicalInputs) ?? undefined;
+      }
+    } catch (parseErr) {
+      getLogger().warn({ leadId: lead.id, err: String(parseErr) }, "social description parse failed");
+    }
+
+    await updateLeadSocialSearch(lead.id, socialSearch, derived.tags, derived.whatsapp, socialActivity, socialCanonical);
 
     // Histórico append-only (best-effort): solo inserta si cambió el estado/audiencia/conteos.
     if (activityProfiles.length > 0) {

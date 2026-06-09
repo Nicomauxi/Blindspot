@@ -311,6 +311,13 @@ describe("addCorroboratingSource", () => {
         sources: ["mintur"],
         conflict: false,
       },
+      // address corrobora entre la fuente del lead (google_places) y la corroborante (mintur)
+      address: {
+        value: "Av. Principal 123, Montevideo",
+        confidence: 0.95,
+        sources: ["google_places", "mintur"],
+        conflict: false,
+      },
     });
     expect(result).toEqual(returnedLead);
   });
