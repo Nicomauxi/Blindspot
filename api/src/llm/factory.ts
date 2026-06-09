@@ -13,7 +13,7 @@ export function createLLMProvider(): LLMProvider {
     "";
 
   if (providerName === "gemini" || (!providerName && geminiApiKey)) {
-    const model = process.env["LLM_MODEL"] ?? "gemini-2.0-flash";
+    const model = process.env["LLM_MODEL"] ?? "gemini-2.5-flash";
     if (!geminiApiKey) return new TemplateProvider();
     return new GeminiProvider(geminiApiKey, model);
   }

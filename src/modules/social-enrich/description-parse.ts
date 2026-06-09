@@ -119,7 +119,7 @@ async function llmExtract(
   if (provider !== "gemini") return null; // sólo Gemini soportado en este fallback
   const apiKey = process.env["GEMINI_API_KEY"] ?? "";
   if (!apiKey) return null;
-  const model = process.env["LLM_MODEL"] ?? "gemini-2.0-flash";
+  const model = process.env["LLM_MODEL"] ?? "gemini-2.5-flash";
 
   const prompt =
     `Extraé de esta bio/descripción de un negocio uruguayo el horario de atención y una ` +
