@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 let _mockUser: Record<string, unknown> = {
   id: "admin-user-id",
@@ -482,6 +482,12 @@ describe("PATCH /api/v1/outreach/:id", () => {
 describe("POST /api/v1/outreach/generate-offer", () => {
   beforeEach(() => {
     process.env["API_JWT_SECRET"] = "test-secret-at-least-32-chars-long-1234";
+    // Vitest (Vite) inyecta las vars VITE_* del .env en process.env: sin esta limpieza,
+    // la factory crearía un GeminiProvider real y el test haría llamadas facturables.
+    delete process.env["GEMINI_API_KEY"];
+    delete process.env["GOOGLE_GEMINI_API_KEY"];
+    delete process.env["VITE_GOOGLE_GEMINI_API_KEY"];
+    delete process.env["LLM_PROVIDER"];
     _mockUser = {
       id: "admin-user-id",
       email: "admin@blindspot.local",
@@ -491,7 +497,24 @@ describe("POST /api/v1/outreach/generate-offer", () => {
     };
   });
 
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    delete process.env["GEMINI_API_KEY"];
+  });
+
   it("returns offer for valid lead_id using template fallback", async () => {
+    // Gemini configurado pero devolviendo 429 (fetch stubbeado, sin red): el endpoint
+    // debe caer al TemplateProvider y auditar el motivo del fallback.
+    process.env["GEMINI_API_KEY"] = "test-key";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: false,
+        status: 429,
+        text: async () => "quota exceeded",
+        json: async () => ({}),
+      }))
+    );
     const { buildServer } = await import("../../api/src/server.js");
     const app = await buildServer();
     const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
