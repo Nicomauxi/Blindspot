@@ -33,6 +33,19 @@ describe("parseSocialDescription — regex ($0, sin red)", () => {
     expect(result.phones).toEqual([]);
   });
 
+  it("NO confunde fechas (YYYY-MM-DD) con teléfonos uruguayos", async () => {
+    const text = "Local desde 2024-01-01. Eventos el 15/03/2025 y 2024-12-31.";
+    const result = await parseSocialDescription(text, "facebook", { allowLlm: false });
+    expect(result.phones).toEqual([]);
+  });
+
+  it("descarta números no reconocibles como teléfono UY (IDs/años)", async () => {
+    const text = "Seguinos! Código 12345678 ref 87654321";
+    const result = await parseSocialDescription(text, "instagram", { allowLlm: false });
+    // 12345678 y 87654321 no son teléfonos UY válidos (no empiezan 9/2/3/4) → descartados
+    expect(result.phones).toEqual([]);
+  });
+
   it("sin credenciales LLM no rompe y queda en regex aunque allowLlm sea true", async () => {
     const result = await parseSocialDescription(IL_BARETTO, "facebook", { allowLlm: true });
     expect(result.method).toBe("regex");
@@ -52,7 +65,12 @@ describe("parseSocialDescription — fallback LLM (mock)", () => {
     }));
     vi.stubGlobal("fetch", fetchMock);
 
-    const result = await parseSocialDescription("Solo texto sin datos", "facebook", { allowLlm: true });
+    // Texto largo (>=40 chars) y sin horarios por regex → dispara el fallback LLM.
+    const result = await parseSocialDescription(
+      "Somos un emprendimiento familiar dedicado a la gastronomía artesanal del barrio",
+      "facebook",
+      { allowLlm: true }
+    );
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(result.offer).toBe("Restaurante italiano");
     expect(result.method).toBe("llm");
@@ -67,8 +85,13 @@ describe("parseSocialDescription — fallback LLM (mock)", () => {
     }));
     vi.stubGlobal("fetch", fetchMock);
 
-    const result = await parseSocialDescription(IL_BARETTO, "facebook", { allowLlm: true });
+    // Texto sin horarios por regex (dispara LLM), con un teléfono válido para tener regex base.
+    const result = await parseSocialDescription(
+      "Emprendimiento de cosmética natural y sustentable. Contacto +598 99123456",
+      "facebook",
+      { allowLlm: true }
+    );
     expect(result.method).toBe("regex");
-    expect(result.phones).toHaveLength(2);
+    expect(result.phones).toContain("+59899123456");
   });
 });

@@ -130,14 +130,18 @@ function isGoogleSourced(sources: string[], fallbackSource: string): boolean {
 }
 
 function dedupeAlternatives(
+  field: CanonicalFieldName,
   alts: CanonicalConflictAlternative[],
   excludeValue: string
 ): CanonicalConflictAlternative[] {
+  // Dedupe por valor NORMALIZADO (no crudo): "099 123 456" y "099123456" son el mismo
+  // teléfono; igual la dirección con/sin abreviaturas. Excluye el valor ganador actual.
+  const excludeKey = normalizeComparableValue(field, excludeValue);
   const seen = new Set<string>();
   const out: CanonicalConflictAlternative[] = [];
   for (const alt of alts) {
-    if (alt.value === excludeValue) continue;
-    const key = alt.value;
+    const key = normalizeComparableValue(field, alt.value);
+    if (key === excludeKey) continue;
     if (seen.has(key)) continue;
     seen.add(key);
     out.push(alt);
@@ -241,6 +245,7 @@ export function buildCanonicalField(
 
   const priorAlternatives = existingField?.conflict_alternatives ?? [];
   const alternatives = dedupeAlternatives(
+    field,
     [
       ...priorAlternatives,
       {

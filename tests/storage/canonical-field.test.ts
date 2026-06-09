@@ -166,6 +166,58 @@ describe("buildCanonicalField — cuenta social abandonada (stale)", () => {
   });
 });
 
+describe("buildCanonicalField — acumulación de conflict_alternatives", () => {
+  it("preserva alternativas previas + agrega la nueva, dedup por valor normalizado", () => {
+    const base = lead({
+      address: "Calle A 100",
+      source: GOOGLE_SOURCE,
+      canonical_fields: {
+        address: {
+          value: "Calle A 100",
+          confidence: 0.9,
+          sources: [GOOGLE_SOURCE],
+          conflict: true,
+          conflict_alternatives: [{ value: "Calle B 200", confidence: 0.8, sources: ["mintur"], source: "mintur" }],
+        },
+      },
+    });
+    const result = buildCanonicalField(
+      base,
+      "address",
+      candidate({ source: "osm", source_confidence: 0.7, address: "Calle C 300" }),
+      "Calle C 300"
+    );
+    // Google sigue canónico; B (previa) y C (nueva) ambas en alternativas, ninguna duplicada.
+    expect(result?.value).toBe("Calle A 100");
+    const altValues = (result?.conflict_alternatives ?? []).map((a) => a.value).sort();
+    expect(altValues).toEqual(["Calle B 200", "Calle C 300"]);
+  });
+
+  it("no duplica una alternativa equivalente ya presente (clave normalizada)", () => {
+    const base = lead({
+      phone: "+59899111222",
+      source: GOOGLE_SOURCE,
+      canonical_fields: {
+        phone: {
+          value: "+59899111222",
+          confidence: 0.9,
+          sources: [GOOGLE_SOURCE],
+          conflict: true,
+          conflict_alternatives: [{ value: "099333444", confidence: 0.7, sources: ["mintur"], source: "mintur" }],
+        },
+      },
+    });
+    // Mismo teléfono que la alternativa previa, distinto formato → no debe duplicar.
+    const result = buildCanonicalField(
+      base,
+      "phone",
+      candidate({ source: "osm", source_confidence: 0.6, phone: "099 333 444" }),
+      "099 333 444"
+    );
+    expect(result?.conflict_alternatives).toHaveLength(1);
+  });
+});
+
 describe("canonicalFieldEntry — preserva opcionales sólo si presentes", () => {
   it("coerciona string plano sin opcionales", () => {
     expect(canonicalFieldEntry("hola")).toEqual({ value: "hola", confidence: 0.5, sources: [], conflict: false });

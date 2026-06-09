@@ -47,16 +47,24 @@ function emptyResult(raw: string | null): ParsedSocialDescription {
 
 // ─── Regex extractors ────────────────────────────────────────────────────────
 
+// Patrones de FECHA que el extractor de teléfonos debe rechazar (YYYY-MM-DD, DD/MM/YYYY).
+// Sin esto, "2024-01-01" → "20240101" se clasificaría como fijo de Montevideo (+598...).
+const DATE_LIKE = /\b\d{4}[-/.]\d{1,2}[-/.]\d{1,2}\b|\b\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}\b/;
+
 function extractPhones(text: string): string[] {
   const out = new Set<string>();
   // Secuencias telefónicas: empiezan con + o dígito y contienen dígitos/espacios/sep.
   const candidates = text.match(/[+\d][\d\s().\-]{6,}\d/g) ?? [];
   for (const candidate of candidates) {
+    if (DATE_LIKE.test(candidate)) continue; // descarta fechas (no son teléfonos)
     // Un mismo bloque puede traer varios teléfonos ("X y Y", "X / Y").
     const parts = candidate.split(/\s+y\s+|[,/;]/);
     for (const part of [...parts, candidate]) {
+      if (DATE_LIKE.test(part)) continue;
       const classified = classifyUruguayPhone(part);
-      if (classified.normalized) out.add(classified.normalized);
+      // Sólo aceptar teléfonos UY reconocibles (móvil/fijo); descartar "unknown"
+      // (IDs, años, conteos sueltos) para no contaminar canonical_fields.
+      if (classified.normalized && classified.type !== "unknown") out.add(classified.normalized);
     }
   }
   return [...out];
@@ -173,9 +181,11 @@ export async function parseSocialDescription(
   let offer: string | null = null;
   let method: ParseMethod = phones.length || emails.length || website || hoursRegex ? "regex" : "none";
 
-  // Fallback LLM sólo si quedó texto libre sin resolver (horarios/oferta).
+  // Fallback LLM acotado: sólo si el regex NO resolvió horarios y hay texto suficiente.
+  // Evita pagar una llamada de red por cada lead cuando el regex ya cubrió lo principal
+  // (perf: salta el LLM en la mayoría de bios bien estructuradas).
   const allowLlm = opts.allowLlm ?? true;
-  const needsLlm = !hoursRegex || true; // oferta nunca sale por regex
+  const needsLlm = !hoursRegex && text.length >= 40;
   if (allowLlm && needsLlm) {
     const llm = await llmExtract(text, opts.llmTimeoutMs ?? LLM_TIMEOUT_MS);
     if (llm) {

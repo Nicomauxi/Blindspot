@@ -26,18 +26,25 @@ export async function loadSocialSnapshots(leadId: string): Promise<Record<string
   return byPlatform;
 }
 
-async function lastSnapshot(leadId: string, platform: string): Promise<SocialSnapshotRow | null> {
+// Último snapshot por plataforma para un lead, en UNA sola query (evita N+1).
+async function lastSnapshotsByPlatform(
+  leadId: string,
+  platforms: string[]
+): Promise<Map<string, SocialSnapshotRow>> {
   const db = getSupabase();
   const { data, error } = await db
     .from("social_activity_snapshots")
     .select("platform, captured_at, followers, following, posts, likes, talking_about, audience_tier, activity_status")
     .eq("lead_id", leadId)
-    .eq("platform", platform)
-    .order("captured_at", { ascending: false })
-    .limit(1);
-  if (error) throw new Error(`lastSnapshot failed: ${error.message}`);
-  const rows = (data ?? []) as SocialSnapshotRow[];
-  return rows[0] ?? null;
+    .in("platform", platforms)
+    .order("captured_at", { ascending: false });
+  if (error) throw new Error(`lastSnapshotsByPlatform failed: ${error.message}`);
+  const latest = new Map<string, SocialSnapshotRow>();
+  for (const row of (data ?? []) as SocialSnapshotRow[]) {
+    // Orden desc: el primero por plataforma es el más reciente.
+    if (!latest.has(row.platform)) latest.set(row.platform, row);
+  }
+  return latest;
 }
 
 // Registra snapshots históricos (append-only) solo cuando cambia el estado/audiencia/conteos
@@ -50,9 +57,18 @@ export async function recordSocialSnapshots(
 ): Promise<number> {
   const db = getSupabase();
   let inserted = 0;
+  // Una sola query para todos los snapshots previos del lead (en vez de uno por plataforma).
+  const platforms = [...new Set(profiles.map((p) => p.platform))];
+  let prevByPlatform = new Map<string, SocialSnapshotRow>();
+  try {
+    prevByPlatform = await lastSnapshotsByPlatform(leadId, platforms);
+  } catch (err) {
+    // Si la lectura falla, tratamos todo como "sin previo" (el upsert es idempotente).
+    getLogger().warn({ leadId, err: err instanceof Error ? err.message : String(err) }, "social snapshot prev load failed");
+  }
   for (const p of profiles) {
     try {
-      const prev = await lastSnapshot(leadId, p.platform);
+      const prev = prevByPlatform.get(p.platform) ?? null;
       const changed =
         prev == null ||
         prev.activity_status !== p.activity_status ||
