@@ -1094,45 +1094,64 @@ export async function countLeadsByFilterSelection(filters: EnrichmentLeadFilterS
   return count ?? 0;
 }
 
+// Supabase capa cada respuesta a max-rows (1000): la query de ids se pagina con range().
+const FILTER_IDS_PAGE_SIZE = 1000;
+// Un .in() con cientos de UUIDs rompe el límite de URL de PostgREST: se trae por lotes.
+const FILTER_LEADS_ID_CHUNK = 200;
+
 export async function loadLeadsByFilterSelection(
   filters: EnrichmentLeadFilterSelection,
   opts: { passedOnly?: boolean; limit?: number } = { passedOnly: true, limit: 250 }
 ): Promise<Lead[]> {
-  let dashboardQuery = getSupabase().from("lead_dashboard").select("id").order("created_at", { ascending: false });
+  const cap = opts.limit ?? 250;
 
-  if (filters.contact_tier) dashboardQuery = dashboardQuery.eq("contact_tier", filters.contact_tier);
-  if (filters.prospect_score_gte != null) dashboardQuery = dashboardQuery.gte("prospect_score", filters.prospect_score_gte);
-  if (filters.niche_expanded && filters.niche_expanded.length > 0) {
-    dashboardQuery = dashboardQuery.in("niche", filters.niche_expanded);
-  } else if (filters.niche) {
-    dashboardQuery = dashboardQuery.eq("niche", filters.niche);
+  const buildDashboardQuery = () => {
+    let dashboardQuery = getSupabase().from("lead_dashboard").select("id").order("created_at", { ascending: false });
+    if (filters.contact_tier) dashboardQuery = dashboardQuery.eq("contact_tier", filters.contact_tier);
+    if (filters.prospect_score_gte != null) dashboardQuery = dashboardQuery.gte("prospect_score", filters.prospect_score_gte);
+    if (filters.niche_expanded && filters.niche_expanded.length > 0) {
+      dashboardQuery = dashboardQuery.in("niche", filters.niche_expanded);
+    } else if (filters.niche) {
+      dashboardQuery = dashboardQuery.eq("niche", filters.niche);
+    }
+    if (filters.source) dashboardQuery = dashboardQuery.eq("source", filters.source);
+    if (filters.primary_offer) dashboardQuery = dashboardQuery.eq("primary_offer", filters.primary_offer);
+    if (filters.q) dashboardQuery = dashboardQuery.textSearch("search_vector", filters.q, { type: "plain", config: "spanish" });
+    return applyMissingFilters(dashboardQuery, filters);
+  };
+
+  const ids: string[] = [];
+  for (let from = 0; ids.length < cap; from += FILTER_IDS_PAGE_SIZE) {
+    const to = Math.min(from + FILTER_IDS_PAGE_SIZE, cap) - 1;
+    const { data: dashboardRows, error: dashboardError } = await buildDashboardQuery().range(from, to);
+    if (dashboardError) throw new Error(`Failed to load lead ids for filters: ${dashboardError.message}`);
+    const batch = (dashboardRows ?? [])
+      .map((row) => (row as { id?: string }).id)
+      .filter((value): value is string => typeof value === "string" && value.length > 0);
+    ids.push(...batch);
+    if (batch.length < to - from + 1) break;
   }
-  if (filters.source) dashboardQuery = dashboardQuery.eq("source", filters.source);
-  if (filters.primary_offer) dashboardQuery = dashboardQuery.eq("primary_offer", filters.primary_offer);
-  if (filters.q) dashboardQuery = dashboardQuery.textSearch("search_vector", filters.q, { type: "plain", config: "spanish" });
-  dashboardQuery = applyMissingFilters(dashboardQuery, filters);
-  if (opts.limit) dashboardQuery = dashboardQuery.limit(opts.limit);
-
-  const { data: dashboardRows, error: dashboardError } = await dashboardQuery;
-  if (dashboardError) throw new Error(`Failed to load lead ids for filters: ${dashboardError.message}`);
-
-  const ids = (dashboardRows ?? [])
-    .map((row) => (row as { id?: string }).id)
-    .filter((value): value is string => typeof value === "string" && value.length > 0);
 
   if (ids.length === 0) return [];
 
-  let query = getSupabase()
-    .from("leads")
-    .select("*")
-    .in("id", ids)
-    .order("name")
-    .limit(ids.length);
-  if (opts.passedOnly) query = query.eq("passed_filter", true);
+  const leads: Lead[] = [];
+  for (let i = 0; i < ids.length; i += FILTER_LEADS_ID_CHUNK) {
+    const chunk = ids.slice(i, i + FILTER_LEADS_ID_CHUNK);
+    let query = getSupabase()
+      .from("leads")
+      .select("*")
+      .in("id", chunk)
+      .order("name")
+      .limit(chunk.length);
+    if (opts.passedOnly) query = query.eq("passed_filter", true);
 
-  const { data, error } = await query;
-  if (error) throw new Error(`Failed to load leads for filters: ${error.message}`);
-  return (data ?? []) as Lead[];
+    const { data, error } = await query;
+    if (error) throw new Error(`Failed to load leads for filters: ${error.message}`);
+    leads.push(...((data ?? []) as Lead[]));
+  }
+
+  // Orden global por nombre (cada lote viene ordenado, pero entre lotes no).
+  return leads.sort((a, b) => a.name.localeCompare(b.name));
 }
 
 export async function loadLeadsBySource(
