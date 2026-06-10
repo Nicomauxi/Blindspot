@@ -161,11 +161,20 @@ function ProcessControlCard({
   const canControl = processKey === "core" && schedulerStatus?.embedded === true;
 
   return (
-    <button
-      type="button"
+    // div clickeable (no <button>): los controles Reiniciar/Iniciar viven adentro y
+    // anidar <button> dentro de <button> es HTML inválido (error de hidratación).
+    <div
+      role="button"
+      tabIndex={0}
       onClick={onSelect}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onSelect();
+        }
+      }}
       className={cn(
-        "w-full rounded-xl border px-4 py-3 text-left transition-colors",
+        "w-full cursor-pointer rounded-xl border px-4 py-3 text-left transition-colors",
         isSelected
           ? "border-slate-600 bg-slate-900 ring-1 ring-slate-700"
           : "border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50"
@@ -256,7 +265,7 @@ function ProcessControlCard({
           </span>
         </div>
       </div>
-    </button>
+    </div>
   );
 }
 
