@@ -137,6 +137,15 @@ const LEAD_DENSITY_GPS_SOURCES = ["real", "inferred", "google"] as const;
 const LEAD_DENSITY_HEAT_METRICS = ["mixed", "marketing", "software", "combined"] as const;
 const GEO_ZONE_KIND_OPTIONS = ["departamento", "ciudad", "barrio", "zona_turistica", "polo_industrial", "avenida"] as const;
 
+// Acota una coordenada del query a [min, max]. Vacío/no-numérico → undefined (sin bbox).
+// Evita el 400 cuando el mapa, en zoom-out extremo, manda bounds que dan la vuelta al mundo.
+function clampGeo(value: string | undefined, min: number, max: number): number | undefined {
+  if (value == null || value.trim() === "") return undefined;
+  const n = Number(value);
+  if (!Number.isFinite(n)) return undefined;
+  return Math.min(max, Math.max(min, n));
+}
+
 const geoFilterQueryFields = {
   source: z
     .union([z.string(), z.array(z.string())])
@@ -186,10 +195,13 @@ const geoFilterQueryFields = {
       return Number(value);
     })
     .pipe(z.number().min(0).max(22).optional()),
-  south: z.string().optional().transform((value) => value == null || value.trim() === "" ? undefined : Number(value)).pipe(z.number().min(-90).max(90).optional()),
-  west: z.string().optional().transform((value) => value == null || value.trim() === "" ? undefined : Number(value)).pipe(z.number().min(-180).max(180).optional()),
-  north: z.string().optional().transform((value) => value == null || value.trim() === "" ? undefined : Number(value)).pipe(z.number().min(-90).max(90).optional()),
-  east: z.string().optional().transform((value) => value == null || value.trim() === "" ? undefined : Number(value)).pipe(z.number().min(-180).max(180).optional()),
+  // Un viewport de mapa con zoom-out extremo manda bounds fuera de rango (da la vuelta al
+  // mundo: west < -180, east > 180). No es un error del cliente: se ACOTAN al rango válido
+  // en vez de rechazar con 400. NaN / vacío → undefined (sin bbox).
+  south: z.string().optional().transform((value) => clampGeo(value, -90, 90)),
+  west: z.string().optional().transform((value) => clampGeo(value, -180, 180)),
+  north: z.string().optional().transform((value) => clampGeo(value, -90, 90)),
+  east: z.string().optional().transform((value) => clampGeo(value, -180, 180)),
   heat_metric: z.enum(LEAD_DENSITY_HEAT_METRICS).optional(),
 } satisfies z.ZodRawShape;
 

@@ -948,6 +948,34 @@ describe("Discovery routes", () => {
     await app.close();
   });
 
+  it("GET /admin/geo/lead-density clampea bbox fuera de rango (zoom-out extremo) en vez de 400", async () => {
+    _mockLeads = [
+      {
+        id: "lead-gps",
+        source: "yelu",
+        niche: "restaurant",
+        address: "Pocitos, Montevideo, Uruguay",
+        prospect_score: 81,
+        contact_tier: "A",
+        gps: { lat: -34.905, lng: -56.191 },
+        corroborating_sources: [],
+      },
+    ];
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
+    // Viewport que da la vuelta al mundo: west=-638, east=454, north=89.4 (válido), south=-85.
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/admin/geo/lead-density?prospect_score_gte=0&limit=4000&heat_metric=mixed&zoom=0&south=-85.051129&west=-638.4375&north=89.400096&east=454.21875",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(Array.isArray(body.data.locations)).toBe(true);
+    await app.close();
+  });
+
   it("GET /admin/geo/lead-density does not 500 when geocoding one lead fails", async () => {
     geocodeAddress.mockImplementation(async (address: string) => {
       if (address.includes("Falla")) throw new Error("geocoder unavailable");
