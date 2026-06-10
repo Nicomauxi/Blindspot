@@ -39,7 +39,9 @@ export function nameSimilarity(a: string, b: string): number {
   return 1 - dist / Math.max(normA.length, normB.length);
 }
 
-const WILDCARD_NICHE_SOURCES = new Set<Lead["source"]>(["mintur", "imm_habilitaciones"]);
+// Fuentes con niche genérico/no fiable (turismo, habilitaciones, registro industrial):
+// su "other" no debe bloquear la corroboración cross-source por niche.
+const WILDCARD_NICHE_SOURCES = new Set<Lead["source"]>(["mintur", "imm_habilitaciones", "miem_dei"]);
 
 function nichesCompatible(
   candidate: Pick<DiscoveryCandidate, "niche" | "source">,

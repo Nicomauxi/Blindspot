@@ -258,6 +258,24 @@ describe("findCrossSourceMatch", () => {
     expect(findCrossSourceMatch(candidate, [lead])).toBe(lead);
   });
 
+  it("allows wildcard niche compatibility for miem_dei other against a typed lead", () => {
+    // El DEI trae niche genérico (other, del CIIU sin mapeo): no debe bloquear la
+    // corroboración por niche, igual que mintur/imm_habilitaciones. Sin esto se
+    // duplicarían negocios que ya existen como otro source.
+    const candidate = makeCandidate({
+      name: "Panaderia Godoy",
+      source: "miem_dei",
+      niche: "other",
+    });
+    const lead = makeLead({
+      name: "Panaderia Godoy",
+      source: "google_places",
+      niche: "bakery",
+    });
+
+    expect(findCrossSourceMatch(candidate, [lead])).toBe(lead);
+  });
+
   it("does not match when normalized city/address points to a different city", () => {
     const candidate = makeCandidate({
       name: "La Palma",
