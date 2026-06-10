@@ -91,6 +91,15 @@ export function extractAddressCity(value: string | null | undefined): string | n
       continue;
     }
 
+    // Un segmento que es solo un número de puerta ("Orinoco, 4943, Montevideo")
+    // pertenece a la calle anterior, no es una ciudad: marcamos el previo como calle
+    // para que el patrón "CIUDAD, DEPARTAMENTO" no lo confunda con un topónimo.
+    if (/^\d{1,4}$/.test(part.trim())) {
+      const last = cityParts[cityParts.length - 1];
+      if (last) last.isStreet = true;
+      continue;
+    }
+
     const cleaned = cleanCityToken(part);
     if (cleaned.length === 0) continue;
     // "isStreet" se evalúa sobre el segmento original (con su número), antes de limpiarlo.

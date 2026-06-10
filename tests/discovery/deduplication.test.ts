@@ -332,6 +332,80 @@ describe("findCrossSourceMatch", () => {
     const lead = makeLead({ name: "Farmacia del Centro", source: "google_places" });
     expect(findCrossSourceMatch(candidate, [lead])).toBeNull();
   });
+
+  // ─── matching de direcciones con abreviaciones (casos reales del corpus) ──────
+
+  it("matchea calle abreviada de prócer: Rivera 784 ↔ Gral. Fructuoso Rivera 784 (Celisano)", () => {
+    const candidate = makeCandidate({
+      name: "Celisano",
+      source: "miem_dei",
+      address: "Rivera 784, SALTO, SALTO",
+    });
+    const lead = makeLead({
+      name: "Celisano",
+      source: "google_places",
+      address: "Gral. Fructuoso Rivera 784, 50000 Salto, Departamento de Salto, Uruguay",
+    });
+    expect(findCrossSourceMatch(candidate, [lead])).toBe(lead);
+  });
+
+  it("matchea Av. ↔ Avenida con misma puerta (Alberto's, L.A. de Herrera 1144)", () => {
+    const candidate = makeCandidate({
+      name: "Alberto's",
+      source: "osm",
+      address: "Avenida Luis Alberto de Herrera, 1144, Montevideo",
+    });
+    const lead = makeLead({
+      name: "Alberto's",
+      source: "google_places",
+      address: "Av. Luis Alberto de Herrera 1144, 11300 Montevideo, Departamento de Montevideo, Uruguay",
+    });
+    expect(findCrossSourceMatch(candidate, [lead])).toBe(lead);
+  });
+
+  it("matchea ruido de comas/acentos con misma calle+puerta (Decano, Orinoco 4943)", () => {
+    const candidate = makeCandidate({
+      name: "Decano",
+      source: "osm",
+      address: "Orinoco, 4943, Montevideo",
+    });
+    const lead = makeLead({
+      name: "Decano",
+      source: "google_places",
+      address: "Orinoco 4943, 11400 Montevideo, Departamento de Montevideo, Uruguay",
+    });
+    expect(findCrossSourceMatch(candidate, [lead])).toBe(lead);
+  });
+
+  it("NO colapsa sucursales de cadena: misma calle, distinta puerta (bloqueo de puerta)", () => {
+    // Patrón Devoto/Disco: mismo nombre, misma ciudad, MISMA calle pero puerta distinta
+    // ⇒ son sucursales diferentes, no deben fusionarse.
+    const candidate = makeCandidate({
+      name: "Farmacia X",
+      source: "yelu",
+      address: "Gral. Fructuoso Rivera 784, Montevideo",
+    });
+    const lead = makeLead({
+      name: "Farmacia X",
+      source: "google_places",
+      address: "Av. Gral Rivera 4502, 11400 Montevideo, Departamento de Montevideo, Uruguay",
+    });
+    expect(findCrossSourceMatch(candidate, [lead])).toBeNull();
+  });
+
+  it("NO matchea calles distintas con misma puerta y mismo nombre (Rivera 784 ↔ Mercedes 784)", () => {
+    const candidate = makeCandidate({
+      name: "Kiosco Central",
+      source: "yelu",
+      address: "Rivera 784, Salto",
+    });
+    const lead = makeLead({
+      name: "Kiosco Central",
+      source: "google_places",
+      address: "Mercedes 784, 50000 Salto, Departamento de Salto, Uruguay",
+    });
+    expect(findCrossSourceMatch(candidate, [lead])).toBeNull();
+  });
 });
 
 describe("isFranchise", () => {

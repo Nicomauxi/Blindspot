@@ -1,5 +1,6 @@
 import { findCrossSourceMatch, nameSimilarity, normalizeName } from "./deduplication.js";
 import { extractAddressCity, haversineMeters, normalizeAddress, parseLeadGps } from "./geo-text.js";
+import { parseStreetAddress, streetAddressesMatch } from "./street-address.js";
 import type { CorroboratingSource, DiscoveryCandidate, Lead } from "../../shared/types.js";
 
 export interface RetroactiveMatch {
@@ -96,6 +97,16 @@ function franchiseSafeToMerge(a: Lead, b: Lead, geoRadiusMeters: number): boolea
   const addressA = normalizeAddress(a.address);
   const addressB = normalizeAddress(b.address);
   if (addressA && addressB && addressA === addressB) return true;
+
+  // Misma calle + MISMA puerta = misma ubicación física: evidencia suficiente para
+  // fusionar una franquicia (sucursales distintas tienen puerta distinta y ya las
+  // separa doorsConflict aguas arriba). Cubre el caso donde el GPS no se puede leer
+  // (la columna geography vuelve como EWKB y parseLeadGps no la parsea).
+  const streetA = parseStreetAddress(a.address);
+  const streetB = parseStreetAddress(b.address);
+  if (streetA.door !== null && streetB.door !== null && streetA.door === streetB.door && streetAddressesMatch(streetA, streetB)) {
+    return true;
+  }
 
   const gpsA = parseLeadGps(a.gps);
   const gpsB = parseLeadGps(b.gps);

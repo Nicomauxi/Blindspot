@@ -121,6 +121,62 @@ describe("buildRetroactiveReconciliationPlan", () => {
     expect(plan.matched_secondaries).toBe(0);
   });
 
+  it("SÍ fusiona franquicia cuando es la MISMA sucursal: misma calle + misma puerta (Cam. ↔ Camino Ariel 4626)", () => {
+    // Caso real Farmashop 1: misma sucursal en dos fuentes, dirección no byte-idéntica
+    // y GPS ilegible (EWKB) — la coincidencia calle+puerta confirma misma ubicación.
+    const primary = makeLead({
+      id: "osm-1",
+      name: "Farmashop 1",
+      source: "osm",
+      tags: ["franchise-detected"],
+      address: "Camino Ariel, 4626, Montevideo",
+      niche: "pharmacy",
+      prospect_score: 32,
+    });
+    const secondary = makeLead({
+      id: "gp-1",
+      name: "Farmashop 1",
+      source: "google_places",
+      tags: ["franchise-detected"],
+      address: "Cam. Ariel 4626, 12900 Montevideo, Departamento de Montevideo, Uruguay",
+      niche: "pharmacy",
+      prospect_score: 0,
+    });
+
+    const plan = buildRetroactiveReconciliationPlan(
+      [primary, secondary],
+      { threshold: 0.9, geoRadiusMeters: 500 }
+    );
+
+    expect(plan.matched_secondaries).toBe(1);
+  });
+
+  it("NO fusiona sucursales distintas de franquicia: misma calle, puerta distinta", () => {
+    const primary = makeLead({
+      id: "gp-1",
+      name: "Farmacity",
+      source: "google_places",
+      tags: ["franchise-detected"],
+      address: "Av. Luis Alberto de Herrera 1248, Montevideo",
+      prospect_score: 70,
+    });
+    const secondary = makeLead({
+      id: "osm-1",
+      name: "Farmacity",
+      source: "osm",
+      tags: ["franchise-detected"],
+      address: "Avenida Luis Alberto de Herrera, 1246, Montevideo",
+      prospect_score: 30,
+    });
+
+    const plan = buildRetroactiveReconciliationPlan(
+      [primary, secondary],
+      { threshold: 0.9, geoRadiusMeters: 500 }
+    );
+
+    expect(plan.matched_secondaries).toBe(0);
+  });
+
   it("reports phone and email conflicts when both leads disagree", () => {
     const primary = makeLead({
       id: "gp-1",

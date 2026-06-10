@@ -1,5 +1,6 @@
 import type { DiscoveryCandidate, Lead } from "../../shared/types.js";
 import { extractAddressCity, haversineMeters, normalizeAddress, parseLeadGps } from "./geo-text.js";
+import { doorsConflict, parseStreetAddress, streetAddressesMatch } from "./street-address.js";
 
 const DEFAULT_GEO_RADIUS_METERS = 500;
 
@@ -68,10 +69,23 @@ function addressesCompatible(
   const normalizedLead = normalizeAddress(leadAddress);
   if (!normalizedCandidate || !normalizedLead) return true;
 
+  // Estructura calle + puerta para tolerar abreviaciones de prócer ("Rivera" =
+  // "Gral. Fructuoso Rivera") sin colapsar sucursales de cadenas.
+  const candidateStreet = parseStreetAddress(candidateAddress);
+  const leadStreet = parseStreetAddress(leadAddress);
+
+  // Bloqueo duro: dos puertas presentes y distintas ⇒ direcciones distintas (separa
+  // sucursales: Devoto Rivera 4502 ≠ Devoto Arenal 2006). También corrige un over-merge
+  // latente del path Levenshtein de abajo ("rivera 784" vs "rivera 2000").
+  if (doorsConflict(candidateStreet, leadStreet)) return false;
+
   if (normalizedCandidate === normalizedLead) return true;
   if (normalizedCandidate.includes(normalizedLead) || normalizedLead.includes(normalizedCandidate)) {
     return true;
   }
+
+  // Match estructurado: subset de tokens de calle + ancla de puerta (abreviaciones).
+  if (streetAddressesMatch(candidateStreet, leadStreet)) return true;
 
   return nameSimilarity(normalizedCandidate, normalizedLead) >= 0.65;
 }
