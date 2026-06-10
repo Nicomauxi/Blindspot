@@ -9,7 +9,9 @@ import { findCrossSourceMatch, isFranchise } from "../../modules/discovery/dedup
 import { normalizeNiche } from "../../modules/discovery/filters.js";
 import { loadAllLeads } from "../../storage/leads.js";
 import { addCorroboratingSource, insertExternalLead } from "../../storage/external-leads.js";
-import { loadRuntimeLists } from "../../storage/system-lists.js";
+import { loadRuntimeLists, loadAllRuntime } from "../../storage/system-lists.js";
+import { normalizeCandidates } from "../../modules/discovery/candidate-normalizer.js";
+import type { AllRuntime } from "../../storage/system-lists.js";
 import { insertDiscoveryJob, updateDiscoveryJobStatus } from "../../storage/discovery-jobs.js";
 
 export interface DiscoverExternalOptions {
@@ -59,6 +61,7 @@ async function runSingleLocation(opts: {
   dryRun: boolean;
   allLeads: Awaited<ReturnType<typeof loadAllLeads>>;
   runtimeLists: Awaited<ReturnType<typeof loadRuntimeLists>>;
+  nicheAliases: AllRuntime["mappings"]["nicheAliases"];
   dedupThreshold: number;
   geoRadiusMeters: number;
 }): Promise<{ fetched: number; inserted: number; corroborated: number }> {
@@ -66,6 +69,9 @@ async function runSingleLocation(opts: {
   const normalizedNiche = normalizeNiche(opts.niche);
 
   let candidates = await provider.discover({ niche: normalizedNiche, location: opts.location });
+  // Capa normalizadora común: reclasifica el niche con el vocabulario dinámico para TODOS los
+  // sources por igual (no ad-hoc por provider), preservando el origen.
+  candidates = normalizeCandidates(candidates, opts.nicheAliases);
   if (opts.limit !== undefined) {
     candidates = candidates.slice(0, opts.limit);
   }
@@ -107,6 +113,7 @@ export async function executeExternalDiscovery(opts: {
 }): Promise<ExternalDiscoveryExecutionSummary> {
   const allLeads = await loadAllLeads();
   const runtimeLists = await loadRuntimeLists();
+  const runtime = await loadAllRuntime();
   const dedupThreshold = getOnlineDedupThreshold();
   const geoRadiusMeters = getDedupGeoRadiusMeters();
 
@@ -117,6 +124,7 @@ export async function executeExternalDiscovery(opts: {
     dryRun: opts.dryRun,
     allLeads,
     runtimeLists,
+    nicheAliases: runtime.mappings.nicheAliases,
     dedupThreshold,
     geoRadiusMeters,
   };

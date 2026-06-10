@@ -578,6 +578,10 @@ export interface DiscoveryCandidate {
   latitude: number | null;
   longitude: number | null;
   niche: string | null;
+  // Texto crudo de rubro/actividad que cada provider conoce (ej. descripción CIIU del DEI,
+  // TipoOperador de MINTUR). La capa normalizadora común lo reclasifica con el vocabulario
+  // dinámico de nichos — así la clasificación es única para todos los datasources, no ad-hoc.
+  niche_hint?: string;
   raw: Record<string, unknown>;
 }
 

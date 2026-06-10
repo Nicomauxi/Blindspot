@@ -109,6 +109,12 @@ export function mapRecord(record: DEIRecord): DiscoveryCandidate {
     latitude: null,
     longitude: null,
     niche: inferNiche(record),
+    // Texto crudo de rubro para que la capa normalizadora común reclasifique con el
+    // vocabulario dinámico (descripción CIIU + actividad declarada).
+    niche_hint: [record["Descripcion Codigo CIIU principal"], record["Descripcion de la Actividad"]]
+      .filter((v) => !isBlank(v))
+      .map(asStr)
+      .join(" "),
     raw: record as unknown as Record<string, unknown>,
   };
 }
