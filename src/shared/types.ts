@@ -289,7 +289,7 @@ export type DigitalFootprintSkipped = {
   directory_discovery?: DirectoryDiscovery;
   social_search?: SocialSearch;
   social_activity?: import("../modules/social-enrich/social-activity.js").SocialActivitySnapshot;
-  social_enrich_status?: "ok" | "blocked";
+  social_enrich_status?: "ok" | "blocked" | "no_data";
   last_change_diff?: EnrichmentDiff;
 };
 
@@ -379,7 +379,7 @@ export interface DigitalFootprintEnriched {
     error?: string;
   };
   inferred_state?: InferredState;
-  social_enrich_status?: "ok" | "blocked";
+  social_enrich_status?: "ok" | "blocked" | "no_data";
   last_change_diff?: EnrichmentDiff;
 }
 

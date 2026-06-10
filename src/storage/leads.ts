@@ -953,7 +953,7 @@ export async function updateLeadSocialSearch(
 
 export async function updateLeadSocialEnrichStatus(
   leadId: string,
-  status: "ok" | "blocked"
+  status: "ok" | "blocked" | "no_data"
 ): Promise<void> {
   const db = getSupabase();
   const { data: current, error: fetchErr } = await db

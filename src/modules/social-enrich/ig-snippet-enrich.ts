@@ -1,7 +1,14 @@
-// Runner del enriquecimiento de IG vía snippet de DuckDuckGo (métricas + liveness, gratis).
-// Itera los leads con IG seleccionada, consulta el snippet (throttled, secuencial — DDG es un
-// host frágil que rate-limita: el paralelismo dispara su anti-bot), y fusiona vía buildSocialFusion.
-// Degrada con gracia: si DDG bloquea N veces seguidas, corta el run (la IP quedó marcada).
+// Runner del enriquecimiento de IG vía snippet de buscador (métricas + liveness, gratis).
+// Itera los leads con IG seleccionada y consulta una cadena de proveedores (por defecto
+// SearXNG self-hosted, resiliente al anti-bot). Fusiona vía buildSocialFusion.
+//
+// Selección inteligente (no gastar esfuerzo en casos irrelevantes):
+//  - solo leads passed_filter con una URL de PERFIL de IG válida,
+//  - salta los ya resueltos (social_enrich_status ok / no_data) salvo retryNoData,
+//  - prioriza por prospect_score desc (los mejores leads primero, por si hay límite/cuota).
+// Marca cada miss como "no_data" para no re-consultarlo en la próxima corrida.
+// Aborta solo si el proveedor parece CAÍDO (racha de nulls SIN ningún éxito): con SearXNG
+// un null suele ser una cuenta personal (sin métricas públicas), no un bloqueo.
 import { getLogger } from "../../shared/logger.js";
 import type { Lead } from "../../shared/types.js";
 import {
@@ -11,19 +18,22 @@ import {
   updateLeadSocialEnrichStatus,
 } from "../../storage/leads.js";
 import { buildSocialFusion, extractUsernameFromUrl } from "./social-fusion.js";
-import { fetchInstagramSnippet } from "./duckduckgo-snippet.js";
-import type { SocialProfileData } from "./social-fusion.js";
+import { defaultIgLookupChain, type IgLookup } from "./ig-lookup-chain.js";
 
-const DEFAULT_THROTTLE_MS = 2500;
-const ANTI_BOT_ABORT_STREAK = 6; // nulls consecutivos → DDG bloqueó la IP, cortar
+const DEFAULT_THROTTLE_MS = 1500;
+// Si los primeros N lookups son TODOS null y aún no hubo NINGÚN éxito, el proveedor está
+// caído/bloqueado de entrada → abortar para no iterar en vano. Con ≥1 éxito, los nulls
+// posteriores son cuentas personales (normal) y NO abortan.
+const PROVIDER_DOWN_STREAK = 8;
 
 export interface IgSnippetStats {
   loaded: number;
   selected: number;
+  skipped_resolved: number;
   enriched: number;
   no_snippet: number;
   skipped_no_url: number;
-  aborted_anti_bot: boolean;
+  aborted_provider_down: boolean;
 }
 
 export interface IgSnippetOptions {
@@ -32,8 +42,8 @@ export interface IgSnippetOptions {
   limit?: number;
   throttleMs?: number;
   nowIso?: string;
-  // Inyectables para test (sin red).
-  lookup?: (username: string, opts: { throttleMs?: number }) => Promise<SocialProfileData | null>;
+  retryNoData?: boolean; // re-consultar los marcados no_data (cuentas que antes no dieron métricas)
+  lookup?: IgLookup; // inyectable para test / proveedor custom
 }
 
 function instagramUrlOf(lead: Lead): string | null {
@@ -42,24 +52,58 @@ function instagramUrlOf(lead: Lead): string | null {
   return candidate?.url ?? null;
 }
 
+function statusOf(lead: Lead): "ok" | "blocked" | "no_data" | undefined {
+  return lead.digital_footprint?.social_enrich_status;
+}
+
+// ¿El lead tiene MÉTRICAS sociales reales (no solo una URL)? Las corridas viejas (era
+// login-wall) marcaban "ok" con social_activity pero sin followers (audience_tier null,
+// active_platforms vacío). Esos NO cuentan como resueltos: SearXNG sí puede enriquecerlos.
+function hasRealSocialMetrics(lead: Lead): boolean {
+  const sa = lead.digital_footprint?.social_activity;
+  if (!sa) return false;
+  if (sa.summary?.audience_tier != null) return true;
+  if (Array.isArray(sa.summary?.active_platforms) && sa.summary.active_platforms.length > 0) return true;
+  const profiles = sa.profiles ?? {};
+  return Object.values(profiles).some(
+    (p) => (typeof p?.followers === "number" && p.followers > 0) || (typeof p?.likes === "number" && p.likes > 0)
+  );
+}
+
+// Un lead está "resuelto" si ya tiene métricas reales (ok CON datos) o si lo consultamos
+// por la vía nueva y no había métricas (no_data). Un "ok" vacío de la era vieja NO está
+// resuelto → se re-consulta con SearXNG. Los no_data se re-incluyen solo con retryNoData.
+function isResolved(lead: Lead, retryNoData: boolean): boolean {
+  const status = statusOf(lead);
+  if (status === "ok") return hasRealSocialMetrics(lead);
+  if (status === "no_data") return !retryNoData;
+  return false;
+}
+
 export async function runIgSnippetEnrich(opts: IgSnippetOptions): Promise<IgSnippetStats> {
   const log = getLogger();
-  const lookup = opts.lookup ?? fetchInstagramSnippet;
+  const lookup = opts.lookup ?? defaultIgLookupChain();
   const throttleMs = opts.throttleMs ?? DEFAULT_THROTTLE_MS;
   const nowIso = opts.nowIso ?? new Date().toISOString();
+  const retryNoData = opts.retryNoData ?? false;
 
   const loaded = opts.run ? await loadLeadsByRunId(opts.run) : await loadAllLeads();
-  const candidates = loaded
-    .filter((l) => l.passed_filter && instagramUrlOf(l) !== null)
-    .slice(0, opts.limit ?? loaded.length);
+  const eligible = loaded.filter((l) => l.passed_filter && instagramUrlOf(l) !== null);
+  const resolved = eligible.filter((l) => isResolved(l, retryNoData));
+  const candidates = eligible
+    .filter((l) => !isResolved(l, retryNoData))
+    // Priorizar por prospect_score desc: gastar el esfuerzo en los mejores leads primero.
+    .sort((a, b) => (b.prospect_score ?? -1) - (a.prospect_score ?? -1))
+    .slice(0, opts.limit ?? eligible.length);
 
   const stats: IgSnippetStats = {
     loaded: loaded.length,
     selected: candidates.length,
+    skipped_resolved: resolved.length,
     enriched: 0,
     no_snippet: 0,
     skipped_no_url: 0,
-    aborted_anti_bot: false,
+    aborted_provider_down: false,
   };
 
   let nullStreak = 0;
@@ -75,9 +119,12 @@ export async function runIgSnippetEnrich(opts: IgSnippetOptions): Promise<IgSnip
     if (!profile) {
       stats.no_snippet += 1;
       nullStreak += 1;
-      if (nullStreak >= ANTI_BOT_ABORT_STREAK) {
-        stats.aborted_anti_bot = true;
-        log.warn({ nullStreak }, "IG snippet enrich: DDG parece estar bloqueando — abortando run");
+      // Marcar no_data para no re-consultar (cuenta personal o sin og:description).
+      await updateLeadSocialEnrichStatus(lead.id, "no_data").catch(() => undefined);
+      // Abortar solo si NUNCA hubo un éxito: señal de proveedor caído/bloqueado de entrada.
+      if (stats.enriched === 0 && nullStreak >= PROVIDER_DOWN_STREAK) {
+        stats.aborted_provider_down = true;
+        log.warn({ nullStreak }, "IG snippet enrich: proveedor parece caído (racha de nulls sin éxito) — abortando run");
         break;
       }
       continue;

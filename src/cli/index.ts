@@ -136,19 +136,21 @@ program
 
 program
   .command("ig-snippet-enrich")
-  .description("Enrich IG metrics + liveness via DuckDuckGo snippet (free, $0). Throttled; run from a residential IP.")
+  .description("Enrich IG metrics + liveness via search snippet (free, $0). Default provider: self-hosted SearXNG (SEARXNG_URL).")
   .option("--run <uuid>", "Enrich leads of this run")
   .option("--all", "Enrich all passed leads with a selected Instagram URL", false)
-  .option("--limit <number>", "Max leads to process")
-  .option("--throttle-ms <number>", "Delay between DDG queries (anti rate-limit)", "2500")
-  .action(async (opts: { run?: string; all?: boolean; limit?: string; throttleMs?: string }) => {
+  .option("--limit <number>", "Max leads to process (best prospect_score first)")
+  .option("--throttle-ms <number>", "Delay between queries (anti rate-limit)", "1500")
+  .option("--retry-no-data", "Re-query leads previously marked no_data", false)
+  .action(async (opts: { run?: string; all?: boolean; limit?: string; throttleMs?: string; retryNoData?: boolean }) => {
     const { runIgSnippetEnrich } = await import("./../modules/social-enrich/ig-snippet-enrich.js");
     const stats = await runIgSnippetEnrich({
       ...(opts.run ? { run: opts.run } : { all: true }),
       ...(opts.limit ? { limit: Number(opts.limit) } : {}),
-      throttleMs: Number(opts.throttleMs ?? "2500"),
+      throttleMs: Number(opts.throttleMs ?? "1500"),
+      retryNoData: opts.retryNoData ?? false,
     });
-    console.log(`\nIG snippet enrich: ${stats.enriched} enriquecidos / ${stats.no_snippet} sin snippet / ${stats.skipped_no_url} sin URL${stats.aborted_anti_bot ? " — ABORTADO (DDG bloqueó)" : ""}`);
+    console.log(`\nIG snippet enrich: ${stats.enriched} enriquecidos / ${stats.no_snippet} sin métricas / ${stats.skipped_resolved} ya resueltos / ${stats.skipped_no_url} sin URL${stats.aborted_provider_down ? " — ABORTADO (proveedor caído)" : ""}`);
   });
 
 program

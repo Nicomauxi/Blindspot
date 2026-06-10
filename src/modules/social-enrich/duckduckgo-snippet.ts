@@ -72,6 +72,17 @@ export function parseInstagramSnippet(snippet: string, username: string): Social
   };
 }
 
+// Filtra candidatos de snippet y devuelve el primer perfil parseable. Source-agnostic:
+// lo reusan el adapter de DuckDuckGo (HTML) y el de SearXNG (JSON results[].content).
+export function pickProfileFromSnippets(snippets: string[], username: string): SocialProfileData | null {
+  for (const snippet of snippets) {
+    if (!/instagram/i.test(snippet) && !/Followers|seguidores/i.test(snippet)) continue;
+    const parsed = parseInstagramSnippet(snippet, username);
+    if (parsed) return parsed;
+  }
+  return null;
+}
+
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 // Consulta DDG por el perfil y devuelve el SocialProfileData, o null si bloqueo/sin datos.
@@ -89,11 +100,8 @@ export async function fetchInstagramSnippet(
       const res = await doFetch(url, { headers: { "User-Agent": UA, Accept: "text/html" } });
       const html = await res.text();
       if (isAntiBot(html)) continue; // probar el otro endpoint; si ambos bloquean → null
-      for (const snippet of extractSnippets(html)) {
-        if (!/instagram/i.test(snippet) && !/Followers|seguidores/i.test(snippet)) continue;
-        const parsed = parseInstagramSnippet(snippet, username);
-        if (parsed) return parsed;
-      }
+      const found = pickProfileFromSnippets(extractSnippets(html), username);
+      if (found) return found;
     } catch {
       // red/timeout → probar siguiente endpoint o degradar a null
     }

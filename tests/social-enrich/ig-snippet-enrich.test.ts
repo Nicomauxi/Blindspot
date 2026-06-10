@@ -12,23 +12,58 @@ import { runIgSnippetEnrich } from "../../src/modules/social-enrich/ig-snippet-e
 import { loadAllLeads, updateLeadSocialSearch, updateLeadSocialEnrichStatus } from "../../src/storage/leads.js";
 import type { SocialProfileData } from "../../src/modules/social-enrich/social-fusion.js";
 
-function leadWithIg(id: string, username: string | null): Lead {
+function leadWithIg(
+  id: string,
+  username: string | null,
+  extra: { status?: "ok" | "blocked" | "no_data"; prospect?: number; metrics?: boolean } = {}
+): Lead {
+  const heuristic = username
+    ? {
+        ran_at: "2026-01-01T00:00:00Z",
+        mode: "full",
+        stale: false,
+        candidates: { website: [], facebook: [], instagram: [], whatsapp: [] },
+        selected: {
+          website: null,
+          facebook: null,
+          whatsapp: null,
+          instagram: { kind: "instagram", url: `https://instagram.com/${username}`, score: 0.8, signals: [], status: "probed" },
+        },
+      }
+    : undefined;
   return {
     id, place_id: `p-${id}`, niche: "panaderia", name: id, address: "Montevideo",
     rating: null, review_count: null, website: null, whatsapp: null, phone: null,
     business_status: null, tags: [], notes: null, state: "discovered",
     first_seen_run_id: "r1", last_seen_run_id: "r1", google_data: null,
-    digital_footprint: username ? ({
-      fetched_at: "2026-01-01T00:00:00Z",
-      heuristic_discovery: {
-        ran_at: "2026-01-01T00:00:00Z", mode: "full", stale: false,
-        candidates: { website: [], facebook: [], instagram: [], whatsapp: [] },
-        selected: { website: null, facebook: null, whatsapp: null,
-          instagram: { kind: "instagram", url: `https://instagram.com/${username}`, score: 0.8, signals: [], status: "probed" } },
-      },
-    } as unknown as Lead["digital_footprint"]) : null,
+    digital_footprint: (username || extra.status
+      ? ({
+          fetched_at: "2026-01-01T00:00:00Z",
+          ...(heuristic ? { heuristic_discovery: heuristic } : {}),
+          ...(extra.status ? { social_enrich_status: extra.status } : {}),
+          // metrics:true → social_activity con audience_tier real (genuinamente enriquecido);
+          // si no, presencia "vacía" como la era login-wall (audience_tier null).
+          ...(extra.status === "ok"
+            ? {
+                social_activity: {
+                  ran_at: "2026-01-01T00:00:00Z",
+                  source: "playwright_public",
+                  profiles: {},
+                  summary: {
+                    has_social_presence: true,
+                    active_platforms: extra.metrics ? ["instagram"] : [],
+                    abandoned_platforms: [],
+                    best_platform: "instagram",
+                    audience_tier: extra.metrics ? "small" : null,
+                    commercial_signals: [],
+                  },
+                },
+              }
+            : {}),
+        } as unknown as Lead["digital_footprint"])
+      : null),
     reviews_sample: null, business_quality_score: null, digital_gap_score: null,
-    systems_gap_score: null, prospect_score: null, passed_filter: true,
+    systems_gap_score: null, prospect_score: extra.prospect ?? null, passed_filter: true,
     rejection_reasons: [], score_breakdown: null, systems_gap_breakdown: null,
     contacted_at: null, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z",
   };
@@ -54,6 +89,54 @@ describe("runIgSnippetEnrich", () => {
     expect(stats.enriched).toBe(1);
     expect(stats.no_snippet).toBe(1);
     expect(updateLeadSocialSearch).toHaveBeenCalledTimes(1);
+    // el miss se marca no_data para no re-consultarlo
+    expect(updateLeadSocialEnrichStatus).toHaveBeenCalledWith(expect.any(String), "no_data");
+  });
+
+  it("salta los ya resueltos (ok CON métricas / no_data) — no repite", async () => {
+    vi.mocked(loadAllLeads).mockResolvedValue([
+      leadWithIg("ok", "cuenta_ok", { status: "ok", metrics: true }),
+      leadWithIg("nd", "cuenta_nd", { status: "no_data" }),
+      leadWithIg("new", "cuenta_new"),
+    ]);
+    const lookup = vi.fn().mockResolvedValue(profile());
+    const stats = await runIgSnippetEnrich({ all: true, throttleMs: 0, lookup });
+    expect(stats.skipped_resolved).toBe(2);
+    expect(stats.selected).toBe(1);
+    expect(lookup).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-consulta los 'ok' VACÍOS de la era vieja (sin métricas reales)", async () => {
+    vi.mocked(loadAllLeads).mockResolvedValue([
+      leadWithIg("empty", "cuenta_empty", { status: "ok", metrics: false }), // ok pero audience_tier null
+    ]);
+    const lookup = vi.fn().mockResolvedValue(profile());
+    const stats = await runIgSnippetEnrich({ all: true, throttleMs: 0, lookup });
+    expect(stats.skipped_resolved).toBe(0);
+    expect(stats.selected).toBe(1);
+    expect(stats.enriched).toBe(1);
+  });
+
+  it("retryNoData re-incluye los no_data pero no los ok con métricas", async () => {
+    vi.mocked(loadAllLeads).mockResolvedValue([
+      leadWithIg("ok", "cuenta_ok", { status: "ok", metrics: true }),
+      leadWithIg("nd", "cuenta_nd", { status: "no_data" }),
+    ]);
+    const lookup = vi.fn().mockResolvedValue(profile());
+    const stats = await runIgSnippetEnrich({ all: true, throttleMs: 0, lookup, retryNoData: true });
+    expect(stats.selected).toBe(1);
+    expect(stats.skipped_resolved).toBe(1);
+  });
+
+  it("prioriza por prospect_score desc (mejores leads primero)", async () => {
+    vi.mocked(loadAllLeads).mockResolvedValue([
+      leadWithIg("low", "cuenta_low", { prospect: 10 }),
+      leadWithIg("high", "cuenta_high", { prospect: 90 }),
+    ]);
+    const seen: string[] = [];
+    const lookup = vi.fn().mockImplementation((u: string) => { seen.push(u); return Promise.resolve(profile()); });
+    await runIgSnippetEnrich({ all: true, throttleMs: 0, lookup, limit: 1 });
+    expect(seen).toEqual(["cuenta_high"]);
   });
 
   it("un lead sin IG seleccionada no es candidato (no entra al loop)", async () => {
@@ -73,13 +156,24 @@ describe("runIgSnippetEnrich", () => {
     expect(lookup).not.toHaveBeenCalled();
   });
 
-  it("aborta si DDG bloquea (nulls consecutivos)", async () => {
+  it("aborta si el proveedor parece caído (racha de nulls SIN ningún éxito)", async () => {
     vi.mocked(loadAllLeads).mockResolvedValue(
-      Array.from({ length: 10 }, (_, i) => leadWithIg(`l${i}`, `c${i}`))
+      Array.from({ length: 12 }, (_, i) => leadWithIg(`l${i}`, `c${i}`))
     );
-    const lookup = vi.fn().mockResolvedValue(null); // siempre bloqueado
+    const lookup = vi.fn().mockResolvedValue(null); // proveedor siempre vacío
     const stats = await runIgSnippetEnrich({ all: true, throttleMs: 0, lookup });
-    expect(stats.aborted_anti_bot).toBe(true);
-    expect(lookup.mock.calls.length).toBeLessThanOrEqual(6); // cortó en la racha
+    expect(stats.aborted_provider_down).toBe(true);
+    expect(lookup.mock.calls.length).toBeLessThanOrEqual(8);
+  });
+
+  it("NO aborta por nulls si ya hubo al menos un éxito (nulls = cuentas personales)", async () => {
+    vi.mocked(loadAllLeads).mockResolvedValue(
+      Array.from({ length: 12 }, (_, i) => leadWithIg(`l${i}`, `c${i}`))
+    );
+    // primer lookup éxito, el resto null
+    const lookup = vi.fn().mockResolvedValueOnce(profile()).mockResolvedValue(null);
+    const stats = await runIgSnippetEnrich({ all: true, throttleMs: 0, lookup });
+    expect(stats.aborted_provider_down).toBe(false);
+    expect(lookup.mock.calls.length).toBe(12); // procesa todos
   });
 });
