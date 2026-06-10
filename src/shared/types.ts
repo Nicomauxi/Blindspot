@@ -554,6 +554,7 @@ export type DiscoverySource =
   | "osm"
   | "infonegocios"
   | "dgi"
+  | "miem_dei"
   // Fuentes derivadas del scraping de la propia red social descubierta (descripción/bio).
   // Su confianza es dinámica (ver social-source-confidence.ts), no un valor fijo.
   | "social_facebook"

@@ -3,6 +3,7 @@ import { MINTURProvider } from "../../modules/discovery/providers/mintur.js";
 import { OSMProvider } from "../../modules/discovery/providers/osm.js";
 import { YeluProvider } from "../../modules/discovery/providers/yelu.js";
 import { PedidosYaProvider } from "../../modules/discovery/providers/pedidosya.js";
+import { DEIProvider } from "../../modules/discovery/providers/dei.js";
 import { getDedupGeoRadiusMeters, getOnlineDedupThreshold } from "../../modules/discovery/config.js";
 import { findCrossSourceMatch, isFranchise } from "../../modules/discovery/deduplication.js";
 import { normalizeNiche } from "../../modules/discovery/filters.js";
@@ -33,6 +34,7 @@ function buildProvider(source: string) {
   if (source === "osm") return new OSMProvider();
   if (source === "yelu") return new YeluProvider({ sleepFn });
   if (source === "pedidosya") return new PedidosYaProvider({ sleepFn });
+  if (source === "miem_dei") return new DEIProvider();
   throw new Error(`Unknown provider source: ${source}`);
 }
 
