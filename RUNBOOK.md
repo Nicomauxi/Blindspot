@@ -56,9 +56,28 @@ EMBED_SCHEDULER=true
 GOOGLE_PLACES_API_KEY=...      # solo para discovery real con Google Places
 NEXT_PUBLIC_API_URL=http://localhost:3001
 GEMINI_API_KEY=...             # opcional para features LLM
+SEARXNG_URL=http://localhost:8080  # opcional, métricas IG vía SearXNG (ig-snippet-enrich)
 ```
 
 El runtime LLM también acepta `GOOGLE_GEMINI_API_KEY`, `VITE_GOOGLE_GEMINI_API_KEY` y `OPENAI_COMPAT_*`.
+
+## Enriquecimiento de métricas IG (SearXNG self-hosted)
+
+El comando `ig-snippet-enrich` obtiene followers/following/posts de IG ($0, legal) leyendo el
+snippet (`og:description`) que devuelve un **SearXNG** local. Las APIs de búsqueda gratis 2026
+(Brave/Google CSE/SerpApi) no sirven (ToS, cerradas o evaden anti-bot); SearXNG self-host es el
+único camino $0+legal (agrega buscadores; resiliente al anti-bot de uno puntual).
+
+```bash
+# 1. Levantar SearXNG con JSON habilitado:
+docker run -d --name searxng -p 8080:8080 -v <cfg>:/etc/searxng searxng/searxng
+#    settings.yml debe tener:  search.formats: [html, json]  y  server.limiter: false
+# 2. Correr el enrich (prioriza por prospect_score; salta ya-resueltos; marca no_data):
+node --env-file=.env --import tsx/esm src/cli/index.ts ig-snippet-enrich --all --throttle-ms 1500
+```
+
+Hit-rate esperable ~58% (los misses son cuentas personales sin métricas públicas). `--retry-no-data`
+re-consulta los previamente marcados sin métricas.
 
 ## Migraciones
 

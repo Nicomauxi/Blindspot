@@ -36,6 +36,7 @@ Copiá `.env.example` a `.env` y completá lo mínimo para desarrollo local:
 | `GOOGLE_PLACES_API_KEY` | obligatoria solo si vas a correr discovery real con Google Places |
 | `NEXT_PUBLIC_API_URL` | opcional en UI, default `http://localhost:3001` |
 | `GEMINI_API_KEY` | opcional para features LLM |
+| `SEARXNG_URL` | opcional, default `http://localhost:8080`; SearXNG self-hosted para enriquecer métricas de IG (comando `ig-snippet-enrich`) |
 
 El runtime LLM también acepta `GOOGLE_GEMINI_API_KEY`, `VITE_GOOGLE_GEMINI_API_KEY` y `OPENAI_COMPAT_*`, pero no son necesarias para arrancar el sistema base.
 
@@ -114,6 +115,15 @@ node --env-file=.env --import tsx/esm src/cli/index.ts social-enrich \
   --all \
   --limit 10 \
   --force
+```
+
+Métricas IG vía SearXNG self-hosted (gratis, $0; requiere `SEARXNG_URL` arriba):
+
+```bash
+node --env-file=.env --import tsx/esm src/cli/index.ts ig-snippet-enrich \
+  --all \
+  --limit 20 \
+  --throttle-ms 1500
 ```
 
 Scoring:
