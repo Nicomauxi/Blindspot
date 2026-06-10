@@ -7,7 +7,7 @@ import { DiscoveryLocationPicker } from "@/components/discovery-location-picker"
 import type { DiscoveryComposerDraft } from "@/lib/discovery-workspace";
 import type { DiscoveryLocationSelection } from "@/lib/discovery-location";
 
-const SOURCES = ["yelu", "pedidosya", "mintur", "osm", "google_places"] as const;
+const SOURCES = ["yelu", "pedidosya", "mintur", "osm", "miem_dei", "google_places"] as const;
 const PROFILES = ["A", "B", "C", "D"] as const;
 
 function toggleSource(current: string[], source: string): string[] {

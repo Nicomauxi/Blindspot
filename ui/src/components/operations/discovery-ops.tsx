@@ -49,7 +49,7 @@ import { DiscoveryContextMap } from "@/components/discovery-context-map";
 import { buildComposerGeoSelection, buildZoneLeadRequest } from "@/lib/location-density-map";
 
 
-const SOURCES = ["yelu", "pedidosya", "mintur", "osm", "google_places"] as const;
+const SOURCES = ["yelu", "pedidosya", "mintur", "osm", "miem_dei", "google_places"] as const;
 const PROFILES = ["A", "B", "C", "D"] as const;
 const EMPTY_DENSITY_FILTERS: DiscoveryLeadDensityFilters = {
   prospect_score_gte: 0,

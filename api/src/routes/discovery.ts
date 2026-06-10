@@ -37,7 +37,7 @@ const permissiveUuid = z
 
 const cpuBudgetSchema = z.enum(["conservative", "balanced", "aggressive"]);
 const profileSchema = z.enum(["A", "B", "C", "D"]);
-const sourceSchema = z.enum(["mintur", "osm", "yelu", "pedidosya", "google_places"]);
+const sourceSchema = z.enum(["mintur", "osm", "yelu", "pedidosya", "google_places", "miem_dei"]);
 
 const predictiveContextSchema = z.object({
   suggestion_source: z.literal("predictive_location"),

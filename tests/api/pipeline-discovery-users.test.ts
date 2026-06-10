@@ -648,6 +648,22 @@ describe("Discovery routes", () => {
     await app.close();
   });
 
+  it("POST /discovery/job-batches acepta la fuente miem_dei (DEI)", async () => {
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/discovery/job-batches",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ sources: ["miem_dei"], location: "Florida", niche: "", enrich_after_discovery: false }),
+    });
+    expect(res.statusCode).toBe(201);
+    const body = res.json();
+    expect(body.data.jobs[0]?.source).toBe("miem_dei");
+    await app.close();
+  });
+
   it("POST /discovery/job-batches supports discovery-only mode", async () => {
     const { buildServer } = await import("../../api/src/server.js");
     const app = await buildServer();
