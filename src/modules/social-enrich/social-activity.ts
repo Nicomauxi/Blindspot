@@ -143,6 +143,35 @@ export function instagramProfile(url: string, ogDescription: string | null): Soc
   };
 }
 
+// Construye el perfil de actividad desde counts ESTRUCTURADOS (Instagram Graph API
+// business_discovery), no desde el og:description. Ventaja sobre el scraping: con el
+// timestamp del último media sabemos la actividad real (active/abandoned), no "unknown".
+export function instagramProfileFromCounts(
+  url: string,
+  opts: {
+    followers: number | null;
+    following: number | null;
+    posts: number | null;
+    lastActivityAt?: string | null;
+    nowIso?: string | null;
+  }
+): SocialActivityProfile {
+  return {
+    platform: "instagram",
+    url,
+    followers: opts.followers,
+    following: opts.following,
+    posts: opts.posts,
+    likes: null,
+    talking_about: null,
+    audience_tier: classifyAudience(opts.followers),
+    activity_status: classifyActivity({
+      ...(opts.lastActivityAt != null ? { lastActivityAt: opts.lastActivityAt } : {}),
+      ...(opts.nowIso != null ? { nowIso: opts.nowIso } : {}),
+    }),
+  };
+}
+
 // Construye el perfil de actividad de Facebook a partir del og:description.
 export function facebookProfile(url: string, ogDescription: string | null): SocialActivityProfile {
   const m = parseFacebookMetrics(ogDescription);

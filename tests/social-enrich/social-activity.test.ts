@@ -7,6 +7,7 @@ import {
   parseInstagramMetrics,
   parseSocialCount,
   instagramProfile,
+  instagramProfileFromCounts,
   facebookProfile,
   type SocialActivityProfile,
 } from "../../src/modules/social-enrich/social-activity.js";
@@ -80,6 +81,30 @@ describe("instagramProfile / facebookProfile", () => {
   it("facebookProfile clasifica actividad por talking_about", () => {
     const p = facebookProfile("https://facebook.com/resto", "Resto. 2,500 likes · 45 talking about this");
     expect(p).toMatchObject({ platform: "facebook", likes: 2500, audience_tier: "medium", activity_status: "active" });
+  });
+
+  it("instagramProfileFromCounts: counts estructurados + actividad por último post (Graph API)", () => {
+    const reciente = instagramProfileFromCounts("https://instagram.com/resto", {
+      followers: 3200, following: 180, posts: 412,
+      lastActivityAt: "2026-06-01T00:00:00Z", nowIso: "2026-06-09T00:00:00Z",
+    });
+    expect(reciente).toMatchObject({
+      platform: "instagram", followers: 3200, following: 180, posts: 412,
+      audience_tier: "medium", activity_status: "active",
+    });
+
+    const viejo = instagramProfileFromCounts("https://instagram.com/abandonado", {
+      followers: 500, following: 90, posts: 20,
+      lastActivityAt: "2025-01-01T00:00:00Z", nowIso: "2026-06-09T00:00:00Z",
+    });
+    expect(viejo.activity_status).toBe("abandoned");
+    expect(viejo.audience_tier).toBe("low");
+
+    const sinPost = instagramProfileFromCounts("https://instagram.com/sinpost", {
+      followers: 1500, following: 10, posts: 0,
+    });
+    expect(sinPost.activity_status).toBe("unknown");
+    expect(sinPost.audience_tier).toBe("medium");
   });
 });
 
