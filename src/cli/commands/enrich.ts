@@ -1,5 +1,5 @@
 import { z } from "zod";
-import pLimit from "p-limit";
+import { runAdaptivePool } from "../../shared/resource-pool.js";
 import { getLogger } from "../../shared/logger.js";
 import {
   createEnrichmentRun,
@@ -292,7 +292,6 @@ async function executeEnrichmentRun(
     }
     log.info({ niches: uniqueNiches.length }, "vocabulary loaded for enrichment run");
 
-    const limit = pLimit(effectiveConcurrency);
     const total = leads.length;
     let done = 0;
 
@@ -305,9 +304,11 @@ async function executeEnrichmentRun(
     let leads_processed = 0;
     let significant_changes = 0;
 
-    await Promise.all(
-      leads.map((lead) =>
-        limit(async () => {
+    // Concurrencia ADAPTATIVA a los recursos: usa hasta effectiveConcurrency hilos cuando hay
+    // holgura y baja a 1 si la RAM libre < 5GB o el CPU libre < 30% (no crashear la PC).
+    await runAdaptivePool(
+      leads,
+      async (lead) => {
           try {
             const extraStopWords = lead.niche
               ? (nicheStopWords.get(lead.niche) ?? new Set<string>())
@@ -388,8 +389,8 @@ async function executeEnrichmentRun(
               log.warn({ leadId: lead.id, err: pipelineMsg }, "pipeline_errors insert failed");
             }
           }
-        })
-      )
+      },
+      { maxConcurrency: effectiveConcurrency, minFreeRamGB: 5, minFreeCpuPct: 30 }
     );
 
     const duration_ms = Date.now() - startedAt;
