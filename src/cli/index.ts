@@ -135,6 +135,23 @@ program
   });
 
 program
+  .command("ig-snippet-enrich")
+  .description("Enrich IG metrics + liveness via DuckDuckGo snippet (free, $0). Throttled; run from a residential IP.")
+  .option("--run <uuid>", "Enrich leads of this run")
+  .option("--all", "Enrich all passed leads with a selected Instagram URL", false)
+  .option("--limit <number>", "Max leads to process")
+  .option("--throttle-ms <number>", "Delay between DDG queries (anti rate-limit)", "2500")
+  .action(async (opts: { run?: string; all?: boolean; limit?: string; throttleMs?: string }) => {
+    const { runIgSnippetEnrich } = await import("./../modules/social-enrich/ig-snippet-enrich.js");
+    const stats = await runIgSnippetEnrich({
+      ...(opts.run ? { run: opts.run } : { all: true }),
+      ...(opts.limit ? { limit: Number(opts.limit) } : {}),
+      throttleMs: Number(opts.throttleMs ?? "2500"),
+    });
+    console.log(`\nIG snippet enrich: ${stats.enriched} enriquecidos / ${stats.no_snippet} sin snippet / ${stats.skipped_no_url} sin URL${stats.aborted_anti_bot ? " — ABORTADO (DDG bloqueó)" : ""}`);
+  });
+
+program
   .command("score")
   .description("Score leads by computing business_quality, digital_gap, and prospect scores")
   .option("--run <uuid>", "Score leads of this discovery/enrichment run")
