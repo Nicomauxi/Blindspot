@@ -4,6 +4,7 @@ import type { DiscoveryCandidate, Lead } from "../../src/shared/types.js";
 const discover = vi.fn();
 const loadAllLeads = vi.fn();
 const loadRuntimeLists = vi.fn();
+const loadAllRuntime = vi.fn();
 const addCorroboratingSource = vi.fn();
 const insertExternalLead = vi.fn();
 const findCrossSourceMatch = vi.fn();
@@ -30,7 +31,12 @@ vi.mock("../../src/modules/discovery/providers/pedidosya.js", () => ({
   },
 }));
 vi.mock("../../src/storage/leads.js", () => ({ loadAllLeads }));
-vi.mock("../../src/storage/system-lists.js", () => ({ loadRuntimeLists }));
+vi.mock("../../src/storage/system-lists.js", () => ({ loadRuntimeLists, loadAllRuntime }));
+// La normalización de niche tiene su propio test (candidate-normalizer.test.ts). Acá la
+// neutralizamos (identidad) para verificar el flujo de dedup/corroboración aislado.
+vi.mock("../../src/modules/discovery/candidate-normalizer.js", () => ({
+  normalizeCandidates: (candidates: unknown[]) => candidates,
+}));
 vi.mock("../../src/storage/external-leads.js", () => ({
   addCorroboratingSource,
   insertExternalLead,
@@ -112,6 +118,7 @@ describe("discoverExternalCommand", () => {
     vi.clearAllMocks();
     consoleLog = vi.spyOn(console, "log").mockImplementation(() => {});
     loadRuntimeLists.mockResolvedValue({ franchiseNames: new Set<string>() });
+    loadAllRuntime.mockResolvedValue({ mappings: { nicheAliases: [] } });
     loadAllLeads.mockResolvedValue([]);
     discover.mockResolvedValue([]);
     addCorroboratingSource.mockResolvedValue(null);
