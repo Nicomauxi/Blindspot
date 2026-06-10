@@ -12,7 +12,6 @@ import { reportCommand } from "./commands/report.js";
 import { leadsListCommand } from "./commands/leads-list.js";
 import { vocabularyCommand } from "./commands/vocabulary.js";
 import { socialEnrichCommand } from "./commands/social-enrich.js";
-import { igGraphEnrichCommand } from "./commands/ig-graph-enrich.js";
 import { runCommand } from "./commands/run.js";
 import { maintenanceCommand } from "./commands/maintenance.js";
 import { discoverExternalCommand } from "./commands/discover-external.js";
@@ -132,20 +131,6 @@ program
       all: opts.all ?? false,
       limit: opts.limit,
       force: opts.force ?? false,
-    });
-  });
-
-program
-  .command("ig-graph-enrich")
-  .description("Enrich Instagram profiles via the official Graph API business_discovery (free, no login wall)")
-  .option("--run <uuid>", "Enrich leads of this run")
-  .option("--all", "Enrich all passed leads with a selected Instagram URL", false)
-  .option("--limit <number>", "Max leads to process")
-  .action(async (opts: { run?: string; all?: boolean; limit?: string }) => {
-    await igGraphEnrichCommand({
-      ...(opts.run ? { run: opts.run } : {}),
-      all: opts.all ?? false,
-      ...(opts.limit ? { limit: opts.limit } : {}),
     });
   });
 
