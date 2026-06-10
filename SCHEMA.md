@@ -97,7 +97,8 @@ ORDER BY matched DESC;
 
 - `digital_footprint->'contact_emails'`: JSON array de emails útiles.
 - `digital_footprint->'social_search'`: resultado de descubrimiento social.
-- `digital_footprint->'social_search'->>'source'`: origen de social search, por ejemplo `duckduckgo`, `duckduckgo-fallback` o `playwright`.
+- `digital_footprint->'social_search'->>'source'`: origen de social search, por ejemplo `duckduckgo`, `duckduckgo-fallback`, `searxng` o `playwright`.
+- `digital_footprint->>'social_enrich_status'`: `ok` | `blocked` | `no_data` (métricas IG vía `ig-snippet-enrich`).
 - `digital_footprint->'social_search'->'facebook'`: resultado de búsqueda/extracción de Facebook.
 - `digital_footprint->'social_search'->'instagram'`: resultado de búsqueda/extracción de Instagram.
 - `digital_footprint->'heuristic_discovery'`: resultado de descubrimiento heurístico de website/social/WhatsApp.
