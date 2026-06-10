@@ -3,6 +3,12 @@
 // La API es la fuente; el resto del pipeline no cambia. Inactivo si no hay token.
 import { getLogger } from "../../shared/logger.js";
 import type { Lead, PlaywrightInstagramSearchResult, PlaywrightSocialSearch } from "../../shared/types.js";
+import {
+  loadAllLeads,
+  loadLeadsByRunId,
+  updateLeadSocialSearch,
+  updateLeadSocialEnrichStatus,
+} from "../../storage/leads.js";
 import { parseSocialDescription } from "./description-parse.js";
 import { mergeSocialIntoCanonical } from "./social-canonical.js";
 import {
@@ -10,7 +16,12 @@ import {
   instagramProfileFromCounts,
   type SocialActivitySnapshot,
 } from "./social-activity.js";
-import type { GraphBusinessProfile } from "./graph-api.js";
+import {
+  extractUsernameFromUrl,
+  isGraphApiEnabled,
+  lookupInstagramBusiness,
+  type GraphBusinessProfile,
+} from "./graph-api.js";
 
 const CONFIRMATION_CONFIDENCE = 0.9;
 
@@ -99,4 +110,120 @@ export async function buildInstagramGraphFusion(
     socialActivity: buildSocialActivitySnapshot([activityProfile], { ranAt: ctx.ranAt, hasWebsite: ctx.hasWebsite }),
     socialCanonical,
   };
+}
+
+// ─── Runner: enriquecimiento de la colección vía Graph API ───────────────────────
+// La PRIMERA corrida es también la medición: cuántos leads son cuenta profesional
+// (enriched) vs personal/privada (not_professional) vs inexistente (not_found).
+
+export interface GraphEnrichStats {
+  loaded: number;
+  selected: number;
+  enriched: number;
+  not_professional: number;
+  not_found: number;
+  rate_limited: number;
+  errors: number;
+  skipped_no_url: number;
+}
+
+export interface GraphEnrichOptions {
+  all?: boolean;
+  run?: string;
+  limit?: number;
+  allowLlm?: boolean;
+  nowIso?: string;
+  sleepFn?: (ms: number) => Promise<void>;
+  rateLimitBackoffMs?: number;
+}
+
+function instagramUrlOf(lead: Lead): string | null {
+  const selected = lead.digital_footprint?.heuristic_discovery?.selected;
+  const candidate = selected?.instagram as { url?: string } | null | undefined;
+  return candidate?.url ?? null;
+}
+
+const defaultSleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+export async function runInstagramGraphEnrich(opts: GraphEnrichOptions): Promise<GraphEnrichStats> {
+  if (!isGraphApiEnabled()) {
+    throw new Error(
+      "Instagram Graph API inactiva: configurá META_IG_USER_ID y META_GRAPH_TOKEN para usar business_discovery."
+    );
+  }
+  const log = getLogger();
+  const sleep = opts.sleepFn ?? defaultSleep;
+  const backoffMs = opts.rateLimitBackoffMs ?? 60_000;
+  const nowIso = opts.nowIso ?? new Date().toISOString();
+
+  const loaded = opts.run ? await loadLeadsByRunId(opts.run) : await loadAllLeads();
+  const candidates = loaded
+    .filter((l) => l.passed_filter && instagramUrlOf(l) !== null)
+    .slice(0, opts.limit ?? loaded.length);
+
+  const stats: GraphEnrichStats = {
+    loaded: loaded.length,
+    selected: candidates.length,
+    enriched: 0,
+    not_professional: 0,
+    not_found: 0,
+    rate_limited: 0,
+    errors: 0,
+    skipped_no_url: 0,
+  };
+
+  for (const lead of candidates) {
+    const igUrl = instagramUrlOf(lead);
+    const username = extractUsernameFromUrl(igUrl);
+    if (!username || !igUrl) {
+      stats.skipped_no_url += 1;
+      continue;
+    }
+
+    let result = await lookupInstagramBusiness(username);
+    // Backoff + reintento único ante límite de la app.
+    if (result.status === "rate_limited") {
+      stats.rate_limited += 1;
+      await sleep(backoffMs);
+      result = await lookupInstagramBusiness(username);
+    }
+
+    switch (result.status) {
+      case "ok": {
+        const hasWebsite =
+          Boolean(lead.website) || Boolean(lead.digital_footprint?.heuristic_discovery?.selected.website?.url);
+        const fusion = await buildInstagramGraphFusion(lead, igUrl, result.profile, {
+          ranAt: nowIso,
+          nowIso,
+          hasWebsite,
+          ...(opts.allowLlm !== undefined ? { allowLlm: opts.allowLlm } : {}),
+        });
+        await updateLeadSocialSearch(lead.id, fusion.socialSearch, fusion.tags, null, fusion.socialActivity, fusion.socialCanonical);
+        await updateLeadSocialEnrichStatus(lead.id, "ok").catch(() => undefined);
+        stats.enriched += 1;
+        break;
+      }
+      case "not_professional":
+        stats.not_professional += 1;
+        break;
+      case "not_found":
+        stats.not_found += 1;
+        break;
+      case "rate_limited":
+        // Persistió tras el reintento: lo dejamos para la próxima corrida.
+        stats.errors += 1;
+        break;
+      case "auth_error":
+        // Token roto: abortar el run entero (no tiene sentido seguir consultando).
+        throw new Error(`Instagram Graph API auth error (token): ${result.message}`);
+      case "disabled":
+        throw new Error("Instagram Graph API inactiva a mitad de corrida.");
+      default:
+        stats.errors += 1;
+        break;
+    }
+  }
+
+  log.info(stats, "Instagram Graph enrich complete");
+  return stats;
 }
