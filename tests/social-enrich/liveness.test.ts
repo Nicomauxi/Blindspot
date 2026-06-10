@@ -43,7 +43,7 @@ describe("detectLiveness", () => {
     expect(r.state).toBe("alive");
   });
 
-  it("redirect a /login → dead/login_wall (soft)", () => {
+  it("redirect a /login → unverified/login_wall (no penaliza: el login wall es universal en IG 2026)", () => {
     const r = detectLiveness(input({
       platform: "instagram",
       requestedUrl: "https://www.instagram.com/laproa",
@@ -51,7 +51,25 @@ describe("detectLiveness", () => {
       httpStatus: 200,
       ogTitle: "Instagram",
     }));
+    // login_wall ya NO significa "muerta": IG redirige TODO perfil anónimo al login.
+    // unverified = "no se pudo determinar" → ni confirma viva ni atenúa el score.
+    expect(r.state).toBe("unverified");
     expect(r.reason).toBe("login_wall");
+    expect(isHardDead(r)).toBe(false);
+  });
+
+  it("login_wall NO debe caer como generic_title aunque el og:title sea 'Instagram'", () => {
+    // El early-return de login_wall tiene que ir ANTES del check de título genérico,
+    // si no la página login-walled quedaría hard-dead por generic_title.
+    const r = detectLiveness(input({
+      platform: "instagram",
+      requestedUrl: "https://www.instagram.com/panaderiagodoy",
+      finalUrl: "https://www.instagram.com/accounts/login/?next=%2Fpanaderiagodoy",
+      httpStatus: 200,
+      ogTitle: "Instagram",
+    }));
+    expect(r.reason).toBe("login_wall");
+    expect(r.state).toBe("unverified");
     expect(isHardDead(r)).toBe(false);
   });
 

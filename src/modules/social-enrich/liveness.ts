@@ -137,7 +137,12 @@ export function detectLiveness(input: LivenessInput): Liveness {
   const finalPath = pathOf(input.finalUrl);
   const requestedSpecific = reqPath != null && reqPath !== "/" && !HOME_PATHS.has(reqPath);
   if (requestedSpecific && finalPath != null && finalPath !== reqPath) {
-    if (LOGIN_PATHS.has(finalPath)) return build("login_wall", "dead", input); // soft
+    // login_wall ya NO es señal de muerte: desde 2026 IG redirige TODO perfil anónimo al
+    // login, exista o no. Marcar "dead" penalizaba (−60% score, atenuación en cleanup) a
+    // negocios vivos por pura ceguera del scraper. Lo dejamos "unverified" (no confirma ni
+    // penaliza) conservando el reason para diagnóstico. El early-return debe ir antes del
+    // check de generic_title de abajo (si no, el og:title "Instagram" lo haría hard-dead).
+    if (LOGIN_PATHS.has(finalPath)) return build("login_wall", "unverified", input);
     if (HOME_PATHS.has(finalPath)) return build("redirected_home", "dead", input); // hard
   }
 
