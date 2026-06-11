@@ -1,4 +1,8 @@
-# Blindspot Remediation Runbook
+# Blindspot — Runbook de backups y restore
+
+> Operación de backups, restore y secuencia segura previa a cambios destructivos locales.
+> (Antes `remediation-runbook.md`; no confundir con el plan de remediación de hallazgos
+> de auditoría, que vive en `context/PLAN_EJECUCION.md`.)
 
 ## Local Safety Sequence
 

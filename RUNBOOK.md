@@ -5,6 +5,7 @@
 - Bootstrap y arranque rápido: [README.md](/home/nicolasfalcioni/Documentos/blindspot/README.md)
 - Arquitectura vigente: [context/ARCHITECTURE.md](/home/nicolasfalcioni/Documentos/blindspot/context/ARCHITECTURE.md)
 - Guardrails de ejecución: [context/SECURITY.md](/home/nicolasfalcioni/Documentos/blindspot/context/SECURITY.md)
+- Backups y restore en detalle: [docs/backup-restore-runbook.md](/home/nicolasfalcioni/Documentos/blindspot/docs/backup-restore-runbook.md)
 
 ## Arquitectura de procesos
 
