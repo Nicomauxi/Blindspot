@@ -175,3 +175,24 @@ describe("DEIProvider.discover", () => {
     expect(out).toHaveLength(1);
   });
 });
+
+describe("config DEI por env (F6.3)", () => {
+  afterEach(() => {
+    delete process.env["DEI_BASE_URL"];
+    delete process.env["DEI_RESOURCE_ID"];
+  });
+
+  it("usa defaults sin env", async () => {
+    const { deiBaseUrl, deiResourceId } = await import("../../src/modules/discovery/providers/dei.js");
+    expect(deiBaseUrl()).toContain("catalogodatos.gub.uy");
+    expect(deiResourceId()).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  it("DEI_BASE_URL/DEI_RESOURCE_ID overridean", async () => {
+    const { deiBaseUrl, deiResourceId } = await import("../../src/modules/discovery/providers/dei.js");
+    process.env["DEI_BASE_URL"] = "https://otro.host/api";
+    process.env["DEI_RESOURCE_ID"] = "nuevo-id";
+    expect(deiBaseUrl()).toBe("https://otro.host/api");
+    expect(deiResourceId()).toBe("nuevo-id");
+  });
+});

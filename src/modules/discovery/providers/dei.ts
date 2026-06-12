@@ -15,8 +15,18 @@ import { normalizeNiche, asciiFold } from "../filters.js";
 // dirección textual, que sí es buena.
 const SOURCE: DiscoverySource = "miem_dei";
 const SOURCE_CONFIDENCE = 0.9;
-const BASE_URL = "https://catalogodatos.gub.uy/api/3/action/datastore_search";
-const RESOURCE_ID = "e56d1949-3e94-42a9-801f-c6d2523b185d";
+// F6.3: configurables por env — si el catálogo CKAN rota el resource_id del dataset
+// DEI (pasó en el pasado), se corrige sin redeploy.
+const DEFAULT_BASE_URL = "https://catalogodatos.gub.uy/api/3/action/datastore_search";
+const DEFAULT_RESOURCE_ID = "e56d1949-3e94-42a9-801f-c6d2523b185d";
+
+export function deiBaseUrl(): string {
+  return process.env["DEI_BASE_URL"]?.trim() || DEFAULT_BASE_URL;
+}
+
+export function deiResourceId(): string {
+  return process.env["DEI_RESOURCE_ID"]?.trim() || DEFAULT_RESOURCE_ID;
+}
 const PAGE_SIZE = 500;
 const COL_DEPARTMENT = "Departamento (EP)";
 const COL_STATE = "Estado de la empresa";
@@ -120,7 +130,7 @@ export function mapRecord(record: DEIRecord): DiscoveryCandidate {
 }
 
 async function fetchPage(params: URLSearchParams): Promise<CKANResponse> {
-  const url = `${BASE_URL}?${params}`;
+  const url = `${deiBaseUrl()}?${params}`;
   const response = await fetch(url, { dispatcher: tlsAgent });
   if (!response.ok) {
     throw new Error(`DEI API error: ${response.status} ${response.statusText}`);
@@ -134,7 +144,7 @@ async function fetchAllRecords(filters: string | null): Promise<DEIRecord[]> {
 
   while (true) {
     const params = new URLSearchParams({
-      resource_id: RESOURCE_ID,
+      resource_id: deiResourceId(),
       limit: String(PAGE_SIZE),
       offset: String(offset),
     });
