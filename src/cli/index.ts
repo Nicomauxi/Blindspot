@@ -213,14 +213,17 @@ program
   .option("--snapshot-label <label>", "Snapshot label for rollback backup")
   .option("--output-dir <path>", "Output directory (default: ./reports/score-rollout-v3/<snapshot>/)")
   .option("--from-version <number>", "Only rescore leads currently on this scoring_version", "2")
-  .option("--dry-run", "Simulate the rollout without persisting DB writes", false)
-  .action(async (opts: { scenario: string; snapshotLabel?: string; outputDir?: string; fromVersion: string; dryRun?: boolean }) => {
+  // N102: dry-run por DEFAULT — antes reescribía los scores de todo el pool sin
+  // confirmación. Persistir exige --apply explícito.
+  .option("--apply", "Persist DB writes (sin esta flag corre en dry-run)", false)
+  .option("--dry-run", "(deprecado: es el default) Simulate the rollout without persisting DB writes", false)
+  .action(async (opts: { scenario: string; snapshotLabel?: string; outputDir?: string; fromVersion: string; dryRun?: boolean; apply?: boolean }) => {
     await scoreRolloutV3Command({
       scenario: opts.scenario,
       ...(opts.snapshotLabel ? { snapshotLabel: opts.snapshotLabel } : {}),
       ...(opts.outputDir ? { outputDir: opts.outputDir } : {}),
       fromVersion: Number(opts.fromVersion),
-      dryRun: opts.dryRun ?? false,
+      dryRun: opts.apply !== true,
     });
   });
 
