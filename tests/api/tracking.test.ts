@@ -124,16 +124,28 @@ vi.mock("../../api/src/db/client.js", () => ({
           niche: "restaurants",
           address: "Test St 123",
           website: null,
-          phone: null,
+          phone: "+598 99 111 222",
+          whatsapp: null,
+          canonical_fields: { email: "dueno@test.uy" }, // shape legacy string (N33)
         };
+        // Simula PostgREST: la tabla leads NO tiene columna email → 400 (42703). N30/N34.
+        const LEAD_COLUMNS = new Set(["id", "name", "niche", "address", "website", "phone", "whatsapp", "canonical_fields"]);
         return {
-          select: () => ({
-            in: (_col: string, _ids: string[]) =>
-              Promise.resolve({ data: [{ id: mockLeadData.id, name: mockLeadData.name }], error: null }),
-            eq: (_col: string, _val: string) => ({
-              single: async () => ({ data: mockLeadData, error: null }),
-            }),
-          }),
+          select: (columns = "*") => {
+            const requested = String(columns).split(",").map((c) => c.trim()).filter(Boolean);
+            const unknown = columns === "*" ? [] : requested.filter((c) => !LEAD_COLUMNS.has(c));
+            const fail = unknown.length > 0;
+            return {
+              in: (_col: string, _ids: string[]) =>
+                Promise.resolve({ data: [{ id: mockLeadData.id, name: mockLeadData.name }], error: null }),
+              eq: (_col: string, _val: string) => ({
+                single: async () =>
+                  fail
+                    ? { data: null, error: { code: "42703", message: `column leads.${unknown[0]} does not exist` } }
+                    : { data: mockLeadData, error: null },
+              }),
+            };
+          },
         };
       }
       if (table === "lead_dashboard") {
@@ -430,6 +442,28 @@ describe("GET /api/v1/tracking/:id", () => {
     expect(res.json().data.events).toBeInstanceOf(Array);
     expect(res.json().data.events[0]).toMatchObject({ actor_email: "admin@blindspot.local" });
     expect(res.json().data.stage_details).toEqual([]);
+    await app.close();
+  });
+
+  it("N2.3: el lead embebido trae contacto (no null por columna inexistente)", async () => {
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: ADMIN_ID, email: "admin@blindspot.local" });
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/v1/tracking/${TRACKING_ID}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const lead = res.json().data.lead;
+    expect(lead).not.toBeNull();
+    expect(lead.name).toBe("Test Business");
+    expect(lead.phone).toBe("+598 99 111 222");
+    // email derivado de canonical_fields (string legacy o {value}).
+    expect(lead.email).toBe("dueno@test.uy");
+    expect(res.json().data.lead_name).toBe("Test Business");
     await app.close();
   });
 

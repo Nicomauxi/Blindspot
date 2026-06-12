@@ -324,14 +324,41 @@ export async function trackingRoutes(app: FastifyInstance): Promise<void> {
     }
 
     const leadId = t["lead_id"] as string;
-    const { data: leadRow } = await db
+    // N30/N34: leads NO tiene columna email (vive en canonical_fields) — el select viejo
+    // fallaba con 42703 y el error se tragaba: el panel de contacto del CRM quedaba vacío.
+    const { data: leadRow, error: leadErr } = await db
       .from("leads")
-      .select("name, niche, address, website, phone, whatsapp, email")
+      .select("name, niche, address, website, phone, whatsapp, canonical_fields")
       .eq("id", leadId)
       .single();
 
+    if (leadErr) {
+      request.log.error({ error: leadErr, leadId }, "tracking detail: lead fetch failed");
+    }
+
+    const canonicalEmail = (canonicalFields: unknown): string | null => {
+      if (!canonicalFields || typeof canonicalFields !== "object") return null;
+      const raw = (canonicalFields as Record<string, unknown>)["email"];
+      if (typeof raw === "string" && raw.trim()) return raw.trim();
+      if (raw && typeof raw === "object" && typeof (raw as { value?: unknown }).value === "string") {
+        return ((raw as { value: string }).value.trim() || null);
+      }
+      return null;
+    };
+
     const lead = leadRow
-      ? (leadRow as { name: string; niche: string | null; address: string | null; website: string | null; phone: string | null; whatsapp: string | null; email: string | null })
+      ? (() => {
+          const row = leadRow as { name: string; niche: string | null; address: string | null; website: string | null; phone: string | null; whatsapp: string | null; canonical_fields: unknown };
+          return {
+            name: row.name,
+            niche: row.niche,
+            address: row.address,
+            website: row.website,
+            phone: row.phone,
+            whatsapp: row.whatsapp,
+            email: canonicalEmail(row.canonical_fields),
+          };
+        })()
       : null;
 
     const actorIds = [...new Set((events ?? [])
