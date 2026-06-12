@@ -392,6 +392,7 @@ export function DiscoveryOps() {
 
   async function handleCreateBatch() {
     if (!token) return;
+    setError(null); // N98: un 409 viejo quedaba pegado sobre el create exitoso siguiente
     setCreating(true);
     try {
       await createDiscoveryJobBatch(token, {

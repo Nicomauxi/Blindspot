@@ -57,18 +57,28 @@ export function AlertsBell() {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [open]);
 
+  // N96: si la mutación falla (red/403/500) la alerta NO se quita ni baja el badge —
+  // antes el catch vacío dejaba el estado local mintiendo hasta el próximo reload.
   async function handleMarkRead(id: string) {
     if (!token) return;
-    await markAlertRead(token, id).catch(() => undefined);
-    setAlerts((prev) => prev.filter((a) => a.id !== id));
-    setCount((c) => Math.max(0, c - 1));
+    try {
+      await markAlertRead(token, id);
+      setAlerts((prev) => prev.filter((a) => a.id !== id));
+      setCount((c) => Math.max(0, c - 1));
+    } catch {
+      // la alerta sigue visible; el próximo poll de count re-sincroniza
+    }
   }
 
   async function handleArchive(id: string) {
     if (!token) return;
-    await archiveAlert(token, id).catch(() => undefined);
-    setAlerts((prev) => prev.filter((a) => a.id !== id));
-    setCount((c) => Math.max(0, c - 1));
+    try {
+      await archiveAlert(token, id);
+      setAlerts((prev) => prev.filter((a) => a.id !== id));
+      setCount((c) => Math.max(0, c - 1));
+    } catch {
+      // ídem handleMarkRead
+    }
   }
 
   return (
