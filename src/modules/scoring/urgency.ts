@@ -2,10 +2,10 @@ import type { Lead } from "../../shared/types.js";
 import type { UrgencySignal } from "./types.js";
 
 const OUTDATED_YEAR_THRESHOLD = 2020;
-const RECENTLY_DISCOVERED_DAYS = 90;
 const GROWING_REVIEW_THRESHOLD = 20;
 const GROWING_RATING_MIN = 4.0;
-const TOURIST_NICHES = new Set(["restaurant", "hospedaje"]);
+// N01: unificado con urgency-profile.ts — 'hospedaje' no existe como niche (0 leads), el real es 'accommodation'.
+const TOURIST_NICHES = new Set(["restaurant", "hospedaje", "accommodation"]);
 const TOURIST_ZONES = [
   "punta del este",
   "rocha",
@@ -36,14 +36,8 @@ export function computeUrgencySignal(lead: Lead): UrgencySignal {
     highSignals.push("tourist_zone_seasonal");
   }
 
-  // Media urgencia: negocio nuevo en el radar
-  if (lead.created_at) {
-    const daysSince =
-      (Date.now() - new Date(lead.created_at).getTime()) / 86_400_000;
-    if (daysSince < RECENTLY_DISCOVERED_DAYS) {
-      mediumSignals.push("recently_discovered");
-    }
-  }
+  // N01: 'recently_discovered' eliminado — era frescura del DATO, no urgencia del
+  // negocio, y degeneraba la señal (97,3% medium). La frescura vive en freshness_signal.
 
   // Media urgencia: negocio joven en crecimiento
   const reviewCount = lead.review_count;

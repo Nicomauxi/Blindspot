@@ -51,17 +51,9 @@ describe("high urgency — zona turística", () => {
   });
 });
 
-describe("medium urgency — negocio nuevo", () => {
-  it("created_at hace 30 días → medium", () => {
+describe("N01: la frescura del dato NO es urgencia del negocio", () => {
+  it("un lead recién descubierto sin otras señales → low (antes 97,3% medium)", () => {
     const d = new Date(Date.now() - 30 * 86_400_000).toISOString();
-    expect(computeUrgencySignal(lead({ created_at: d }))).toBe("medium");
-  });
-  it("created_at hace 89 días → medium", () => {
-    const d = new Date(Date.now() - 89 * 86_400_000).toISOString();
-    expect(computeUrgencySignal(lead({ created_at: d }))).toBe("medium");
-  });
-  it("created_at hace 91 días → low", () => {
-    const d = new Date(Date.now() - 91 * 86_400_000).toISOString();
     expect(computeUrgencySignal(lead({ created_at: d }))).toBe("low");
   });
 });
