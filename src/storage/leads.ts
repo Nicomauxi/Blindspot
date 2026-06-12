@@ -12,6 +12,7 @@ import {
   hasCriticalEnrichmentChange,
 } from "../modules/enrichment/change-detection.js";
 import { isFranchise, normalizeName } from "../modules/discovery/deduplication.js";
+import { computeChainWebsitePropagations } from "../modules/discovery/chain-website-propagation.js";
 import { classifyUruguayPhone } from "../shared/phone.js";
 import { scoreLead } from "../modules/scoring/index.js";
 import { computeAllBuyerScores } from "../modules/scoring/buyer-types.js";
@@ -312,6 +313,29 @@ export async function tagDuplicates(leads: Lead[]): Promise<void> {
   // The full scoring flow can touch thousands of rows; unbounded Promise.all()
   // against PostgREST causes transient fetch failures under load.
   await runLeadTagUpdates(buildDuplicateTagUpdates(groups), "tagDuplicates");
+}
+
+// B2: propaga el dominio de empresa a fichas del mismo negocio sin web (regla segura:
+// solo dominio real dominante, nunca redes sociales). Paso de mantenimiento cross-lead
+// (como tagDuplicates) — antes solo existía como backfill manual; ahora corre en cada
+// scoring --all, así el caso "Tienda Inglesa" (ficha sin web del mismo negocio) no recurre.
+export async function propagateChainWebsites(leads: Lead[]): Promise<number> {
+  const propagations = computeChainWebsitePropagations(
+    leads.map((l) => ({ id: l.id, name: l.name, website: l.website }))
+  );
+  if (propagations.length === 0) return 0;
+
+  const db = getSupabase();
+  let applied = 0;
+  for (const p of propagations) {
+    const { error } = await db.from("leads").update({ website: p.website }).eq("id", p.id);
+    if (error) {
+      getLogger().warn({ leadId: p.id, error: error.message }, "propagateChainWebsites: update falló");
+      continue;
+    }
+    applied++;
+  }
+  return applied;
 }
 
 export async function tagFranchises(

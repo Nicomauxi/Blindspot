@@ -4,6 +4,7 @@ import {
   detectDuplicates,
   listLeads,
   mergeFootprint,
+  propagateChainWebsites,
   updateLeadEnrichment,
   upsertLeads,
 } from "../../src/storage/leads.js";
@@ -324,6 +325,39 @@ describe("buildDuplicateTagUpdates (F5.1)", () => {
     const secondary = updates.find((u) => u.id === "b");
 
     expect(secondary?.rejection_reasons).toEqual(["duplicate-secondary"]);
+  });
+});
+
+describe("propagateChainWebsites", () => {
+  it("persiste el dominio dominante en las fichas del mismo negocio sin web", async () => {
+    const updates: Array<{ id: string; website: string }> = [];
+    supabaseRef.current = {
+      from: () => ({
+        update: (patch: { website: string }) => ({
+          eq: (_col: string, id: string) => {
+            updates.push({ id, website: patch.website });
+            return Promise.resolve({ error: null });
+          },
+        }),
+      }),
+    };
+    const leads = [
+      { id: "1", name: "Tienda Inglesa", website: "https://www.tiendainglesa.com.uy/" },
+      { id: "2", name: "Tienda Inglesa", website: "http://www.tiendainglesa.com.uy/" },
+      { id: "3", name: "Tienda Inglesa", website: null },
+      { id: "9", name: "La Pasiva", website: "https://instagram.com/lapasiva" }, // social → no propaga
+      { id: "10", name: "La Pasiva", website: null },
+    ] as unknown as Lead[];
+
+    const applied = await propagateChainWebsites(leads);
+    expect(applied).toBe(1);
+    expect(updates).toEqual([{ id: "3", website: "https://www.tiendainglesa.com.uy/" }]);
+  });
+
+  it("no hace nada si no hay propagaciones", async () => {
+    supabaseRef.current = { from: () => { throw new Error("no debería llamar a la DB"); } };
+    const applied = await propagateChainWebsites([{ id: "1", name: "Solo", website: null } as unknown as Lead]);
+    expect(applied).toBe(0);
   });
 });
 

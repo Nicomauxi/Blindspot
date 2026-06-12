@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { getLogger } from "../../shared/logger.js";
-import { loadLeadsByRunId, loadAllLeads, loadAllPassedLeads, updateLeadScore, upsertBuyerScores, tagDuplicates, tagFranchises } from "../../storage/leads.js";
+import { loadLeadsByRunId, loadAllLeads, loadAllPassedLeads, updateLeadScore, upsertBuyerScores, tagDuplicates, tagFranchises, propagateChainWebsites } from "../../storage/leads.js";
 import { loadRuntimeLists } from "../../storage/system-lists.js";
 import { createScoringRun, completeScoringRun, failRun, getRunById } from "../../storage/runs.js";
 import { scoreLead } from "../../modules/scoring/index.js";
@@ -198,6 +198,15 @@ export async function scoreCommand(rawArgs: RawScoreArgs): Promise<ScoreCommandR
           const msg = err instanceof Error ? err.message : String(err);
           warnings.push(`franchise_tagging: ${msg}`);
           log.warn({ error: msg }, "Franchise tagging failed after scoring; scores remain persisted");
+        }
+
+        try {
+          const propagated = await propagateChainWebsites(leadsWithScore);
+          if (propagated > 0) log.info({ propagated }, "Chain website propagation applied");
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : String(err);
+          warnings.push(`chain_website_propagation: ${msg}`);
+          log.warn({ error: msg }, "Chain website propagation failed after scoring; scores remain persisted");
         }
       }
     }
