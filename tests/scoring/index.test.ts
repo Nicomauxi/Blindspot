@@ -106,7 +106,9 @@ describe("scoreLead", () => {
   it("email aislado suma score compuesto pero no alcanza tier A", () => {
     const lead = { ...empty_lead, tags: ["web-only-no-social"], canonical_fields: { email: "owner@example.com" } };
     const result = scoreLead(lead);
-    expect(result.score_breakdown.sub_scores.marketing).toBe(28);
+    // N1.3: sub_scores ahora son los AJUSTADOS (los que deciden primary_offer); el crudo va en sub_scores_raw.
+    expect(result.score_breakdown.sub_scores.marketing).toBe(27);
+    expect(result.score_breakdown.sub_scores_raw?.marketing).toBe(28);
     expect(result.score_breakdown.contact_score).toBe(30); // F3.4: email 45→30
     expect(result.score_breakdown.contact_tier).toBe("C"); // 30 → tier C, no B
     expect(result.prospect_score).toBe(27);

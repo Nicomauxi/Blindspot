@@ -8,6 +8,8 @@ import type { PrimaryOffer, ScoreBandThresholds, ScoreCalibrationScenario, Score
 export interface CommercialScoreV3Snapshot {
   prospect_score: number;
   primary_offer: PrimaryOffer;
+  /** N04/N11: sub-scores AJUSTADOS (multiplicadores/caps del escenario) — los que decidieron primary_offer. */
+  sub_scores_adjusted: SubScores;
   contact_ready: boolean;
   contact_tier: ReturnType<typeof computeLeadScoringContext>["contact_profile"]["tier"];
   contact_score: number;
@@ -187,6 +189,7 @@ export function simulateCommercialScoreV3(
     prospect_score: prospectScore,
     primary_offer: primaryOffer,
     contact_ready: CONTACTABLE_TIERS.has(context.contact_profile.tier) && prospectScore >= hotThreshold && !lead.tags.includes("franchise-detected"),
+    sub_scores_adjusted: adjustedSubScores,
     contact_tier: context.contact_profile.tier,
     contact_score: context.contact_profile.score,
     contact_score_signals: context.contact_profile.signals,
@@ -224,7 +227,10 @@ export function buildScoreResultV3(lead: Lead, scenario: ScoreCalibrationScenari
       digital_gap: { total: Math.floor(context.digital_gap.total), rules: context.digital_gap.rules },
       systems_gap: { total: Math.floor(context.systems_gap.total), rules: context.systems_gap.rules },
       prospect: { formula: "commercial_score_v3", total: snapshot.prospect_score },
-      sub_scores: context.sub_scores,
+      // N04/N11: ajustados = fuente de verdad para ranking de ofertas/buyers; los
+      // crudos quedan para debugging.
+      sub_scores: snapshot.sub_scores_adjusted,
+      sub_scores_raw: context.sub_scores,
       primary_offer: snapshot.primary_offer,
       source_quality_bonus: snapshot.source_quality_bonus,
       contact_tier: snapshot.contact_tier,

@@ -273,6 +273,8 @@ export interface ScoreBreakdown {
   systems_gap: { total: number; rules: EvaluatedRule[] };
   prospect: { formula: string; total: number };
   sub_scores: SubScores;
+  /** N04/N11: crudos pre-calibración, solo para debugging (sub_scores son los ajustados). */
+  sub_scores_raw?: SubScores;
   primary_offer: PrimaryOffer;
   source_quality_bonus: number;
   contact_tier: ContactTier;
