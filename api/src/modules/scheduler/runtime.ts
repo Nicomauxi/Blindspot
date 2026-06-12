@@ -1,6 +1,6 @@
 import { PipelineScheduler } from "../../../../src/modules/pipeline/scheduler.js";
 import { PgListener } from "../../../../src/modules/pipeline/pg-listener.js";
-import { recoverOrphanedRuns } from "../../../../src/modules/pipeline/crash-recovery.js";
+import { recoverOrphanedRuns, recoverOrphanedJobs } from "../../../../src/modules/pipeline/crash-recovery.js";
 import { pushToSchedulerBuffer } from "./log-buffer.js";
 
 type SchedulerStatus = "running" | "stopped" | "disabled";
@@ -47,6 +47,15 @@ export async function startEmbeddedScheduler(): Promise<void> {
         ts: new Date().toISOString(),
         level: "warn",
         msg: `Crash recovery: ${recovered} run(s) huérfanos abortados`,
+      });
+    }
+    // D9: runs externos y discovery_jobs huérfanos en 'running'.
+    const recoveredJobs = await recoverOrphanedJobs();
+    if (recoveredJobs > 0) {
+      pushToSchedulerBuffer({
+        ts: new Date().toISOString(),
+        level: "warn",
+        msg: `Crash recovery: ${recoveredJobs} discovery run/job(s) huérfanos marcados failed`,
       });
     }
   } catch (err) {
