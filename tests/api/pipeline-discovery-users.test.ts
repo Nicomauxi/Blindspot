@@ -1088,11 +1088,16 @@ describe("Discovery routes", () => {
   }
 
   async function buildWorkbookUpload(rows: Record<string, unknown>[]) {
-    const { utils, write } = await import("xlsx");
-    const workbook = utils.book_new();
-    const sheet = utils.json_to_sheet(rows);
-    utils.book_append_sheet(workbook, sheet, "places");
-    const buffer = Buffer.from(write(workbook, { type: "buffer", bookType: "xlsx" }));
+    // N70: exceljs (xlsx@0.18 removido por CVEs)
+    const { default: ExcelJS } = await import("exceljs");
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet("places");
+    const headers = Array.from(new Set(rows.flatMap((r) => Object.keys(r))));
+    sheet.addRow(headers);
+    for (const row of rows) {
+      sheet.addRow(headers.map((h) => row[h] ?? null));
+    }
+    const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
     return buildBinaryUpload(buffer, "places.xlsx");
   }
 
