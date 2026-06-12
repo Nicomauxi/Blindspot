@@ -17,7 +17,11 @@
     "test:coverage": "vitest run --coverage",
     "test:integration": "node --env-file=.env --import tsx/esm scripts/integration-test.ts",
     "smoke:api": "node --env-file=.env --import tsx/esm scripts/smoke-api.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "audit:data": "node --env-file=.env --import tsx/esm scripts/audit-data-quality.ts",
+    "audit:reconcile": "node --env-file=.env --import tsx/esm scripts/audit-reconcile-plan.ts",
+    "verify": "pnpm typecheck && pnpm --dir ui exec tsc --noEmit && pnpm test",
+    "verify:full": "pnpm verify && pnpm --dir ui build && pnpm smoke:api"
   },
   "keywords": [
     "cli",

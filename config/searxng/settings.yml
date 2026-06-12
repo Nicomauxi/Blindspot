@@ -1,0 +1,15 @@
+# SearXNG self-hosted para enriquecimiento de métricas IG ($0). Ver R.4 del plan.
+# Materializa la config del PoC (/tmp/searxng-poc). Servicio local-only (localhost:8080).
+# secret_key: placeholder de dev — SearXNG lo usa solo para sesiones HTTP locales.
+#   En un despliegue expuesto, regenerar (openssl rand -hex 32). No expongas este puerto.
+use_default_settings: true
+general:
+  debug: false
+server:
+  secret_key: "poc-secret-blindspot-change-me"
+  limiter: false        # desactiva el rate-limiter interno (consultas automáticas del enrich)
+  image_proxy: false
+search:
+  formats:
+    - html
+    - json              # habilita la API JSON (off por defecto)
