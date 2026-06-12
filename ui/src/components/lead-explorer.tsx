@@ -524,7 +524,7 @@ export function LeadExplorer({ mode, initialFilters, pageSize, geoSelection, onG
   const [error, setError] = useState<string | null>(null);
   const [draftFilters, setDraftFilters] = useState<ExplorerFilterState>(initialState);
   const [appliedFilters, setAppliedFilters] = useState<ExplorerFilterState>(initialState);
-  const [pageCursors, setPageCursors] = useState<Array<string | null>>([isFull ? searchParams.get("cursor") : null]);
+  const [pageCursors, setPageCursors] = useState<Array<string | null>>([null]); // N67: siempre arranca en página 1
   const [pageIndex, setPageIndex] = useState(0);
 
   const [densityLocations, setDensityLocations] = useState<DiscoveryMapDensityLocation[]>([]);
@@ -654,7 +654,9 @@ export function LeadExplorer({ mode, initialFilters, pageSize, geoSelection, onG
         params.set("sort_by", sort.sort_by);
         params.set("sort_direction", sort.sort_direction);
       }
-      if (cursor) params.set("cursor", cursor);
+      // N67: el cursor crudo NO se persiste — al recargar se vuelve a página 1
+      // (restaurarlo dejaba el rango mal y sin navegación hacia atrás).
+      void cursor;
 
       const nextUrl = params.toString() ? pathname + "?" + params.toString() : pathname;
       latestUrlRef.current = nextUrl;
@@ -729,7 +731,7 @@ export function LeadExplorer({ mode, initialFilters, pageSize, geoSelection, onG
       zoneIds: zoneIdsFromFilters(nextFilters),
       selectedLocationKey: selectedLocationKeyFromFilters(nextFilters),
     });
-    setPageCursors([searchParams.get("cursor")]);
+    setPageCursors([null]); // N67
     setPageIndex(0);
   }, [isFull, pathname, searchParams]);
 
@@ -952,7 +954,7 @@ export function LeadExplorer({ mode, initialFilters, pageSize, geoSelection, onG
           <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Niche</div>
           <input
             type="text"
-            placeholder="Ej: restaurante"
+            placeholder="Ej: restaurant (valores en inglés)"
             value={draftFilters.niche}
             onChange={(event) => setDraftFilters((current) => buildFilterState({ ...current, niche: event.target.value }))}
             className="w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500"
@@ -960,13 +962,22 @@ export function LeadExplorer({ mode, initialFilters, pageSize, geoSelection, onG
         </div>
         <div>
           <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Oferta sugerida</div>
-          <input
-            type="text"
-            placeholder="Ej: sitio_web"
+          {/* N64: select con los valores REALES de primary_offer — 'sitio_web' no existe y daba 0 filas */}
+          <select
+            aria-label="Oferta sugerida"
             value={draftFilters.primaryOffer}
             onChange={(event) => setDraftFilters((current) => buildFilterState({ ...current, primaryOffer: event.target.value }))}
             className="w-full rounded-xl border border-slate-300 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500"
-          />
+          >
+            <option value="">Todas</option>
+            <option value="web_nuevo">Web nueva</option>
+            <option value="rediseno">Rediseño</option>
+            <option value="marketing">Marketing</option>
+            <option value="software">Software</option>
+            <option value="catalogo">Catálogo</option>
+            <option value="contacto_directo">Contacto directo</option>
+            <option value="none">Sin oferta</option>
+          </select>
         </div>
         <div>
           <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Tipo de oferta comercial</div>

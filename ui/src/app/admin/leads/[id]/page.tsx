@@ -354,7 +354,15 @@ export default function LeadDetailPage() {
   if (error) return <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</div>;
   if (!lead) return null;
 
-  const recommendedChannelLabel = CHANNEL_LABELS[assistant?.recommended_channel ?? ""] ?? CHANNEL_LABELS[offerChannel] ?? "Canal no definido";
+  // N68: sin brief del asistente (cm pre-tracking → 403), el canal se deriva del
+  // primer contacto VIVO del lead — el fallback al selector de mensajes decía
+  // 'WhatsApp' para miles de leads sin WhatsApp.
+  const hasValue = (value: string | null | undefined) => Boolean(value && value !== "***");
+  const derivedChannel = hasValue(lead.whatsapp) ? "whatsapp" : hasValue(lead.phone) ? "phone" : hasValue(lead.email) ? "email" : null;
+  const recommendedChannelLabel =
+    CHANNEL_LABELS[assistant?.recommended_channel ?? ""] ??
+    (derivedChannel ? CHANNEL_LABELS[derivedChannel] : undefined) ??
+    "Canal no definido";
 
   return (
     <AdminPageLayout
@@ -508,6 +516,7 @@ export default function LeadDetailPage() {
       <SectionCard title="Contactos y Redes" description="Elegí un contacto o red para ver su desglose, actividad y acciones.">
         <ContactBlock
           points={contactPoints}
+          leadId={lead.id}
           onFeedback={handleContactFeedback}
           onToggleFavorite={handleToggleFavorite}
           onSearchLeads={handleSearchLeads}

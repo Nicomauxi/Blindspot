@@ -109,12 +109,13 @@ function kindIcon(kind: ContactPointKind): string {
 
 interface ContactDetailProps {
   point: ContactPoint;
+  leadId?: string;
   onFeedback?: FeedbackHandler;
   onToggleFavorite?: FavoriteHandler;
   onSearchLeads?: LeadSearchHandler;
 }
 
-function ContactDetail({ point, onFeedback, onToggleFavorite, onSearchLeads }: ContactDetailProps) {
+function ContactDetail({ point, leadId, onFeedback, onToggleFavorite, onSearchLeads }: ContactDetailProps) {
   const tier = classifyReliability(point.reliability);
   const [state, setState] = useState<"idle" | "bad" | "saving" | "done">("idle");
   const [reason, setReason] = useState<RejectionReason>("no_pertenece_al_lead");
@@ -134,10 +135,11 @@ function ContactDetail({ point, onFeedback, onToggleFavorite, onSearchLeads }: C
     if (!reassign || !onSearchLeads || leadQuery.trim().length < 2) { setLeadResults([]); return; }
     let active = true;
     const t = setTimeout(() => {
-      onSearchLeads(leadQuery.trim()).then((r) => { if (active) setLeadResults(r.filter((l) => l.id !== point.id)); }).catch(() => {});
+      // N69: filtrar por el UUID real del lead — point.id es "email-foo@bar" y el filtro era un no-op.
+      onSearchLeads(leadQuery.trim()).then((r) => { if (active) setLeadResults(r.filter((l) => l.id !== (leadId ?? point.id))); }).catch(() => {});
     }, 300);
     return () => { active = false; clearTimeout(t); };
-  }, [reassign, leadQuery, onSearchLeads, point.id]);
+  }, [reassign, leadQuery, onSearchLeads, point.id, leadId]);
 
   async function submit(verdict: FeedbackVerdict, payload?: Partial<FeedbackPayload>) {
     if (!onFeedback) return;
@@ -299,12 +301,14 @@ function ContactDetail({ point, onFeedback, onToggleFavorite, onSearchLeads }: C
 
 interface ContactBlockProps {
   points: ContactPoint[];
+  /** N69: id REAL del lead actual — point.id es el id del contact point, nunca un UUID. */
+  leadId?: string;
   onFeedback?: FeedbackHandler;
   onToggleFavorite?: FavoriteHandler;
   onSearchLeads?: LeadSearchHandler;
 }
 
-export function ContactBlock({ points, onFeedback, onToggleFavorite, onSearchLeads }: ContactBlockProps) {
+export function ContactBlock({ points, leadId, onFeedback, onToggleFavorite, onSearchLeads }: ContactBlockProps) {
   const ordered = useMemo(() => sortPoints(points), [points]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -370,7 +374,7 @@ export function ContactBlock({ points, onFeedback, onToggleFavorite, onSearchLea
       {/* Detail */}
       <div className="mt-4 lg:mt-0">
         {selected ? (
-          <ContactDetail point={selected} onFeedback={onFeedback} onToggleFavorite={onToggleFavorite} onSearchLeads={onSearchLeads} />
+          <ContactDetail point={selected} leadId={leadId} onFeedback={onFeedback} onToggleFavorite={onToggleFavorite} onSearchLeads={onSearchLeads} />
         ) : null}
       </div>
     </div>
