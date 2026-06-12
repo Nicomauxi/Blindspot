@@ -90,12 +90,12 @@ const SOURCE_OPTIONS = [
 ] as const;
 
 const TIER_OPTIONS = [
-  { value: "", label: "Todos los tiers" },
-  { value: "A", label: "Tier A" },
-  { value: "B", label: "Tier B" },
-  { value: "C", label: "Tier C" },
-  { value: "D", label: "Tier D" },
-  { value: "X", label: "Tier X" },
+  { value: "", label: "Toda calidad de contacto" },
+  { value: "A", label: "Contacto A" },
+  { value: "B", label: "Contacto B" },
+  { value: "C", label: "Contacto C" },
+  { value: "D", label: "Contacto D" },
+  { value: "X", label: "Contacto X" },
 ] as const;
 
 const COMMERCIAL_OFFER_TYPE_OPTIONS: Array<{ value: CommercialOfferType | ""; label: string }> = [
@@ -121,15 +121,17 @@ const HOT_LEAD_THRESHOLD = 55;
 
 const PRESETS = [
   { id: "hot", label: "Hot leads", description: `Score ${HOT_LEAD_THRESHOLD}+`, apply: () => ({ minScore: String(HOT_LEAD_THRESHOLD) }) },
-  { id: "tier_a", label: "Tier A", description: "Mejor base de contacto", apply: () => ({ tier: "A" }) },
+  { id: "tier_a", label: "Contacto A", description: "Calidad de contacto (≠ valor)", apply: () => ({ tier: "A" }) },
   { id: "google", label: "Google Places", description: "Barrido por fuente", apply: () => ({ source: "google_places" }) },
   { id: "offer", label: "Oferta sugerida", description: "Ordenar por score", apply: () => ({ sortValue: "prospect_score:desc" }) },
   { id: "software", label: "Software", description: "Priorizar oportunidad operativa", apply: () => ({ commercialOfferType: "software", sortValue: "software_score:desc" }) },
   { id: "marketing", label: "Marketing", description: "Priorizar señal de visibilidad", apply: () => ({ commercialOfferType: "marketing", sortValue: "marketing_score:desc" }) },
 ] as const;
 
+// F3.2: contact_tier es CALIDAD DE CONTACTO, no valor comercial. Se quita el verde de A
+// (insinuaba "lead bueno") por un índigo neutro; el valor vive en prospect_score/brecha.
 const TIER_COLORS: Record<string, string> = {
-  A: "bg-emerald-100 text-emerald-800 border-emerald-200",
+  A: "bg-indigo-100 text-indigo-800 border-indigo-200",
   B: "bg-sky-100 text-sky-800 border-sky-200",
   C: "bg-amber-100 text-amber-800 border-amber-200",
   D: "bg-slate-100 text-slate-700 border-slate-200",
@@ -329,7 +331,7 @@ function buildSelectedFilters(
     filters.q.trim() ? { key: "q", label: "Buscar", value: filters.q.trim(), clear: setters.setQ } : null,
     filters.niche.trim() ? { key: "niche", label: "Niche", value: filters.niche.trim(), clear: setters.setNiche } : null,
     filters.source ? { key: "source", label: "Fuente", value: SOURCE_OPTIONS.find((option) => option.value === filters.source)?.label ?? filters.source, clear: setters.setSource } : null,
-    filters.tier ? { key: "tier", label: "Tier", value: TIER_OPTIONS.find((option) => option.value === filters.tier)?.label ?? filters.tier, clear: setters.setTier } : null,
+    filters.tier ? { key: "tier", label: "Calidad de contacto", value: TIER_OPTIONS.find((option) => option.value === filters.tier)?.label ?? filters.tier, clear: setters.setTier } : null,
     filters.minScore.trim() ? { key: "score", label: "Score mín.", value: filters.minScore.trim(), clear: setters.setMinScore } : null,
     filters.primaryOffer.trim() ? { key: "offer", label: "Oferta", value: filters.primaryOffer.trim(), clear: setters.setPrimaryOffer } : null,
     filters.commercialOfferType ? { key: "commercial-offer-type", label: "Tipo comercial", value: getCommercialOfferTypeLabel(filters.commercialOfferType), clear: setters.setCommercialOfferType } : null,
@@ -342,7 +344,10 @@ function TierBadge({ tier }: { tier: string | null }) {
   if (!tier) return <span className="text-xs text-slate-300">—</span>;
 
   return (
-    <span className={cn("inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-semibold", TIER_COLORS[tier] ?? "border-slate-200 bg-slate-100 text-slate-700")}>
+    <span
+      title="Calidad de contacto (≠ valor comercial). El valor está en el score y la brecha."
+      className={cn("inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-semibold", TIER_COLORS[tier] ?? "border-slate-200 bg-slate-100 text-slate-700")}
+    >
       {tier}
     </span>
   );
