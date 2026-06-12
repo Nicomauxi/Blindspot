@@ -20,7 +20,7 @@ import type { RuntimeMappings } from "../../storage/system-lists.js";
 import {
   TEXT_SEARCH_COST_PER_REQUEST,
   DETAILS_COST_PER_REQUEST,
-  projectMaxGooglePlacesCost,
+  gpBudgetGate,
 } from "../../shared/google-places-costs.js";
 
 const DiscoverArgsSchema = z.object({
@@ -139,15 +139,13 @@ export async function discoverCommand(rawArgs: {
   // el remaining, no se arranca.
   try {
     const budget = await getGooglePlacesBudgetStatus();
-    if (budget) {
-      const projected = projectMaxGooglePlacesCost(opts.maxResults);
-      if (budget.budget_remaining <= 0 || projected > budget.budget_remaining) {
-        log.error(
-          { projected_usd: projected, remaining_usd: budget.budget_remaining },
-          "Google Places budget gate: presupuesto insuficiente — no se ejecuta discovery"
-        );
-        process.exit(1);
-      }
+    const gate = gpBudgetGate(budget, opts.maxResults);
+    if (!gate.allowed) {
+      log.error(
+        { projected_usd: gate.projected_usd, remaining_usd: budget?.budget_remaining ?? null },
+        "Google Places budget gate: presupuesto insuficiente — no se ejecuta discovery"
+      );
+      process.exit(1);
     }
   } catch (err) {
     log.error({ err }, "No se pudo leer el presupuesto GP — no se ejecuta discovery (fail-closed)");

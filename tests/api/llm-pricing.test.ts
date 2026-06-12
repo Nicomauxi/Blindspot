@@ -32,3 +32,18 @@ describe("resolveModelPricing (F6.1)", () => {
     expect(p.costPer1kOut).toBe(0.004);
   });
 });
+
+describe("gpBudgetGate (N9.2/N74)", () => {
+  it("bloquea cuando el costo proyectado supera el remaining", async () => {
+    const { gpBudgetGate } = await import("../../src/shared/google-places-costs.js");
+    // 100 resultados → 5 text search (0.175) + 100 details (2.5) = 2.675
+    expect(gpBudgetGate({ budget_remaining: 1 }, 100).allowed).toBe(false);
+    expect(gpBudgetGate({ budget_remaining: 0 }, 1).allowed).toBe(false);
+  });
+
+  it("permite con remaining suficiente o sin config", async () => {
+    const { gpBudgetGate } = await import("../../src/shared/google-places-costs.js");
+    expect(gpBudgetGate({ budget_remaining: 10 }, 100)).toEqual({ allowed: true, projected_usd: 2.675 });
+    expect(gpBudgetGate(null, 100).allowed).toBe(true);
+  });
+});
