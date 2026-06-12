@@ -88,9 +88,21 @@ export async function insertExternalLead(
 
   if (candidate.email) {
     const existing = (lead.canonical_fields ?? {}) as Record<string, unknown>;
+    // N33: shape contractual {value, confidence, sources, conflict} — el string plano
+    // dejaba el email invisible para lead_dashboard/KPIs (->>'value' devuelve NULL).
     const { error: emailError } = await db
       .from("leads")
-      .update({ canonical_fields: { ...existing, email: candidate.email } })
+      .update({
+        canonical_fields: {
+          ...existing,
+          email: {
+            value: candidate.email,
+            confidence: candidate.source_confidence,
+            sources: [candidate.source],
+            conflict: false,
+          },
+        },
+      })
       .eq("id", lead.id);
     if (emailError) {
       throw new Error(`insertExternalLead email persist failed: ${emailError.message}`);

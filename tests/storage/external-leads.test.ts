@@ -155,7 +155,13 @@ describe("insertExternalLead", () => {
     await insertExternalLead(candidate({ email: "hotel@ejemplo.com" }));
 
     expect(updateFn).toHaveBeenCalledOnce();
-    expect((updatePayload?.canonical_fields as { email: string })?.email).toBe("hotel@ejemplo.com");
+    // N33: shape canónico {value,...}, no string plano (invisible para la capa SQL).
+    expect((updatePayload?.canonical_fields as Record<string, unknown>)?.["email"]).toEqual({
+      value: "hotel@ejemplo.com",
+      confidence: 0.8,
+      sources: ["mintur"],
+      conflict: false,
+    });
     expect(updateEqFn).toHaveBeenCalledWith("id", "lead-1");
   });
 
