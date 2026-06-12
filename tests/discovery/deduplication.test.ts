@@ -448,4 +448,19 @@ describe("isFranchise", () => {
   it("returns false for empty franchise set", () => {
     expect(isFranchise("Abitab", new Set())).toBe(false);
   });
+
+  it("F2.7: nombre corto exige match casi exacto (COT no matchea CPS/CNS)", () => {
+    const shortFranchises = new Set(["COT", "OCA"]);
+    expect(isFranchise("CPS", shortFranchises)).toBe(false);
+    expect(isFranchise("CNS", shortFranchises)).toBe(false);
+    expect(isFranchise("COT", shortFranchises)).toBe(true); // exacto sí
+  });
+
+  it("F2.7: 'ABITO' no matchea 'Abitab' (distancia 2 con franquicia corta)", () => {
+    expect(isFranchise("ABITO", franchises)).toBe(false);
+  });
+
+  it("F2.7: 'Farmashop 1' matchea 'Farmashop' (sucursal numerada)", () => {
+    expect(isFranchise("Farmashop 1", new Set(["Farmashop"]))).toBe(true);
+  });
 });

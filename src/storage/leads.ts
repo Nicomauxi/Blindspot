@@ -286,24 +286,16 @@ export async function tagFranchises(
 ): Promise<void> {
   if (leads.length === 0) return;
 
-  const addressesByName = new Map<string, Set<string>>();
-  for (const lead of leads) {
-    const norm = normalizeName(lead.name);
-    const addrs = addressesByName.get(norm) ?? new Set<string>();
-    addrs.add((lead.address ?? "").trim().toLowerCase());
-    addressesByName.set(norm, addrs);
-  }
-
+  // F2.7: SOLO la lista curada franchise_names marca franquicia. La vieja heurística
+  // "mismo nombre en ≥3 direcciones" producía falsos positivos (mutualistas, agencias,
+  // nombres comunes de PYME) que les ponían penalización de scoring y bloqueaban su
+  // fusión. La detección de sucursales para el merge-guard vive aparte (franchiseSafeToMerge,
+  // por puerta/GPS), no acá.
   const failures: Array<{ leadId: string; message: string }> = [];
 
   for (const lead of leads) {
     if (lead.tags.includes(FRANCHISE_TAG)) continue;
-
-    const byList      = isFranchise(lead.name, franchiseNames);
-    const norm        = normalizeName(lead.name);
-    const byHeuristic = (addressesByName.get(norm)?.size ?? 0) >= 3;
-
-    if (!byList && !byHeuristic) continue;
+    if (!isFranchise(lead.name, franchiseNames)) continue;
 
     const tags = [...lead.tags, FRANCHISE_TAG];
     const result = await updateLeadTagsWithRetry(lead.id, tags, "tagFranchises");

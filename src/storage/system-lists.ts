@@ -689,7 +689,8 @@ export async function detectAndSeedHeuristicDomains(minLeadCount = 2): Promise<n
 }
 
 /*
-  Seed inicial para franchise_names — ejecutar una vez en la DB:
+  Seed de franchise_names: ahora vive en supabase/migrations/20260611000000_seed_franchise_names.sql (F2.7).
+  (Referencia histórica del contenido:)
 
   INSERT INTO system_lists (list_name, value, scope, source, confidence, reason, enabled) VALUES
     ('franchise_names', 'Abitab', NULL, 'seed', 1.0, 'cadena financiera UY', true),

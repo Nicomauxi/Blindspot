@@ -176,7 +176,12 @@ export function isFranchise(
   if (franchiseNames.size === 0) return false;
   const normalized = normalizeName(name);
   for (const franchise of franchiseNames) {
-    if (levenshtein(normalized, normalizeName(franchise)) <= 2) return true;
+    const normFranchise = normalizeName(franchise);
+    // Umbral de typo escalado por la longitud de la franquicia: los nombres cortos
+    // (COT, OCA) exigen match casi exacto (floor(len/4)=0..1) para no colisionar con
+    // PYMEs de 3 letras; los largos toleran hasta 2 ("Farmashop 1" ≈ "Farmashop"). F2.7.
+    const maxDist = Math.min(2, Math.floor(normFranchise.length / 4));
+    if (levenshtein(normalized, normFranchise) <= maxDist) return true;
   }
   return false;
 }
