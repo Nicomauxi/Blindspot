@@ -62,6 +62,25 @@ describe("normalizeCandidate", () => {
   });
 });
 
+describe("N8.3/N81: el nombre no pisa la categoría estructurada del provider", () => {
+  it("niche_hint estructurado gana aunque el name tenga una keyword de otro niche", () => {
+    // 'Hotel Restaurante X' con TipoOperador hotel NO debe reclasificarse por 'restaurante'.
+    const c = normalizeCandidate(
+      cand({ niche: "hotel", niche_hint: "Alojamiento — hoteles", name: "Hotel Restaurante La Posta" }),
+      ALIASES
+    );
+    expect(c.niche).toBe("hotel");
+  });
+
+  it("el name solo clasifica cuando ni el hint ni el provider dieron algo específico", () => {
+    const c = normalizeCandidate(
+      cand({ niche: "other", niche_hint: undefined, name: "Restaurante La Proa" }),
+      ALIASES
+    );
+    expect(c.niche).toBe("restaurant");
+  });
+});
+
 describe("F5.4: name placeholder y emails en website", () => {
   it("isPlaceholderName detecta N/A y variantes", async () => {
     const { isPlaceholderName } = await import("../../src/modules/discovery/candidate-normalizer.js");

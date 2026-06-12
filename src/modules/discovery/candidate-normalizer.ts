@@ -16,16 +16,22 @@ export function normalizeCandidate(
   candidate: DiscoveryCandidate,
   nicheAliases: AllRuntime["mappings"]["nicheAliases"]
 ): DiscoveryCandidate {
-  const hintText = [candidate.niche_hint, candidate.name].filter((t) => t && t.trim()).join(" ").trim();
-  const classified = hintText ? normalizeNiche(hintText, nicheAliases) : "other";
-
+  // N81: señales separadas — el hint estructurado (CIIU/TipoOperador/tag) es
+  // autoritativo; el NOMBRE solo clasifica como último recurso ('Hotel Restaurante X'
+  // con TipoOperador=hotel se reclasificaba a restaurant por la keyword del nombre).
+  const hint = candidate.niche_hint?.trim() ?? "";
   const providerNiche = candidate.niche;
-  const nicheFinal =
-    classified !== "other"
-      ? classified
-      : providerNiche && providerNiche !== "other"
-        ? providerNiche
-        : "other";
+  const fromHint = hint ? normalizeNiche(hint, nicheAliases) : "other";
+
+  let nicheFinal: string;
+  if (fromHint !== "other") {
+    nicheFinal = fromHint;
+  } else if (providerNiche && providerNiche !== "other") {
+    nicheFinal = providerNiche;
+  } else {
+    const fromName = candidate.name.trim() ? normalizeNiche(candidate.name, nicheAliases) : "other";
+    nicheFinal = fromName !== "other" ? fromName : "other";
+  }
 
   // F5.4: algunos providers ponen un email (o handle) en el campo website. Un email no es
   // una web: se mueve a `email` (si estaba vacío) y website queda null.
