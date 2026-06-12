@@ -210,6 +210,11 @@ vi.mock("../../api/src/db/client.js", () => ({
                 error: null,
                 count: _mockLeads.length,
               }),
+              // N55: las rutas paginan con range()
+              range: (from: number, to: number) => Promise.resolve({
+                data: _mockLeads.slice(from, to + 1).map((lead) => ({ ...lead, contact_tier: (lead.contact_tier ?? null) })),
+                error: null,
+              }),
             }),
           }),
         };
@@ -222,6 +227,10 @@ vi.mock("../../api/src/db/client.js", () => ({
                 data: _mockDiscoveryJobs,
                 error: null,
                 count: _mockDiscoveryJobs.length,
+              }),
+              range: (from: number, to: number) => Promise.resolve({
+                data: _mockDiscoveryJobs.slice(from, to + 1),
+                error: null,
               }),
             }),
             eq: () => ({

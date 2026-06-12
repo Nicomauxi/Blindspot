@@ -1,3 +1,4 @@
+import { fetchAllRows } from "../services/fetch-all-rows.js";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { getDb } from "../db/client.js";
@@ -389,11 +390,20 @@ async function fetchGpsByLeadIds(db: ReturnType<typeof getDb>, leadIds: string[]
 
 async function loadLeadDensityRows(request: { log: FastifyInstance["log"] }) {
   const db = getDb();
-  const baseQuery = await db
-    .from("lead_dashboard")
-    .select("id, source, niche, address, prospect_score, contact_tier, primary_offer, corroborating_sources, created_at")
-    .order("created_at", { ascending: false })
-    .limit(5000);
+  // N55: paginado con range() — ver loadZoneLeadRows.
+  let baseQuery: { data: unknown[] | null; error: { message: string } | null };
+  try {
+    const rows = await fetchAllRows<Record<string, unknown>>((from, to) =>
+      db
+        .from("lead_dashboard")
+        .select("id, source, niche, address, prospect_score, contact_tier, primary_offer, corroborating_sources, created_at")
+        .order("created_at", { ascending: false })
+        .range(from, to)
+    );
+    baseQuery = { data: rows, error: null };
+  } catch (err) {
+    baseQuery = { data: null, error: { message: err instanceof Error ? err.message : String(err) } };
+  }
 
   if (baseQuery.error) {
     request.log.warn({ error: baseQuery.error }, "lead density fallback to legacy leads table");
@@ -456,11 +466,20 @@ type AdminGeoZoneOption = {
 
 async function loadZoneLeadRows(request: { log: FastifyInstance["log"] }) {
   const db = getDb();
-  const baseQuery = await db
-    .from("lead_dashboard")
-    .select("id, name, niche, contact_tier, prospect_score, address, source, corroborating_sources, created_at, website, phone, whatsapp, rating, review_count, primary_offer, pitch_hook, contact_ready, tags, score_breakdown, digital_footprint")
-    .order("created_at", { ascending: false })
-    .limit(5000);
+  // N55: paginado con range() — limit(5000) devolvía 1000 filas (max_rows de PostgREST).
+  let baseQuery: { data: unknown[] | null; error: { message: string } | null };
+  try {
+    const rows = await fetchAllRows<Record<string, unknown>>((from, to) =>
+      db
+        .from("lead_dashboard")
+        .select("id, name, niche, contact_tier, prospect_score, address, source, corroborating_sources, created_at, website, phone, whatsapp, rating, review_count, primary_offer, pitch_hook, contact_ready, tags, score_breakdown, digital_footprint")
+        .order("created_at", { ascending: false })
+        .range(from, to)
+    );
+    baseQuery = { data: rows, error: null };
+  } catch (err) {
+    baseQuery = { data: null, error: { message: err instanceof Error ? err.message : String(err) } };
+  }
 
   if (baseQuery.error) {
     request.log.warn({ error: baseQuery.error }, "zone-leads fallback to legacy leads table");
@@ -1197,25 +1216,34 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
     }
 
     const db = getDb();
+    // N55: paginado con range() — los limit(2000/5000) volvían capados a 1000.
     const [catalogResult, jobsRes, leadsRes] = await Promise.allSettled([
       listDiscoveryPlaces({ limit: 2000 }),
-      db
-        .from("discovery_jobs")
-        .select("source, niche, location, created_at, completed_at, status, leads_found, leads_new, estimated_cost_usd, actual_cost_usd")
-        .order("created_at", { ascending: false })
-        .limit(2000),
-      db
-        .from("lead_dashboard")
-        .select("id, niche, address, prospect_score, created_at")
-        .order("created_at", { ascending: false })
-        .limit(5000),
+      fetchAllRows<Record<string, unknown>>((from, to) =>
+        db
+          .from("discovery_jobs")
+          .select("source, niche, location, created_at, completed_at, status, leads_found, leads_new, estimated_cost_usd, actual_cost_usd")
+          .order("created_at", { ascending: false })
+          .range(from, to)
+      ),
+      fetchAllRows<Record<string, unknown>>((from, to) =>
+        db
+          .from("lead_dashboard")
+          .select("id, niche, address, prospect_score, created_at")
+          .order("created_at", { ascending: false })
+          .range(from, to)
+      ),
     ]);
 
-    const jobsSettled = jobsRes.status === "fulfilled" ? jobsRes.value : null;
-    const leadsSettled = leadsRes.status === "fulfilled" ? leadsRes.value : null;
+    // fetchAllRows ya valida errores (rechaza la promesa) — fulfilled = filas completas.
+    const jobsRows = jobsRes.status === "fulfilled" ? jobsRes.value : null;
+    const leadsRows = leadsRes.status === "fulfilled" ? leadsRes.value : null;
 
-    if (!jobsSettled || !leadsSettled || jobsSettled.error || leadsSettled.error) {
-      request.log.error({ jobs: jobsSettled?.error, leads: leadsSettled?.error }, "location suggestions history load error");
+    if (!jobsRows || !leadsRows) {
+      request.log.error(
+        { jobs: jobsRes.status === "rejected" ? String(jobsRes.reason) : null, leads: leadsRes.status === "rejected" ? String(leadsRes.reason) : null },
+        "location suggestions history load error"
+      );
       return reply.status(500).send({ error: "Database error", error_code: "db_error" });
     }
 
@@ -1243,8 +1271,8 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
 
     const data = buildLocationOpportunitySuggestions({
       catalog,
-      discoveryJobs: (jobsSettled.data ?? []) as OpportunityDiscoveryJob[],
-      leads: (leadsSettled.data ?? []) as OpportunityLead[],
+      discoveryJobs: jobsRows as unknown as OpportunityDiscoveryJob[],
+      leads: leadsRows as unknown as OpportunityLead[],
       filters: {
         departamento: parsedQuery.data.departamento ?? null,
         ciudad: parsedQuery.data.ciudad ?? null,
