@@ -172,8 +172,9 @@ async function processLead(
     // P1/P3: parsear la descripción social (tel/email/web) y fusionarla a canonical_fields
     // como fuente ponderada por actividad. Best-effort: si algo falla no rompe el enrich.
     let socialCanonical: Record<string, unknown> | null | undefined;
+    const canonicalInputsForMerge: SocialCanonicalInput[] = [];
     try {
-      const canonicalInputs: SocialCanonicalInput[] = [];
+      const canonicalInputs: SocialCanonicalInput[] = canonicalInputsForMerge;
       if (instagram) {
         const parsed = await parseSocialDescription(instagram.bio, "instagram");
         canonicalInputs.push({ profile: instagramProfile(instagram.url, instagram.bio), parsed, recencyDays: null });
@@ -189,7 +190,13 @@ async function processLead(
       getLogger().warn({ leadId: lead.id, err: String(parseErr) }, "social description parse failed");
     }
 
-    await updateLeadSocialSearch(lead.id, socialSearch, derived.tags, derived.whatsapp, socialActivity, socialCanonical);
+    // N90: el merge final corre sobre el canonical fresco re-leído en el storage.
+    const socialCanonicalFn =
+      socialCanonical !== undefined && socialCanonical !== null && canonicalInputsForMerge.length > 0
+        ? (fresh: Lead["canonical_fields"]) =>
+            mergeSocialIntoCanonical({ ...lead, canonical_fields: fresh }, canonicalInputsForMerge)
+        : undefined;
+    await updateLeadSocialSearch(lead.id, socialSearch, derived.tags, derived.whatsapp, socialActivity, socialCanonical, socialCanonicalFn);
 
     // Histórico append-only (best-effort): solo inserta si cambió el estado/audiencia/conteos.
     if (activityProfiles.length > 0) {

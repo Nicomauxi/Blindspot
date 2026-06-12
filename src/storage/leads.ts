@@ -904,7 +904,10 @@ export async function updateLeadSocialSearch(
   socialActivity?: import("../modules/social-enrich/social-activity.js").SocialActivitySnapshot,
   // canonical_fields ya fusionados con la fuente social (P1/P3). Si se provee, se persisten
   // y se usan para tags/reliability; si no, se conservan los actuales.
-  socialCanonical?: Record<string, unknown> | null
+  socialCanonical?: Record<string, unknown> | null,
+  // N90: merge sobre el canonical FRESCO re-leído acá adentro — el snapshot del
+  // pipeline podía revertir campos canónicos escritos por reconcile/refresh en el medio.
+  socialCanonicalFn?: (freshCanonical: Lead["canonical_fields"]) => Record<string, unknown> | null
 ): Promise<void> {
   const db = getSupabase();
   const { data: current, error: fetchErr } = await db
@@ -941,10 +944,14 @@ export async function updateLeadSocialSearch(
     mergedTags.push("whatsapp-derived");
   }
   const currentPhone = (current?.phone as string | null) ?? null;
+  const freshCanonical = (current?.canonical_fields as Lead["canonical_fields"]) ?? null;
+  const mergedSocialCanonical = socialCanonicalFn
+    ? socialCanonicalFn(freshCanonical)
+    : socialCanonical;
   const canonicalFields =
-    socialCanonical !== undefined && socialCanonical !== null
-      ? (socialCanonical as Lead["canonical_fields"])
-      : (current?.canonical_fields as Lead["canonical_fields"]) ?? null;
+    mergedSocialCanonical !== undefined && mergedSocialCanonical !== null
+      ? (mergedSocialCanonical as Lead["canonical_fields"])
+      : freshCanonical;
   const finalTags = dedupeTags(
     mergeClassificationTags(mergedTags, currentPhone, canonicalFields, footprint)
   );
