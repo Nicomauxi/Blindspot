@@ -1,3 +1,4 @@
+import { passesLeadFilter } from "../services/lead-filter.js";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { getDb } from "../db/client.js";
@@ -119,7 +120,7 @@ export async function trackingRoutes(app: FastifyInstance): Promise<void> {
     // Verify lead is accessible
     const { data: lead, error: leadErr } = await db
       .from("lead_dashboard")
-      .select("id, contact_tier, name")
+      .select("*")
       .eq("id", parsed.data.lead_id)
       .single();
 
@@ -127,11 +128,10 @@ export async function trackingRoutes(app: FastifyInstance): Promise<void> {
       return reply.status(404).send({ error: "Lead not found", error_code: "not_found" });
     }
 
-    // CM: only for leads that pass their filter
+    // N24: el lead_filter COMPLETO (mismo gate que GET /leads), no solo contact_tier —
+    // trackear es lo que desbloquea contactos, así que el bypass acá rompía el RBAC.
     if (authUser.role === "cm" && authUser.lead_filter) {
-      const tier = (lead as Record<string, unknown>)["contact_tier"];
-      const allowedTiers = authUser.lead_filter["contact_tier"] as string[] | undefined;
-      if (allowedTiers && tier && !allowedTiers.includes(String(tier))) {
+      if (!passesLeadFilter(lead as Record<string, unknown>, authUser.lead_filter)) {
         return reply.status(404).send({ error: "Lead not found", error_code: "not_found" });
       }
     }

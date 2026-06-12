@@ -1,3 +1,4 @@
+import { passesLeadFilter } from "../services/lead-filter.js";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { getDb } from "../db/client.js";
@@ -98,70 +99,6 @@ function asNullableString(value: unknown): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
-function passesLeadFilter(
-  lead: Record<string, unknown>,
-  filter: Record<string, unknown>
-): boolean {
-  const tierFilter = filter["contact_tier"];
-  if (Array.isArray(tierFilter) && tierFilter.length > 0) {
-    const leadTier = lead["contact_tier"] as string | undefined;
-    if (!leadTier || !tierFilter.includes(leadTier)) return false;
-  }
-
-  const primaryOffer = filter["primary_offer"];
-  if (typeof primaryOffer === "string" && primaryOffer) {
-    if (lead["primary_offer"] !== primaryOffer) return false;
-  } else if (Array.isArray(primaryOffer) && primaryOffer.length > 0) {
-    const leadOffer = lead["primary_offer"] as string | undefined;
-    if (!leadOffer || !primaryOffer.includes(leadOffer)) return false;
-  }
-
-  const nicheFilter = filter["niche"];
-  if (Array.isArray(nicheFilter) && nicheFilter.length > 0) {
-    const leadNiche = lead["niche"] as string | undefined;
-    if (!leadNiche || !nicheFilter.includes(leadNiche)) return false;
-  }
-
-  const sourceFilter = filter["source"];
-  if (Array.isArray(sourceFilter) && sourceFilter.length > 0) {
-    const leadSource = lead["source"] as string | undefined;
-    if (!leadSource || !sourceFilter.includes(leadSource)) return false;
-  }
-
-  if (
-    filter["exclude_franchises"] === true &&
-    Array.isArray(lead["tags"]) &&
-    (lead["tags"] as unknown[]).includes("franchise-detected")
-  ) {
-    return false;
-  }
-
-  if (filter["exclude_contacted"] === true && lead["contacted_at"] != null) {
-    return false;
-  }
-
-  const requireState = filter["require_inferred_state"];
-  if (isRecord(requireState)) {
-    const inferredState = isRecord(lead["inferred_state"]) ? lead["inferred_state"] : null;
-    for (const key of ["has_delivery", "has_pos", "has_reservations"] as const) {
-      if (requireState[key] === true) {
-        const fieldValue = inferredState && isRecord(inferredState[key])
-          ? inferredState[key]["value"]
-          : null;
-        if (fieldValue !== true) return false;
-      }
-    }
-  }
-
-  const detectedSubNiche = filter["detected_sub_niche"];
-  if (Array.isArray(detectedSubNiche) && detectedSubNiche.length > 0) {
-    const companyData = isRecord(lead["lead_company_data"]) ? lead["lead_company_data"] : null;
-    const leadSubNiche = companyData ? asNullableString(companyData["detected_sub_niche"]) : null;
-    if (!leadSubNiche || !detectedSubNiche.includes(leadSubNiche)) return false;
-  }
-
-  return true;
-}
 
 async function getAdminServicePrice(
   db: ReturnType<typeof getDb>,

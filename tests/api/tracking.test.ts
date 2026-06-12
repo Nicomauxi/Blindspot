@@ -290,6 +290,31 @@ beforeEach(() => {
 });
 
 describe("POST /api/v1/tracking", () => {
+  it("N2.4: aplica el lead_filter COMPLETO del cm (no solo contact_tier)", async () => {
+    // mockLeadRow no tiene niche → un cm restringido por niche no puede trackearlo,
+    // aunque el contact_tier ("A") sí pase.
+    _mockUser = {
+      id: CM_ID,
+      email: "cm@blindspot.local",
+      role: "cm",
+      lead_filter: { contact_tier: ["A"], niche: ["bars"] },
+      active: true,
+    };
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: CM_ID, email: "cm@blindspot.local" });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/tracking",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ lead_id: LEAD_ID }),
+    });
+
+    expect(res.statusCode).toBe(404);
+    await app.close();
+  });
+
   it("creates a tracking entry for an accessible lead", async () => {
     const { buildServer } = await import("../../api/src/server.js");
     const app = await buildServer();
