@@ -169,6 +169,7 @@ describe("reconcileLeadIntoPrimary", () => {
       if (table === "leads") return leadsTable;
       if (table === "lead_source_references") return refsTable;
       if (table === "lead_field_evidences") return evidenceTable;
+      if (table === "lead_tracking") return { update: () => ({ eq: vi.fn(async () => ({ error: null })) }) };
       throw new Error(`Unexpected table ${table}`);
     });
 
@@ -203,6 +204,57 @@ describe("reconcileLeadIntoPrimary", () => {
         ]),
       })
     );
+  });
+
+  it("N0.1: re-apunta el tracking del CRM del secundario al primario antes de borrarlo", async () => {
+    const primary = leadRow({ id: "lead-primary", source: "google_places", name: "Hotel Bahia", prospect_score: 80 });
+    const secondary = leadRow({ id: "lead-secondary", source: "mintur", name: "Hotel Bahía", prospect_score: 10 });
+
+    const leadsSelect = vi.fn()
+      .mockResolvedValueOnce({ data: primary, error: null })
+      .mockResolvedValueOnce({ data: secondary, error: null })
+      .mockResolvedValueOnce({ data: primary, error: null });
+    const leadsEq = vi.fn(() => ({ single: leadsSelect }));
+    const emptySelect = vi.fn().mockResolvedValue({ data: [], error: null });
+
+    const refsTable = { select: vi.fn(() => ({ eq: () => emptySelect() })), upsert: vi.fn(async () => ({ error: null })) };
+    const evidenceTable = { select: vi.fn(() => ({ eq: () => emptySelect() })), upsert: vi.fn(async () => ({ error: null })) };
+
+    const order: string[] = [];
+    const fromFn = vi.fn((table: string) => {
+      if (table === "leads") {
+        return {
+          select: vi.fn(() => ({ eq: leadsEq })),
+          update: vi.fn(() => ({ eq: vi.fn(async () => ({ error: null })) })),
+          delete: vi.fn(() => ({ eq: vi.fn(async () => { order.push("delete"); return { error: null }; }) })),
+        };
+      }
+      if (table === "lead_source_references") return refsTable;
+      if (table === "lead_field_evidences") return evidenceTable;
+      if (table === "lead_tracking") {
+        return {
+          update: vi.fn((payload: { lead_id: string }) => ({
+            eq: vi.fn(async (col: string, val: string) => {
+              order.push(`tracking:set=${payload.lead_id};where=${col}=${val}`);
+              return { error: null };
+            }),
+          })),
+        };
+      }
+      throw new Error(`Unexpected table ${table}`);
+    });
+
+    supabaseRef.current = { from: fromFn };
+
+    await reconcileLeadIntoPrimary("lead-primary", "lead-secondary");
+
+    const trackingIdx = order.findIndex((o) => o.startsWith("tracking:"));
+    const deleteIdx = order.indexOf("delete");
+    expect(trackingIdx).toBeGreaterThanOrEqual(0);
+    expect(deleteIdx).toBeGreaterThanOrEqual(0);
+    expect(trackingIdx).toBeLessThan(deleteIdx); // re-apunta ANTES de borrar
+    // re-apunta del secundario al primario
+    expect(order).toContain("tracking:set=lead-primary;where=lead_id=lead-secondary");
   });
 
   it("sets canonical_source to primary source when it has the highest confidence", async () => {
@@ -251,6 +303,7 @@ describe("reconcileLeadIntoPrimary", () => {
         if (table === "leads") return leadsTable;
         if (table === "lead_source_references") return refsTable;
         if (table === "lead_field_evidences") return evidenceTable;
+        if (table === "lead_tracking") return { update: () => ({ eq: vi.fn(async () => ({ error: null })) }) };
         throw new Error(`Unexpected table ${table}`);
       }),
     };
@@ -302,6 +355,7 @@ describe("reconcileLeadIntoPrimary", () => {
         if (table === "leads") return leadsTable;
         if (table === "lead_source_references") return refsTable;
         if (table === "lead_field_evidences") return evidenceTable;
+        if (table === "lead_tracking") return { update: () => ({ eq: vi.fn(async () => ({ error: null })) }) };
         throw new Error(`Unexpected table ${table}`);
       }),
     };
@@ -360,6 +414,7 @@ describe("reconcileLeadIntoPrimary", () => {
         if (table === "leads") return leadsTable;
         if (table === "lead_source_references") return refsTable;
         if (table === "lead_field_evidences") return evidenceTable;
+        if (table === "lead_tracking") return { update: () => ({ eq: vi.fn(async () => ({ error: null })) }) };
         throw new Error(`Unexpected table ${table}`);
       }),
     };
@@ -414,6 +469,7 @@ describe("reconcileLeadIntoPrimary", () => {
         if (table === "leads") return leadsTable;
         if (table === "lead_source_references") return refsTable;
         if (table === "lead_field_evidences") return evidenceTable;
+        if (table === "lead_tracking") return { update: () => ({ eq: vi.fn(async () => ({ error: null })) }) };
         throw new Error(`Unexpected table ${table}`);
       }),
     };
@@ -470,6 +526,7 @@ describe("reconcileLeadIntoPrimary", () => {
         if (table === "leads") return leadsTable;
         if (table === "lead_source_references") return refsTable;
         if (table === "lead_field_evidences") return evidenceTable;
+        if (table === "lead_tracking") return { update: () => ({ eq: vi.fn(async () => ({ error: null })) }) };
         throw new Error(`Unexpected table ${table}`);
       }),
     };

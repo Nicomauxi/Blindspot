@@ -295,6 +295,16 @@ export async function reconcileLeadIntoPrimary(
     .eq("id", primaryLeadId);
   if (updateError) throw new Error(`primary lead update failed: ${updateError.message}`);
 
+  // N0.1 [N21, CRIT]: re-apuntar el caso CRM del secundario al primario ANTES de borrarlo.
+  // La FK lead_tracking_lead_id_fkey es ON DELETE CASCADE → el merge destruía el tracking
+  // (y su historial vía lead_tracking_events) del secundario. No hay unique(lead_id), así que
+  // re-apuntar no colisiona aunque el primario ya tenga su propio caso.
+  const { error: trackingError } = await db
+    .from("lead_tracking")
+    .update({ lead_id: primaryLeadId })
+    .eq("lead_id", secondaryLeadId);
+  if (trackingError) throw new Error(`lead_tracking re-point failed: ${trackingError.message}`);
+
   const { error: deleteError } = await db
     .from("leads")
     .delete()
