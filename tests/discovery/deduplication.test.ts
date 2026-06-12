@@ -154,6 +154,18 @@ describe("nameSimilarity", () => {
   it("returns >= 0.85 for names with minor punctuation variation", () => {
     expect(nameSimilarity("El Farolito Bar", "El Farolito, Bar")).toBeGreaterThanOrEqual(0.85);
   });
+
+  it("F2.5: matchea cuando un nombre es subconjunto del otro (MULTICAR ⊆ Multicar Automotora)", () => {
+    expect(nameSimilarity("MULTICAR", "Multicar Automotora")).toBeGreaterThanOrEqual(0.85);
+  });
+
+  it("F2.5: insensible al orden de palabras", () => {
+    expect(nameSimilarity("Juan Perez Automotora", "Automotora Juan Perez")).toBeGreaterThanOrEqual(0.85);
+  });
+
+  it("F2.5: NO infla nombres que comparten un solo token pero difieren (Farmacia San Jose ≠ Farmacia Central)", () => {
+    expect(nameSimilarity("Farmacia San Jose", "Farmacia Central")).toBeLessThan(0.85);
+  });
 });
 
 // ─── findCrossSourceMatch ─────────────────────────────────────────────────────
@@ -197,12 +209,18 @@ describe("findCrossSourceMatch", () => {
   });
 
   it("respects a custom lower threshold (0.30 matches more distant names)", () => {
-    // "la palma" (8) vs "la palma restaurante" (20): levenshtein=12, sim=1-12/20=0.4
-    // At default 0.85 → no match; at 0.30 → matches
+    // Par NO-subconjunto, moderadamente similar: "La Palma" vs "La Pampa" (sim≈0.75).
+    // (Un subconjunto como "La Palma" ⊆ "La Palma Restaurante" ahora matchea al 0.85 — F2.5.)
     const candidate = makeCandidate({ name: "La Palma", source: "mintur" });
-    const lead = makeLead({ name: "La Palma Restaurante", source: "google_places" });
+    const lead = makeLead({ name: "La Pampa", source: "google_places" });
     expect(findCrossSourceMatch(candidate, [lead])).toBeNull();
     expect(findCrossSourceMatch(candidate, [lead], 0.30)).toBe(lead);
+  });
+
+  it("F2.5: 'La Palma' (mintur) corrobora 'La Palma Restaurante' (google) al umbral default", () => {
+    const candidate = makeCandidate({ name: "La Palma", source: "mintur" });
+    const lead = makeLead({ name: "La Palma Restaurante", source: "google_places" });
+    expect(findCrossSourceMatch(candidate, [lead])).toBe(lead);
   });
 
   it("returns the lead with higher prospect_score on similarity tie", () => {

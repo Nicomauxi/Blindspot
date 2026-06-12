@@ -31,13 +31,43 @@ export function normalizeName(name: string): string {
     .trim();
 }
 
+function ratio(a: string, b: string): number {
+  if (a.length === 0 && b.length === 0) return 1.0;
+  if (a.length === 0 || b.length === 0) return 0.0;
+  return 1 - levenshtein(a, b) / Math.max(a.length, b.length);
+}
+
+function tokens(name: string): string[] {
+  return normalizeName(name).split(" ").filter((t) => t.length >= 2);
+}
+
+// Ratio insensible al ORDEN de palabras: ordena los tokens y compara. F2.5.
+function tokenSortRatio(a: string, b: string): number {
+  return ratio(tokens(a).sort().join(" "), tokens(b).sort().join(" "));
+}
+
+// Token-set ratio estilo fuzzywuzzy: alcanza 1.0 cuando un nombre es subconjunto del otro
+// ("MULTICAR" ⊆ "Multicar Automotora"), sin inflar matches con tokens en conflicto. F2.5.
+function tokenSetRatio(a: string, b: string): number {
+  const setA = new Set(tokens(a));
+  const setB = new Set(tokens(b));
+  if (setA.size === 0 && setB.size === 0) return 1.0;
+  if (setA.size === 0 || setB.size === 0) return 0.0;
+  const inter = [...setA].filter((t) => setB.has(t)).sort();
+  if (inter.length === 0) return 0.0;
+  const t0 = inter.join(" ");
+  const t1 = [...inter, ...[...setA].filter((t) => !setB.has(t)).sort()].join(" ");
+  const t2 = [...inter, ...[...setB].filter((t) => !setA.has(t)).sort()].join(" ");
+  return Math.max(ratio(t0, t1), ratio(t0, t2), ratio(t1, t2));
+}
+
 export function nameSimilarity(a: string, b: string): number {
   const normA = normalizeName(a);
   const normB = normalizeName(b);
   if (normA.length === 0 && normB.length === 0) return 1.0;
   if (normA.length === 0 || normB.length === 0) return 0.0;
-  const dist = levenshtein(normA, normB);
-  return 1 - dist / Math.max(normA.length, normB.length);
+  // Combina: Levenshtein (typos), token-sort (orden de palabras) y token-set (subconjuntos). F2.5.
+  return Math.max(ratio(normA, normB), tokenSortRatio(a, b), tokenSetRatio(a, b));
 }
 
 // Fuentes con niche genérico/no fiable (turismo, habilitaciones, registro industrial):
