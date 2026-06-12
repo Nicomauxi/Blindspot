@@ -701,6 +701,36 @@ function scoreBreakdownValue(row: JsonRecord, key: string): string | null {
   return breakdown ? asNullableString(breakdown[key]) : null;
 }
 
+const OFFER_KEYS = ["web_nuevo", "rediseno", "marketing", "software", "catalogo", "contacto_directo"] as const;
+
+export interface SecondaryOfferResult {
+  secondary_offer: string | null;
+  secondary_offer_score: number | null;
+  offer_confidence: "high" | "medium" | "low" | null;
+}
+
+// C4: el primary_offer es un volado para el 61% del pool (2º a <5pts del 1º). Exponer
+// el 2º offer y una confianza basada en el gap permite al vendedor ver cuándo el offer
+// es claro y cuándo conviene ofrecer dos cosas.
+export function computeSecondaryOffer(subScores: Record<string, unknown> | null): SecondaryOfferResult {
+  const empty: SecondaryOfferResult = { secondary_offer: null, secondary_offer_score: null, offer_confidence: null };
+  if (!subScores) return empty;
+  const ranked = OFFER_KEYS
+    .map((k) => ({ offer: k, score: typeof subScores[k] === "number" ? (subScores[k] as number) : 0 }))
+    .filter((o) => o.score > 0)
+    .sort((a, b) => b.score - a.score);
+  if (ranked.length === 0) return empty;
+  const top = ranked[0]!;
+  const second = ranked[1] ?? null;
+  const gap = top.score - (second?.score ?? 0);
+  const confidence: SecondaryOfferResult["offer_confidence"] = gap >= 15 ? "high" : gap >= 6 ? "medium" : "low";
+  return {
+    secondary_offer: second?.offer ?? null,
+    secondary_offer_score: second?.score ?? null,
+    offer_confidence: confidence,
+  };
+}
+
 function asCorroboratingSources(value: unknown): CorroboratingSourceRecord[] {
   if (!Array.isArray(value)) return [];
   return value
@@ -1049,6 +1079,12 @@ function normalizeLeadRow(row: JsonRecord): JsonRecord {
     // C1/B1: segmento "demanda sin web" + score demand-gap.
     opportunity_no_web: asBooleanOrNull(row["opportunity_no_web"]),
     demand_gap_score: asNullableNumber(row["demand_gap_score"]),
+    // C4: 2º offer + confianza (gap top1-top2) para el 61% del pool donde el offer es un volado.
+    ...computeSecondaryOffer(
+      isRecord(row["score_breakdown"]) && isRecord(row["score_breakdown"]["sub_scores"])
+        ? (row["score_breakdown"]["sub_scores"] as Record<string, unknown>)
+        : null
+    ),
   };
 
   const fieldSources = buildFieldSources(normalized, canonicalFields, corroboratingSources);
