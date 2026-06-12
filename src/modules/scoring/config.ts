@@ -113,6 +113,7 @@ const CommercialScoreSchema = z.object({
         whatsapp_direct: z.number().nonnegative(),
         whatsapp_derived: z.number().nonnegative(),
         phone: z.number().nonnegative(),
+        phone_landline: z.number().nonnegative().optional(), // F3.3: fijo vale menos que móvil
         phone_confirmed_bonus: z.number().nonnegative(),
         address: z.number().nonnegative(),
         website: z.number().nonnegative(),

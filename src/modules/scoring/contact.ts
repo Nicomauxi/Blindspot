@@ -3,6 +3,7 @@ import { calculateContactReliability } from "./confidence.js";
 import { getScoringConfig } from "./config.js";
 import type { ContactScoreSignal, ContactTier } from "./types.js";
 import { getLeadInferredState, inferredBool } from "./state.js";
+import { classifyUruguayPhone } from "../../shared/phone.js";
 
 export const CONTACTABLE_TIERS = new Set<ContactTier>(["A", "B", "C"]);
 
@@ -125,10 +126,15 @@ export function computeContactProfile(lead: Lead): ContactProfile {
     pushSignal(signals, "whatsapp_derived", weights.whatsapp_derived, true);
   }
 
-  const hasPhone = lead.phone != null || getCanonicalPhone(lead) != null;
-  if (hasPhone) {
-    score += weights.phone;
-    pushSignal(signals, "phone", weights.phone, true);
+  const phoneValue = getCanonicalPhone(lead) ?? lead.phone;
+  if (phoneValue != null) {
+    // F3.3: el móvil (señal del dueño) pesa más que el fijo (gestor/oficina, típico DEI).
+    // Un fijo conocido usa phone_landline; móvil o desconocido usan el peso base.
+    const isLandline =
+      classifyUruguayPhone(phoneValue).type === "landline" || lead.tags.includes("landline-phone");
+    const phoneWeight = isLandline ? weights.phone_landline ?? weights.phone : weights.phone;
+    score += phoneWeight;
+    pushSignal(signals, isLandline ? "phone_landline" : "phone", phoneWeight, true);
   }
 
   if (fp?.phone_confirmed) {
@@ -166,7 +172,7 @@ export function computeContactProfile(lead: Lead): ContactProfile {
   const channelCount = [
     emailCount > 0,
     directWhatsapp || derivedWhatsapp,
-    hasPhone,
+    phoneValue != null,
     lead.website != null || Boolean(fp?.operational_systems?.contact_form),
     socialChannels.length > 0,
   ].filter(Boolean).length;

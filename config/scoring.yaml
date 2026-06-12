@@ -166,7 +166,8 @@ commercial_score:
         extra_email: 5
         whatsapp_direct: 28
         whatsapp_derived: 18
-        phone: 18
+        phone: 18           # móvil (señal de dueño)
+        phone_landline: 8   # fijo vale menos: suele ser gestor/oficina (DEI) — F3.3
         phone_confirmed_bonus: 6
         address: 8
         website: 6

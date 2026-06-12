@@ -117,7 +117,7 @@ describe("buildScoreEvalReport", () => {
       source: "mintur",
       niche: "other",
       tags: [],
-      phone: "+59821234567",
+      phone: "+59891234567", // móvil: el contacto directo del dueño (F3.3 baja el peso del fijo)
       prospect_score: 10,
       prospect_score_v1: 10,
       digital_footprint: null,

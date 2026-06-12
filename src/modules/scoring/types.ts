@@ -73,6 +73,7 @@ export interface AccessibilityConfig {
       whatsapp_direct: number;
       whatsapp_derived: number;
       phone: number;
+      phone_landline?: number;
       phone_confirmed_bonus: number;
       address: number;
       website: number;

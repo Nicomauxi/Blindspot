@@ -60,6 +60,16 @@ describe("computeContactProfile", () => {
     expect(profile.tier).toBe("B");
   });
 
+  it("F3.3: un fijo puntúa menos que un móvil", () => {
+    const mobile = computeContactProfile({ ...empty_lead, niche: "restaurant", phone: "099123456" });
+    const landline = computeContactProfile({ ...empty_lead, niche: "restaurant", phone: "24013030" });
+    expect(mobile.score).toBeGreaterThan(landline.score);
+    const mobileSig = mobile.signals.find((s) => s.name === "phone");
+    const landlineSig = landline.signals.find((s) => s.name === "phone_landline");
+    expect(mobileSig?.weight).toBe(18);
+    expect(landlineSig?.weight).toBe(8);
+  });
+
   it("direccion sola informa ubicación pero no contacto listo", () => {
     const profile = computeContactProfile({
       ...empty_lead,
