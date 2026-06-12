@@ -16,8 +16,10 @@ import type { PlaceCandidate } from "../../shared/types.js";
 
 const logger = getLogger();
 
-const TEXT_SEARCH_COST_PER_REQUEST = 0.035;
-const DETAILS_COST_PER_REQUEST = 0.025;
+import {
+  TEXT_SEARCH_COST_PER_REQUEST,
+  DETAILS_COST_PER_REQUEST,
+} from "../../shared/google-places-costs.js";
 
 function estimateActualCostUsd(textSearchRequestCount: number, detailsRequestCount: number): number {
   return textSearchRequestCount * TEXT_SEARCH_COST_PER_REQUEST + detailsRequestCount * DETAILS_COST_PER_REQUEST;

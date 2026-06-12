@@ -2,7 +2,8 @@ import { fetch } from "undici";
 import pRetry from "p-retry";
 import { getLogger } from "../../shared/logger.js";
 
-export const USER_AGENT = "blindspot/1.0";
+import { BOT_USER_AGENT } from "../../shared/user-agents.js";
+export const USER_AGENT = BOT_USER_AGENT;
 export const MAX_BODY_BYTES = 2 * 1024 * 1024;
 
 // Knobs de velocidad leídos del env POR LLAMADA (no const fija al arranque): la API

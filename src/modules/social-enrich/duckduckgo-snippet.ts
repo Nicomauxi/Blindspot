@@ -11,7 +11,7 @@ import type { SocialProfileData } from "./social-fusion.js";
 
 const LITE_ENDPOINT = "https://lite.duckduckgo.com/lite/";
 const HTML_ENDPOINT = "https://html.duckduckgo.com/html/";
-const UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36";
+import { BROWSER_USER_AGENT as UA } from "../../shared/user-agents.js";
 const DDG_SNIPPET_TIMEOUT_MS = 8000; // F4.3
 
 export function isAntiBot(html: string): boolean {

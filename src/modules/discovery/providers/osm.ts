@@ -1,3 +1,4 @@
+import { OSM_USER_AGENT } from "../../../shared/user-agents.js";
 import { fetch, Agent } from "undici";
 import type {
   IDiscoveryProvider,
@@ -157,7 +158,7 @@ async function executeQuery(ql: string): Promise<OSMElement[]> {
     method: "POST",
     headers: {
       "Content-Type": "application/x-www-form-urlencoded",
-      "User-Agent": "blindspot-discovery/1.0 (contact@blindspot.uy)",
+      "User-Agent": OSM_USER_AGENT,
     },
     body,
     dispatcher: ipv4Agent,

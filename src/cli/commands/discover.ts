@@ -17,8 +17,10 @@ import type { PlaceCandidate, ProfileConfig, RejectionReason } from "../../share
 import type { RuntimeMappings } from "../../storage/system-lists.js";
 
 // Approximate pricing per request used in trace cost estimate
-const TEXT_SEARCH_COST_PER_REQUEST = 0.035;
-const DETAILS_COST_PER_REQUEST = 0.025;
+import {
+  TEXT_SEARCH_COST_PER_REQUEST,
+  DETAILS_COST_PER_REQUEST,
+} from "../../shared/google-places-costs.js";
 
 const DiscoverArgsSchema = z.object({
   niche: z.string().min(1, "niche cannot be empty"),

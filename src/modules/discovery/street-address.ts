@@ -1,3 +1,4 @@
+import { UY_DEPARTMENTS } from "../../shared/uy-geo.js";
 // Matching de direcciones tolerante a abreviaciones uruguayas.
 //
 // El problema: las calles con nombre de prócer aparecen abreviadas según la fuente
@@ -48,11 +49,6 @@ const CITY_HINTS = new Set([
 
 const COUNTRY_TOKENS = new Set(["uruguay", "argentina", "brasil", "brazil"]);
 
-const UY_DEPARTMENTS = new Set([
-  "artigas", "canelones", "cerro largo", "colonia", "durazno", "flores", "florida",
-  "lavalleja", "maldonado", "montevideo", "paysandu", "rio negro", "rivera", "rocha",
-  "salto", "san jose", "soriano", "tacuarembo", "treinta y tres",
-]);
 
 // Plus-code de Google (Open Location Code): 4+ alfanuméricos, "+", 2-3 alfanuméricos.
 const PLUSCODE_RE = /\b[a-z0-9]{4,}\+[a-z0-9]{2,3}\b/i;

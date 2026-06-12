@@ -1,3 +1,4 @@
+import { UY_DEPARTMENTS } from "../../shared/uy-geo.js";
 // Utilidades compartidas de texto/geo para matching cruzado entre fuentes.
 // Antes vivían duplicadas en deduplication.ts y reconciliation.ts; centralizarlas
 // evita que un fix se aplique en un solo lado.
@@ -6,27 +7,6 @@ const COUNTRY_TOKENS = new Set(["uruguay", "argentina", "brasil", "brazil"]);
 
 // Los 19 departamentos de Uruguay (normalizados sin acentos). Sirven para desambiguar
 // el patrón "CIUDAD, DEPARTAMENTO" (mintur) donde el último segmento es el departamento.
-const UY_DEPARTMENTS = new Set([
-  "artigas",
-  "canelones",
-  "cerro largo",
-  "colonia",
-  "durazno",
-  "flores",
-  "florida",
-  "lavalleja",
-  "maldonado",
-  "montevideo",
-  "paysandu",
-  "rio negro",
-  "rivera",
-  "rocha",
-  "salto",
-  "san jose",
-  "soriano",
-  "tacuarembo",
-  "treinta y tres",
-]);
 
 function looksLikeStreet(part: string): boolean {
   return /\d/.test(part);

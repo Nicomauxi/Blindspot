@@ -1,3 +1,4 @@
+import { projectMaxGooglePlacesCost } from "../../../src/shared/google-places-costs.js";
 import { buildCommercialOfferings, buildCommercialOfferingsSummary } from "../../../src/modules/scoring/offerings.js";
 
 const SUPPORTED_DISCOVERY_SOURCES = ["mintur", "osm", "yelu", "pedidosya", "google_places"] as const;
@@ -971,7 +972,7 @@ export function buildDiscoveryRecommendations(params: {
 
 export function estimateGooglePlacesBatchCost(maxResults: number): number {
   const safeMaxResults = Math.max(1, Math.min(maxResults, 1000));
-  return Math.ceil(safeMaxResults / 20) * 0.035 + safeMaxResults * 0.025;
+  return projectMaxGooglePlacesCost(safeMaxResults);
 }
 
 export function supportedDiscoverySources(): string[] {
