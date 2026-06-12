@@ -1048,6 +1048,29 @@ function normalizeLeadRow(row: JsonRecord): JsonRecord {
   };
 }
 
+// N66: cache in-memory del brief LLM (clave lead_id:updated_at, TTL 24h, cap 500).
+const LEAD_BRIEF_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+const LEAD_BRIEF_CACHE_MAX = 500;
+const leadBriefCache = new Map<string, { at: number; value: unknown }>();
+
+function getCachedLeadBrief(key: string): unknown | null {
+  const entry = leadBriefCache.get(key);
+  if (!entry) return null;
+  if (Date.now() - entry.at > LEAD_BRIEF_CACHE_TTL_MS) {
+    leadBriefCache.delete(key);
+    return null;
+  }
+  return entry.value;
+}
+
+function setCachedLeadBrief(key: string, value: unknown): void {
+  if (leadBriefCache.size >= LEAD_BRIEF_CACHE_MAX) {
+    const oldest = leadBriefCache.keys().next().value;
+    if (oldest !== undefined) leadBriefCache.delete(oldest);
+  }
+  leadBriefCache.set(key, { at: Date.now(), value });
+}
+
 const ACTIVE_TRACKING_STATUSES = ["pending", "validation", "contact", "observed"] as const;
 
 function isContactFieldKey(key: string): boolean {
@@ -2116,6 +2139,15 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
         }
       }
 
+      // N66: cache server-side por lead+updated_at — cada apertura de ficha disparaba
+      // una llamada LLM billable nueva (50 fichas = 50 llamadas). Se invalida solo
+      // cuando el lead cambia (updated_at) o por TTL.
+      const briefCacheKey = `${id}:${String(normalizedLead["updated_at"] ?? "")}`;
+      const cached = getCachedLeadBrief(briefCacheKey);
+      if (cached) {
+        return reply.status(200).send({ data: cached, cached: true });
+      }
+
       const provider = createLLMProvider();
       const startedAt = Date.now();
       let result;
@@ -2225,6 +2257,9 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
         })
         .catch((err: unknown) => request.log.warn({ err }, "audit log insert threw"));
 
+      // Solo se cachea el resultado limpio — un fallback por error de Gemini debe
+      // poder reintentar con el provider real en la próxima vista.
+      if (errorMessage === null) setCachedLeadBrief(briefCacheKey, result);
       return reply.status(200).send({ data: result });
     }
   );

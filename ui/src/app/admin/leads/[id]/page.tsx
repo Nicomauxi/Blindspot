@@ -202,6 +202,14 @@ export default function LeadDetailPage() {
 
   useEffect(() => {
     if (!token || !id || !lead) return;
+    // N66: cm pre-tracking → el endpoint 403ea siempre; la UI ya sabe que el lead
+    // está redactado y se ahorra la llamada garantizada e inútil.
+    const redacted = lead.phone === "***" || lead.email === "***" || lead.whatsapp === "***";
+    if (redacted) {
+      setAssistant(null);
+      setAssistantError(null);
+      return;
+    }
     setAssistantLoading(true);
     setAssistantError(null);
     generateLeadBrief(token, id)
