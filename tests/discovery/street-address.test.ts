@@ -105,4 +105,22 @@ describe("streetAddressesMatch", () => {
     const b = parse("Calle 9, Montevideo");
     expect(streetAddressesMatch(a, b)).toBe(false);
   });
+
+  it("F2.2: NO matchea 1 token sin puerta (Rivera ⊄ Rivera Indarte)", () => {
+    expect(streetAddressesMatch(parse("Rivera, Salto"), parse("Rivera Indarte, Salto"))).toBe(false);
+  });
+});
+
+describe("parseStreetAddress — F2.3/F2.4", () => {
+  it("F2.3: la puerta es el primer número, no el de la unidad interna", () => {
+    expect(parseStreetAddress("Av. Italia 3030 apto 5, Montevideo").door).toBe("3030");
+    expect(parseStreetAddress("Rivera 1234 local 7").door).toBe("1234");
+  });
+
+  it("F2.4: conserva el número de un nombre-fecha como token significativo", () => {
+    const p = parseStreetAddress("8 de Octubre 2720, Montevideo");
+    expect(p.door).toBe("2720");
+    expect(p.streetTokens).toContain("8");
+    expect(p.streetTokens).toContain("octubre");
+  });
 });

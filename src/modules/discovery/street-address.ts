@@ -32,6 +32,12 @@ const CONNECTOR_TOKENS = new Set([
   "esq", "esquina", "casi", "par", "parada", "entre",
 ]);
 
+// Marcadores de unidad interna: el número que les sigue es apto/local/piso, NO la puerta. F2.3.
+const UNIT_MARKER_TOKENS = new Set([
+  "apto", "apt", "apartamento", "local", "of", "ofic", "oficina",
+  "piso", "uc", "unidad", "depto", "dpto", "block", "bloque",
+]);
+
 // Topónimos que, en un segmento posterior al primero, marcan el fin de la calle.
 const CITY_HINTS = new Set([
   "montevideo", "maldonado", "punta", "este", "diablo", "barra", "atlantida",
@@ -110,20 +116,32 @@ export function parseStreetAddress(value: string | null | undefined): ParsedStre
   // Índices de números de puerta candidatos (1-4 dígitos), excluyendo el número de un
   // nombre tipo fecha ("18 de Julio", "8 de Octubre"): un número seguido de "de"/"del".
   // (No excluye "784 y Artigas" — la "y" de esquina no marca nombre-fecha.)
+  const isDateNameNum = (i: number): boolean => {
+    const next = tokens[i + 1];
+    return /^\d{1,4}$/.test(tokens[i]!) && (next === "de" || next === "del");
+  };
+
   const doorCandidateIdx: number[] = [];
   tokens.forEach((t, i) => {
     if (!/^\d{1,4}$/.test(t)) return;
-    const next = tokens[i + 1];
-    const isDateNamePrefix = next === "de" || next === "del";
-    if (!isDateNamePrefix) doorCandidateIdx.push(i);
+    // Excluir el número de un nombre-fecha ("18 de Julio") y el de una unidad interna
+    // ("apto 5", "local 3") — no son la puerta. F2.3/F2.4.
+    const prev = tokens[i - 1];
+    if (isDateNameNum(i)) return;
+    if (prev !== undefined && UNIT_MARKER_TOKENS.has(prev)) return;
+    doorCandidateIdx.push(i);
   });
-  const doorIdx = doorCandidateIdx.length > 0 ? doorCandidateIdx[doorCandidateIdx.length - 1]! : -1;
+  // La puerta es el PRIMER número tras el nombre de calle, no el último
+  // ("Av. Italia 3030 apto 5" → 3030, no 5). F2.3.
+  const doorIdx = doorCandidateIdx.length > 0 ? doorCandidateIdx[0]! : -1;
   const door = doorIdx >= 0 ? tokens[doorIdx]! : null;
 
   const streetTokens: string[] = [];
   tokens.forEach((t, i) => {
     if (i === doorIdx) return;
-    if (t.length < 2) return;
+    // Conservar el número de un nombre-fecha ("8 de Octubre" → token "8" significativo),
+    // que de otro modo el filtro de longitud descartaría. F2.4.
+    if (t.length < 2 && !isDateNameNum(i)) return;
     if (STREET_TYPE_TOKENS.has(t) || HONORIFIC_TOKENS.has(t) || CONNECTOR_TOKENS.has(t)) return;
     streetTokens.push(t);
   });
@@ -150,8 +168,14 @@ export function streetAddressesMatch(a: ParsedStreetAddress, b: ParsedStreetAddr
   // Caso fuerte: ambas puertas e iguales + token compartido ⇒ misma dirección.
   if (a.door !== null && b.door !== null && a.door === b.door) return true;
 
+  // F2.2: un único token significativo en el lado corto, sin puerta, NO alcanza para
+  // containment ("Rivera" ⊄ "Rivera Indarte": son calles distintas). Exigir >1 token en
+  // el lado corto O al menos una puerta presente.
+  const shortSize = Math.min(setA.size, setB.size);
+  if (shortSize <= 1 && a.door === null && b.door === null) return false;
+
   // Caso medio: el nombre más corto está totalmente contenido en el más largo
   // (subset, ej. {rivera} ⊆ {fructuoso, rivera}), con a lo sumo una puerta presente.
-  const containment = shared.length / Math.min(setA.size, setB.size);
+  const containment = shared.length / shortSize;
   return containment >= 1.0;
 }
