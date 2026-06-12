@@ -136,6 +136,45 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+const SIGNAL_WEIGHT_RANK: Record<CommercialSignal["weight"], number> = { high: 3, medium: 2, low: 1 };
+
+// M2: la señal concreta más fuerte observada en el lead para una oferta dada.
+// Reutiliza los mismos builders que alimentan las offerings de la UI, para que el
+// pitch_hook cite evidencia real (no una plantilla genérica por tipo de oferta).
+export function topSignalForOffer(
+  offerId: string,
+  tags: string[],
+  digitalFootprint: Record<string, unknown> | null
+): CommercialSignal | null {
+  let signals: CommercialSignal[];
+  switch (offerId) {
+    case "web_nuevo":
+      signals = buildWebNuevoSignals(tags);
+      break;
+    case "rediseno":
+      signals = buildRedisenoSignals(tags);
+      break;
+    case "software":
+      signals = buildSoftwareSignals(tags);
+      break;
+    case "catalogo":
+      signals = buildCatalogoSignals(tags, digitalFootprint);
+      break;
+    case "marketing":
+      signals = buildMarketingSignals(tags);
+      break;
+    case "contacto_directo":
+      signals = buildContactoDirectoSignals(tags);
+      break;
+    default:
+      signals = [];
+  }
+  if (signals.length === 0) return null;
+  return signals.reduce((best, s) =>
+    SIGNAL_WEIGHT_RANK[s.weight] > SIGNAL_WEIGHT_RANK[best.weight] ? s : best
+  );
+}
+
 function extractSubScore(subScores: Record<string, unknown>, key: string): number {
   const v = subScores[key];
   return typeof v === "number" && Number.isFinite(v) ? Math.round(v) : 0;

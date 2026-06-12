@@ -230,6 +230,11 @@ const listQuerySchema = z.object({
   niche: z.string().optional(),
   source: z.string().optional(),
   primary_offer: z.string().optional(),
+  // M3: filtrar pool vendible (offer != none) vs incompleto.
+  sellable: z
+    .enum(["true", "false"])
+    .optional()
+    .transform((v) => (v === undefined ? undefined : v === "true")),
   commercial_offer_type: z.enum(["marketing", "software", "both", "unknown"]).optional(),
   q: z.string().optional(),
   location_key: z.string().trim().min(1).optional(),
@@ -1260,6 +1265,7 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
         niche,
         source,
         primary_offer,
+        sellable,
         commercial_offer_type,
         q,
         location_key,
@@ -1321,6 +1327,9 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
       }
       if (primary_offer) {
         query = query.eq("primary_offer", primary_offer);
+      }
+      if (sellable !== undefined) {
+        query = query.eq("sellable", sellable);
       }
       if (q) {
         query = query.textSearch("search_vector", q, { type: "plain", config: "spanish" });

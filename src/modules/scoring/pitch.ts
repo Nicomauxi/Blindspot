@@ -1,5 +1,6 @@
 import type { Lead } from "../../shared/types.js";
 import { getScoringConfig } from "./config.js";
+import { topSignalForOffer } from "./offerings.js";
 import { getLeadInferredState, inferredTriState } from "./state.js";
 import type { PitchHookOverrideWhen, PrimaryOffer } from "./types.js";
 
@@ -15,19 +16,33 @@ function overrideMatches(lead: Lead, when: PitchHookOverrideWhen): boolean {
   return true;
 }
 
+function resolveTemplate(lead: Lead, primaryOffer: Exclude<PrimaryOffer, "none">): string {
+  const config = getScoringConfig();
+  const hookConfig = config.pitch_hooks[primaryOffer];
+  for (const override of hookConfig.overrides ?? []) {
+    if (overrideMatches(lead, override.when)) return override.text;
+  }
+  return hookConfig.default;
+}
+
+function leadDigitalFootprint(lead: Lead): Record<string, unknown> | null {
+  const fp = (lead as { digital_footprint?: unknown }).digital_footprint;
+  return fp && typeof fp === "object" && !Array.isArray(fp) ? (fp as Record<string, unknown>) : null;
+}
+
+// M2: el pitch_hook era 1 de 8 plantillas idénticas para 3194 leads. Ahora teje el
+// nombre del negocio y la evidencia concreta observada (misma fuente que las offerings
+// de la UI) para que el vendedor vea un motivo específico, no una frase de catálogo.
 export function computePitchHook(lead: Lead, primaryOffer: PrimaryOffer): string {
   if (primaryOffer === "none") {
     return "Lead sin hook comercial claro; revisar manualmente.";
   }
 
-  const config = getScoringConfig();
-  const hookConfig = config.pitch_hooks[primaryOffer];
+  const template = resolveTemplate(lead, primaryOffer);
+  const name = (lead.name ?? "").trim();
+  const evidence = topSignalForOffer(primaryOffer, lead.tags ?? [], leadDigitalFootprint(lead));
 
-  for (const override of hookConfig.overrides ?? []) {
-    if (overrideMatches(lead, override.when)) {
-      return override.text;
-    }
-  }
-
-  return hookConfig.default;
+  const prefix = name ? `${name}: ` : "";
+  const suffix = evidence ? ` Señal: ${evidence.label.toLowerCase()}.` : "";
+  return `${prefix}${template}${suffix}`;
 }

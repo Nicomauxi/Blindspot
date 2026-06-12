@@ -4,6 +4,7 @@ const LEAD_ID = "00000000-0000-0000-0000-000000000001";
 const geocodeAddress = vi.fn();
 
 let _orderCalls: Array<{ column: string; ascending?: boolean }> = [];
+let _eqFilterCalls: Array<{ column: string; value: unknown }> = [];
 let _mockLeadQueryRows: Array<Record<string, unknown>> = [];
 
 let _mockUser: Record<string, unknown> = {
@@ -150,7 +151,7 @@ function makeLeadQueryChain() {
     Promise.resolve({ data: _mockLeadQueryRows, error: null, count: _mockLeadQueryRows.length });
   const leaf = () => chain;
   chain["in"] = leaf;
-  chain["eq"] = (_col: string, val: string) => {
+  chain["eq"] = (_col: string, val: unknown) => {
     if (_col === "id") {
       return {
         single: async () =>
@@ -159,6 +160,7 @@ function makeLeadQueryChain() {
             : { data: null, error: { code: "PGRST116" } },
       };
     }
+    _eqFilterCalls.push({ column: _col, value: val });
     return chain;
   };
   chain["gte"] = leaf;
@@ -371,6 +373,7 @@ describe("GET /api/v1/leads", () => {
   beforeEach(() => {
     process.env["API_JWT_SECRET"] = "test-secret-at-least-32-chars-long-1234";
     _orderCalls = [];
+    _eqFilterCalls = [];
     _mockLeadQueryRows = [mockLeadViewRow];
     _lastLlmUsageInsert = null;
     _mockLeadBriefError = null;
@@ -431,6 +434,38 @@ describe("GET /api/v1/leads", () => {
       })
     );
 
+    await app.close();
+  });
+
+  it("M3: el filtro sellable=true se traduce a un filtro eq sobre la columna sellable", async () => {
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/leads?sellable=true",
+      headers: { authorization: `Bearer ${token}` },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(_eqFilterCalls).toContainEqual({ column: "sellable", value: true });
+    await app.close();
+  });
+
+  it("M3: sin el parámetro sellable no se filtra por esa columna", async () => {
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/leads",
+      headers: { authorization: `Bearer ${token}` },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(_eqFilterCalls.some((c) => c.column === "sellable")).toBe(false);
     await app.close();
   });
 
