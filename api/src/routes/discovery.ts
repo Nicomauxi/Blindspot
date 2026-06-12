@@ -464,7 +464,26 @@ type AdminGeoZoneOption = {
   last_seen_at: string | null;
 };
 
+// N59: loadZoneLeadRows mueve ~6 MB y lo llaman 4 rutas; los datos solo cambian con
+// corridas del pipeline → cache in-memory con TTL corto.
+const ZONE_LEADS_CACHE_TTL_MS = 5 * 60 * 1000;
+let _zoneLeadsCache: { at: number; rows: unknown[] } | null = null;
+
+export function invalidateZoneLeadsCache(): void {
+  _zoneLeadsCache = null;
+}
+
 async function loadZoneLeadRows(request: { log: FastifyInstance["log"] }) {
+  // En tests cada caso monta datos distintos — el cache cruzaría estados.
+  if (!process.env["VITEST"] && _zoneLeadsCache && Date.now() - _zoneLeadsCache.at < ZONE_LEADS_CACHE_TTL_MS) {
+    return _zoneLeadsCache.rows as Awaited<ReturnType<typeof loadZoneLeadRowsUncached>>;
+  }
+  const rows = await loadZoneLeadRowsUncached(request);
+  _zoneLeadsCache = { at: Date.now(), rows };
+  return rows;
+}
+
+async function loadZoneLeadRowsUncached(request: { log: FastifyInstance["log"] }) {
   const db = getDb();
   // N55: paginado con range() — limit(5000) devolvía 1000 filas (max_rows de PostgREST).
   let baseQuery: { data: unknown[] | null; error: { message: string } | null };
