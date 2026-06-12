@@ -9,6 +9,7 @@
 // Marca cada miss como "no_data" para no re-consultarlo en la próxima corrida.
 // Aborta solo si el proveedor parece CAÍDO (racha de nulls SIN ningún éxito): con SearXNG
 // un null suele ser una cuenta personal (sin métricas públicas), no un bloqueo.
+import pLimit from "p-limit";
 import { getLogger } from "../../shared/logger.js";
 import type { Lead } from "../../shared/types.js";
 import {
@@ -34,6 +35,9 @@ export interface IgSnippetStats {
   no_snippet: number;
   skipped_no_url: number;
   aborted_provider_down: boolean;
+  /** Instrumentación de throughput (F1). */
+  elapsed_ms: number;
+  leads_per_sec: number;
 }
 
 export interface IgSnippetOptions {
@@ -44,6 +48,7 @@ export interface IgSnippetOptions {
   nowIso?: string;
   retryNoData?: boolean; // re-consultar los marcados no_data (cuentas que antes no dieron métricas)
   lookup?: IgLookup; // inyectable para test / proveedor custom
+  concurrency?: number; // F1: workers en paralelo (SearXNG aguanta; default 1 = legacy)
 }
 
 function instagramUrlOf(lead: Lead): string | null {
@@ -104,32 +109,44 @@ export async function runIgSnippetEnrich(opts: IgSnippetOptions): Promise<IgSnip
     no_snippet: 0,
     skipped_no_url: 0,
     aborted_provider_down: false,
+    elapsed_ms: 0,
+    leads_per_sec: 0,
   };
 
-  let nullStreak = 0;
-  for (const lead of candidates) {
+  const concurrency = Math.max(1, opts.concurrency ?? 1);
+  const limit = pLimit(concurrency);
+  const startedAt = Date.now();
+  // Provider-down: detecta SearXNG caído/bloqueado de entrada (muchos null sin NINGÚN
+  // éxito). Con concurrencia, un lote inicial de cuentas-personales (null legítimo) NO
+  // debe disparar un falso positivo → el umbral escala con la concurrencia. En runs
+  // --retry-no-data los misses son ESPERADOS (ya eran no_data) → no aplica el abort.
+  const downThreshold = retryNoData ? Infinity : Math.max(PROVIDER_DOWN_STREAK, concurrency * 4);
+  let aborted = false;
+  let processedNoSuccess = 0;
+
+  async function processLead(lead: Lead): Promise<void> {
+    if (aborted) return;
     const igUrl = instagramUrlOf(lead);
     const username = extractUsernameFromUrl(igUrl);
     if (!username || !igUrl) {
       stats.skipped_no_url += 1;
-      continue;
+      return;
     }
 
     const profile = await lookup(username, { throttleMs });
     if (!profile) {
       stats.no_snippet += 1;
-      nullStreak += 1;
-      // Marcar no_data para no re-consultar (cuenta personal o sin og:description).
       await updateLeadSocialEnrichStatus(lead.id, "no_data").catch((err) => getLogger().warn({ leadId: lead.id, err: String(err) }, "social_enrich_status no_data no persistido — el lead se re-consultará"));
-      // Abortar solo si NUNCA hubo un éxito: señal de proveedor caído/bloqueado de entrada.
-      if (stats.enriched === 0 && nullStreak >= PROVIDER_DOWN_STREAK) {
-        stats.aborted_provider_down = true;
-        log.warn({ nullStreak }, "IG snippet enrich: proveedor parece caído (racha de nulls sin éxito) — abortando run");
-        break;
+      if (stats.enriched === 0) {
+        processedNoSuccess += 1;
+        if (processedNoSuccess >= downThreshold && !aborted) {
+          aborted = true;
+          stats.aborted_provider_down = true;
+          log.warn({ processedNoSuccess, downThreshold }, "IG snippet enrich: proveedor parece caído (nulls sin éxito) — abortando run");
+        }
       }
-      continue;
+      return;
     }
-    nullStreak = 0;
 
     const hasWebsite =
       Boolean(lead.website) || Boolean(lead.digital_footprint?.heuristic_discovery?.selected.website?.url);
@@ -138,6 +155,12 @@ export async function runIgSnippetEnrich(opts: IgSnippetOptions): Promise<IgSnip
     await updateLeadSocialEnrichStatus(lead.id, "ok").catch((err) => getLogger().warn({ leadId: lead.id, err: String(err) }, "social_enrich_status ok no persistido — el lead se re-consultará"));
     stats.enriched += 1;
   }
+
+  await Promise.all(candidates.map((lead) => limit(() => processLead(lead))));
+
+  stats.elapsed_ms = Date.now() - startedAt;
+  const done = stats.enriched + stats.no_snippet;
+  stats.leads_per_sec = stats.elapsed_ms > 0 ? Number((done / (stats.elapsed_ms / 1000)).toFixed(2)) : 0;
 
   log.info(stats, "IG snippet enrich complete");
   return stats;

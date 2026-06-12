@@ -140,17 +140,20 @@ program
   .option("--run <uuid>", "Enrich leads of this run")
   .option("--all", "Enrich all passed leads with a selected Instagram URL", false)
   .option("--limit <number>", "Max leads to process (best prospect_score first)")
-  .option("--throttle-ms <number>", "Delay between queries (anti rate-limit)", "1500")
+  .option("--throttle-ms <number>", "Delay between queries (anti rate-limit, por worker)", "1500")
+  .option("--concurrency <number>", "Workers en paralelo (F1: SearXNG aguanta ~8)", "1")
   .option("--retry-no-data", "Re-query leads previously marked no_data", false)
-  .action(async (opts: { run?: string; all?: boolean; limit?: string; throttleMs?: string; retryNoData?: boolean }) => {
+  .action(async (opts: { run?: string; all?: boolean; limit?: string; throttleMs?: string; concurrency?: string; retryNoData?: boolean }) => {
     const { runIgSnippetEnrich } = await import("./../modules/social-enrich/ig-snippet-enrich.js");
     const stats = await runIgSnippetEnrich({
       ...(opts.run ? { run: opts.run } : { all: true }),
       ...(opts.limit ? { limit: Number(opts.limit) } : {}),
       throttleMs: Number(opts.throttleMs ?? "1500"),
+      concurrency: Number(opts.concurrency ?? "1"),
       retryNoData: opts.retryNoData ?? false,
     });
     console.log(`\nIG snippet enrich: ${stats.enriched} enriquecidos / ${stats.no_snippet} sin métricas / ${stats.skipped_resolved} ya resueltos / ${stats.skipped_no_url} sin URL${stats.aborted_provider_down ? " — ABORTADO (proveedor caído)" : ""}`);
+    console.log(`⏱  throughput: ${stats.leads_per_sec} leads/seg · ${(stats.elapsed_ms / 1000).toFixed(1)}s · concurrency=${opts.concurrency ?? "1"}`);
   });
 
 program

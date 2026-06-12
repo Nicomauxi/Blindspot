@@ -176,4 +176,25 @@ describe("runIgSnippetEnrich", () => {
     expect(stats.aborted_provider_down).toBe(false);
     expect(lookup.mock.calls.length).toBe(12); // procesa todos
   });
+
+  it("F1: en --retry-no-data los nulls son esperados → NO aborta (sin falso provider-down)", async () => {
+    vi.mocked(loadAllLeads).mockResolvedValue(
+      Array.from({ length: 20 }, (_, i) => leadWithIg(`l${i}`, `c${i}`))
+    );
+    const lookup = vi.fn().mockResolvedValue(null);
+    const stats = await runIgSnippetEnrich({ all: true, throttleMs: 0, concurrency: 6, retryNoData: true, lookup });
+    expect(stats.aborted_provider_down).toBe(false);
+    expect(lookup.mock.calls.length).toBe(20); // procesa todos pese a 0 éxitos
+  });
+
+  it("F1: con concurrency>1 procesa en paralelo y reporta throughput", async () => {
+    vi.mocked(loadAllLeads).mockResolvedValue(
+      Array.from({ length: 6 }, (_, i) => leadWithIg(`l${i}`, `c${i}`))
+    );
+    const lookup = vi.fn().mockResolvedValue(profile());
+    const stats = await runIgSnippetEnrich({ all: true, throttleMs: 0, concurrency: 3, lookup });
+    expect(stats.enriched).toBe(6);
+    expect(stats.leads_per_sec).toBeGreaterThan(0);
+    expect(stats.elapsed_ms).toBeGreaterThanOrEqual(0);
+  });
 });
