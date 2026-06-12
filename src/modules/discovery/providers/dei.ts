@@ -5,7 +5,7 @@ import type {
   DiscoveryQuery,
   DiscoveryCandidate,
 } from "../../../shared/types.js";
-import { normalizeNiche } from "../filters.js";
+import { normalizeNiche, asciiFold } from "../filters.js";
 
 // Directorio de Empresas Industriales (DEI) del MIEM — dato abierto del Estado uruguayo
 // (catalogodatos.gub.uy, licencia odc-uy que permite uso comercial y persistir). Registro
@@ -150,10 +150,21 @@ async function fetchAllRecords(filters: string | null): Promise<DEIRecord[]> {
   return records;
 }
 
-async function probeFilter(filters: string): Promise<number> {
-  const params = new URLSearchParams({ resource_id: RESOURCE_ID, limit: "1", filters });
-  const data = await fetchPage(params);
-  return data.result.total;
+// Departamentos del DEI con su grafía canónica (el datastore CKAN indexa con tildes:
+// PAYSANDÚ, RÍO NEGRO, SAN JOSÉ, TACUAREMBÓ). Resolvemos desde el input plegando tildes
+// para que "Paysandu"/"paysandú"/"PAYSANDU" caigan todos en la grafía correcta. F1.5.
+const DEI_DEPARTMENTS = [
+  "ARTIGAS", "CANELONES", "CERRO LARGO", "COLONIA", "DURAZNO", "FLORES", "FLORIDA",
+  "LAVALLEJA", "MALDONADO", "MONTEVIDEO", "PAYSANDÚ", "RÍO NEGRO", "RIVERA", "ROCHA",
+  "SALTO", "SAN JOSÉ", "SORIANO", "TACUAREMBÓ", "TREINTA Y TRES",
+] as const;
+
+const DEI_DEPT_BY_FOLDED = new Map(
+  DEI_DEPARTMENTS.map((d) => [asciiFold(d).toUpperCase(), d])
+);
+
+export function resolveDeiDepartment(location: string): string | null {
+  return DEI_DEPT_BY_FOLDED.get(asciiFold(location).trim().toUpperCase()) ?? null;
 }
 
 export class DEIProvider implements IDiscoveryProvider {
@@ -172,9 +183,12 @@ export class DEIProvider implements IDiscoveryProvider {
     if (nationwide) {
       records = await fetchAllRecords(null);
     } else {
-      const deptFilter = JSON.stringify({ [COL_DEPARTMENT]: loc });
-      const deptTotal = await probeFilter(deptFilter);
-      records = deptTotal > 0 ? await fetchAllRecords(deptFilter) : await fetchAllRecords(null);
+      // F1.5: resolver a la grafía canónica del departamento. Si no es un departamento
+      // reconocible (typo, ciudad, sin tilde no resoluble), devolver vacío — NUNCA bajar
+      // el padrón nacional completo por error (era el bug: "Paysandu" → todo Uruguay).
+      const canonical = resolveDeiDepartment(query.location);
+      if (canonical === null) return [];
+      records = await fetchAllRecords(JSON.stringify({ [COL_DEPARTMENT]: canonical }));
     }
 
     return records.filter((r) => !shouldDiscard(r)).map(mapRecord);

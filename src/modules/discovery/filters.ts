@@ -6,7 +6,7 @@ import type {
 } from "../../shared/types.js";
 import { getLogger } from "../../shared/logger.js";
 
-function asciiFold(input: string): string {
+export function asciiFold(input: string): string {
   return input.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 }
 

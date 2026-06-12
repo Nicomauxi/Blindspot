@@ -129,26 +129,33 @@ describe("mapRecord", () => {
 });
 
 describe("DEIProvider.discover", () => {
-  it("filtra por departamento cuando hay match", async () => {
-    mockFetch
-      .mockResolvedValueOnce(makeCKANResponse([makeRecord()], 1)) // probeFilter
-      .mockResolvedValueOnce(makeCKANResponse([makeRecord()], 1)); // fetchAllRecords
+  it("filtra por departamento (resuelve grafía canónica, sin probe)", async () => {
+    mockFetch.mockResolvedValueOnce(makeCKANResponse([makeRecord()], 1)); // fetchAllRecords directo
     const provider = new DEIProvider();
     const out = await provider.discover(BASE_QUERY);
     expect(out).toHaveLength(1);
     expect(out[0]!.name).toBe("CULTO");
-    const probeUrl = decodeURIComponent(String(mockFetch.mock.calls[0]![0])).replace(/\+/g, " ");
-    expect(probeUrl).toContain("Departamento (EP)");
-    expect(probeUrl).toContain("MONTEVIDEO");
+    expect(mockFetch).toHaveBeenCalledTimes(1); // sin probeFilter
+    const url = decodeURIComponent(String(mockFetch.mock.calls[0]![0])).replace(/\+/g, " ");
+    expect(url).toContain("Departamento (EP)");
+    expect(url).toContain("MONTEVIDEO");
   });
 
-  it("cae a nacional cuando el departamento no tiene registros", async () => {
-    mockFetch
-      .mockResolvedValueOnce(makeCKANResponse([], 0)) // probeFilter: 0
-      .mockResolvedValueOnce(makeCKANResponse([makeRecord({ "Departamento (EP)": "SALTO" })], 1)); // fetchAll(null)
+  it("F1.5: 'Paysandu' (sin tilde) resuelve a PAYSANDÚ, no baja el padrón nacional", async () => {
+    mockFetch.mockResolvedValueOnce(makeCKANResponse([makeRecord({ "Departamento (EP)": "PAYSANDÚ" })], 1));
+    const provider = new DEIProvider();
+    const out = await provider.discover({ niche: "other", location: "Paysandu" });
+    expect(out).toHaveLength(1);
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    const url = decodeURIComponent(String(mockFetch.mock.calls[0]![0])).replace(/\+/g, " ");
+    expect(url).toContain("PAYSANDÚ");
+  });
+
+  it("F1.5: location desconocida (ciudad/typo) devuelve vacío, NUNCA nacional", async () => {
     const provider = new DEIProvider();
     const out = await provider.discover({ niche: "other", location: "Atlantida" });
-    expect(out).toHaveLength(1);
+    expect(out).toHaveLength(0);
+    expect(mockFetch).not.toHaveBeenCalled(); // no se descarga nada
   });
 
   it("location vacío trae el padrón nacional sin probe", async () => {
@@ -160,11 +167,9 @@ describe("DEIProvider.discover", () => {
   });
 
   it("descarta no aprobados en el resultado", async () => {
-    mockFetch
-      .mockResolvedValueOnce(makeCKANResponse([makeRecord()], 2))
-      .mockResolvedValueOnce(
-        makeCKANResponse([makeRecord(), makeRecord({ _id: 2, RUT: "2", "Estado de la empresa": "Pendiente" })], 2)
-      );
+    mockFetch.mockResolvedValueOnce(
+      makeCKANResponse([makeRecord(), makeRecord({ _id: 2, RUT: "2", "Estado de la empresa": "Pendiente" })], 2)
+    );
     const provider = new DEIProvider();
     const out = await provider.discover(BASE_QUERY);
     expect(out).toHaveLength(1);
