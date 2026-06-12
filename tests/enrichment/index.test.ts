@@ -535,16 +535,28 @@ describe("enrichLead", () => {
     });
   });
 
-  it("emits site-unreachable tag when fetch fails after retries", async () => {
+  it("NO emite site-unreachable ante un error transitorio (red/timeout/403): el sitio puede existir", async () => {
     const lead = makeLead({ website: "https://example.com" });
     const r = await enrichLead(lead, { forceRefresh: false }, {
-      fetchHtml: fetchHtmlError(),
+      fetchHtml: fetchHtmlError(), // "network: ECONNREFUSED" — transitorio
       whoisLookup: whoisOk(null),
     });
     expect(r.outcome).toBe("fetched-error");
-    expect(r.tags_to_add).toContain("site-unreachable");
+    expect(r.tags_to_add).not.toContain("site-unreachable");
     const fp = r.digital_footprint;
     expect((fp as { fetch_error?: string }).fetch_error).toBeTruthy();
+  });
+
+  it("emite site-unreachable solo cuando el sitio está genuinamente ausente (404)", async () => {
+    const lead = makeLead({ website: "https://example.com" });
+    const r = await enrichLead(lead, { forceRefresh: false }, {
+      fetchHtml: vi.fn(async () => ({
+        status: 404, finalUrl: null, html: null, headers: {},
+        fetchedAt: new Date().toISOString(), error: "http-404",
+      })),
+      whoisLookup: whoisOk(null),
+    });
+    expect(r.tags_to_add).toContain("site-unreachable");
   });
 
   it("emits pixel-missing + analytics-missing on plain HTML without trackers", async () => {

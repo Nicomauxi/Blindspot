@@ -5,6 +5,7 @@ import { calculateContactReliability } from "../modules/scoring/confidence.js";
 import type { BuyerTypeScore, ScoreResult } from "../modules/scoring/types.js";
 import { normalizeUruguayMobile } from "../modules/enrichment/parsers/whatsapp.js";
 import { MAX_CONTACT_EMAILS } from "../modules/enrichment/index.js";
+import { isWebsiteGenuinelyMissing } from "../modules/enrichment/fetch-error.js";
 import {
   appendEnrichmentChange,
   createEnrichmentDiff,
@@ -356,6 +357,14 @@ export function cleanupMergedTagsForEnrichment(
   if (set.has("ig-confirmed")) set.delete("ig-heuristic");
   if (set.has("whatsapp-derived")) set.delete("whatsapp-missing");
   if (set.has("whatsapp-confirmed")) set.delete("whatsapp-missing");
+
+  // site-unreachable solo sobrevive si el último fetch confirma ausencia genuina (404/410).
+  // Un re-fetch exitoso o un error transitorio (403/timeout/5xx) limpian el tag stale.
+  // Antes el tag persistía del run anterior y dejaba 324 sitios operativos como "caídos".
+  const fetchError = (footprint as { fetch_error?: string } | undefined)?.fetch_error;
+  if (footprint && !isWebsiteGenuinelyMissing(fetchError)) {
+    set.delete("site-unreachable");
+  }
 
   const contactEmails = Array.isArray(footprint?.contact_emails)
     ? footprint.contact_emails.filter((email) => email.trim().length > 0)

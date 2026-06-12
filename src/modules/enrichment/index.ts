@@ -1,4 +1,5 @@
 import { computeInferredState } from "./inferred-state.js";
+import { isWebsiteGenuinelyMissing } from "./fetch-error.js";
 import { getLogger } from "../../shared/logger.js";
 import { isSocialOrMissingWeb } from "../discovery/filters.js";
 import { getDiscoveryConfig } from "../discovery/config.js";
@@ -170,7 +171,11 @@ function deriveTags(
 ): string[] {
   const tags: string[] = [];
 
-  if (footprint.fetch_error) {
+  // Solo taguear como inaccesible si el sitio realmente no existe (404/410/invalid-domain).
+  // Un 403 (bot-block), timeout, 5xx o error de red NO significan que el cliente no tenga
+  // sitio — solo que nosotros no pudimos analizarlo. Antes cualquier fetch_error marcaba
+  // site-unreachable, generando 510 falsos negativos (sitios operativos como Tienda Inglesa).
+  if (footprint.fetch_error && isWebsiteGenuinelyMissing(footprint.fetch_error)) {
     tags.push("site-unreachable");
   }
 
