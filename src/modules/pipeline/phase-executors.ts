@@ -95,9 +95,12 @@ export async function executeDiscoveryPhase(
   }
 
   const result = await processQueuedDiscoveryJobs(config.max_jobs);
+  // D5: los jobs fallidos deben degradar la fase (failureRatio), no reportarse como ok.
+  // itemsProcessed = solo exitosos (patrón de executeScorePhase: total = procesados + fallidos).
   return {
-    itemsProcessed: result.jobs_processed,
-    note: `leads_found=${result.leads_found}, leads_new=${result.leads_new}`,
+    itemsProcessed: result.jobs_processed - result.jobs_failed,
+    failedItems: result.jobs_failed,
+    note: `leads_found=${result.leads_found}, leads_new=${result.leads_new}, jobs_failed=${result.jobs_failed}`,
   };
 }
 

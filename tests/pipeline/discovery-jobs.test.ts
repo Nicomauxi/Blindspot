@@ -81,7 +81,7 @@ describe("processQueuedDiscoveryJobs", () => {
   it("chains enrichment after a queued discovery job when enabled", async () => {
     const result = await processQueuedDiscoveryJobs(1);
 
-    expect(result).toEqual({ jobs_processed: 1, leads_found: 12, leads_new: 4 });
+    expect(result).toEqual({ jobs_processed: 1, jobs_failed: 0, leads_found: 12, leads_new: 4 });
     expect(mocks.createRun).toHaveBeenCalledWith(expect.objectContaining({
       location: "Montevideo",
       niche: "restaurant",
@@ -134,6 +134,27 @@ describe("processQueuedDiscoveryJobs", () => {
   it("returns empty summary when no jobs are queued", async () => {
     mocks.listChain.limit.mockResolvedValue({ data: [], error: null });
     const result = await processQueuedDiscoveryJobs(4);
-    expect(result).toEqual({ jobs_processed: 0, leads_found: 0, leads_new: 0 });
+    expect(result).toEqual({ jobs_processed: 0, jobs_failed: 0, leads_found: 0, leads_new: 0 });
+  });
+
+  it("D5: cuenta los jobs fallidos en jobs_failed sin contarlos como exitosos", async () => {
+    mocks.listChain.limit.mockResolvedValue({
+      data: [
+        { id: "job-ok", source: "yelu", location: "Montevideo", niche: "restaurant", profile: null, concurrency: null, max_results: 100, cost_cap_usd: null, cpu_budget: null, enrich_after_discovery: false },
+        { id: "job-fail", source: "yelu", location: "Canelones", niche: "hotel", profile: null, concurrency: null, max_results: 100, cost_cap_usd: null, cpu_budget: null, enrich_after_discovery: false },
+      ],
+      error: null,
+    });
+    mocks.createRun.mockResolvedValueOnce({ id: "run-ok" }).mockResolvedValueOnce({ id: "run-fail" });
+    mocks.executeExternalDiscovery
+      .mockResolvedValueOnce({ fetched: 10, inserted: 3, corroborated: 0 })
+      .mockRejectedValueOnce(new Error("provider timeout"));
+
+    const result = await processQueuedDiscoveryJobs(2);
+
+    expect(result.jobs_processed).toBe(2);
+    expect(result.jobs_failed).toBe(1);
+    expect(result.leads_found).toBe(10);
+    expect(result.leads_new).toBe(3);
   });
 });

@@ -25,8 +25,15 @@ interface QueuedDiscoveryJob {
 
 export interface DiscoveryQueueSummary {
   jobs_processed: number;
+  jobs_failed: number;
   leads_found: number;
   leads_new: number;
+}
+
+interface DiscoveryJobResult {
+  leadsFound: number;
+  leadsNew: number;
+  failed: boolean;
 }
 
 function discoveryProfile(profile: string | null | undefined): "a" | "b" | "c" | "d" {
@@ -79,7 +86,7 @@ export async function listQueuedDiscoveryJobs(limit: number): Promise<QueuedDisc
   return (data ?? []) as QueuedDiscoveryJob[];
 }
 
-async function executeDiscoveryJob(job: QueuedDiscoveryJob): Promise<{ leadsFound: number; leadsNew: number } | null> {
+async function executeDiscoveryJob(job: QueuedDiscoveryJob): Promise<DiscoveryJobResult | null> {
   // N40: claim CAS — si otro proceso (timer vs fase de run) ya lo tomó, saltear.
   const claimed = await claimDiscoveryJob(job.id);
   if (!claimed) {
@@ -119,7 +126,7 @@ async function executeDiscoveryJob(job: QueuedDiscoveryJob): Promise<{ leadsFoun
       });
       await runFollowupEnrichment(job, result.runId);
 
-      return { leadsFound: result.fetched, leadsNew: result.inserted };
+      return { leadsFound: result.fetched, leadsNew: result.inserted, failed: false };
     }
 
     externalRunStartedAt = Date.now();
@@ -161,7 +168,7 @@ async function executeDiscoveryJob(job: QueuedDiscoveryJob): Promise<{ leadsFoun
     });
     await runFollowupEnrichment(job, run.id);
 
-    return { leadsFound: result.fetched, leadsNew: result.inserted };
+    return { leadsFound: result.fetched, leadsNew: result.inserted, failed: false };
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
     logger.error({ jobId: job.id, error: message }, "Discovery job failed");
@@ -180,7 +187,7 @@ async function executeDiscoveryJob(job: QueuedDiscoveryJob): Promise<{ leadsFoun
       payload: { job_id: job.id, source: job.source, location: job.location, error: message },
       dedup_key: `job_failed:${job.id}`,
     }).catch((err) => logger.warn({ err }, "Failed to create job_failed alert (non-critical)"));
-    return { leadsFound: 0, leadsNew: 0 };
+    return { leadsFound: 0, leadsNew: 0, failed: true };
   }
 }
 
@@ -188,16 +195,17 @@ export async function processQueuedDiscoveryJobs(concurrency = 1): Promise<Disco
   const jobs = await listQueuedDiscoveryJobs(concurrency);
 
   if (jobs.length === 0) {
-    return { jobs_processed: 0, leads_found: 0, leads_new: 0 };
+    return { jobs_processed: 0, jobs_failed: 0, leads_found: 0, leads_new: 0 };
   }
 
   const limit = pLimit(concurrency);
   const results = (
     await Promise.all(jobs.map((job) => limit(() => executeDiscoveryJob(job))))
-  ).filter((r): r is { leadsFound: number; leadsNew: number } => r !== null);
+  ).filter((r): r is DiscoveryJobResult => r !== null);
 
   return {
     jobs_processed: results.length,
+    jobs_failed: results.filter((r) => r.failed).length,
     leads_found: results.reduce((s, r) => s + r.leadsFound, 0),
     leads_new: results.reduce((s, r) => s + r.leadsNew, 0),
   };
