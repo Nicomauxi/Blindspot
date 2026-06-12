@@ -172,7 +172,17 @@ vi.mock("../../api/src/db/client.js", () => ({
                 return chain;
               },
               select: () => ({
+                // Comportamiento real de supabase-js: .single() sobre 0 filas → error PGRST116.
                 single: async () => {
+                  const t = _mockTrackings.find(
+                    (r) => r["id"] === matchedId &&
+                           (matchedStatus === null || r["status"] === matchedStatus)
+                  );
+                  if (!t) return { data: null, error: { code: "PGRST116", message: "0 rows" } };
+                  Object.assign(t, payload);
+                  return { data: { ...t }, error: null };
+                },
+                maybeSingle: async () => {
                   const t = _mockTrackings.find(
                     (r) => r["id"] === matchedId &&
                            (matchedStatus === null || r["status"] === matchedStatus)
@@ -461,6 +471,39 @@ describe("POST /api/v1/tracking/:id/transition", () => {
     expect(res.json().data.status).toBe("validation");
     expect(_lastEventInsert).toMatchObject({ event_type: "system_status_change", from_status: "pending", to_status: "validation" });
     expect(_auditInserts[0]).toMatchObject({ action: "tracking.transition", target_type: "lead" });
+    await app.close();
+  });
+
+  it("N2.2: una transición concurrente devuelve 409 state_conflict (no 500)", async () => {
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: ADMIN_ID, email: "admin@blindspot.local" });
+
+    // Simula la carrera: otro proceso ya movió el tracking después del read inicial.
+    // El mock filtra el UPDATE por status=currentStatus; cambiamos el row al vuelo
+    // interceptando el primer fetch (status leído = pending) y mutando luego.
+    const original = _mockTrackings[0]!;
+    const originalStatusGetter = original["status"];
+    let reads = 0;
+    Object.defineProperty(original, "status", {
+      configurable: true,
+      get() {
+        reads += 1;
+        // Primer read (handler lee currentStatus) → pending; después → ya cambiado.
+        return reads <= 1 ? originalStatusGetter : "observed";
+      },
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/v1/tracking/${TRACKING_ID}/transition`,
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ to_status: "validation", notes: "x" }),
+    });
+
+    Object.defineProperty(original, "status", { configurable: true, value: "pending", writable: true });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error_code).toBe("state_conflict");
     await app.close();
   });
 

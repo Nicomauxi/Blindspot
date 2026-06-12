@@ -431,14 +431,16 @@ export async function trackingRoutes(app: FastifyInstance): Promise<void> {
       });
     }
 
-    // Optimistic lock: only update if status is still what we read — prevents concurrent transition races
+    // Optimistic lock: only update if status is still what we read — prevents concurrent
+    // transition races. N23: maybeSingle (no single) — .single() sobre 0 filas devuelve
+    // error PGRST116 → toda carrera salía 500 y la rama 409 era código muerto.
     const { data: updatedTracking, error: updateErr } = await db
       .from("lead_tracking")
       .update({ status: toStatus })
       .eq("id", id)
       .eq("status", currentStatus)
       .select("*")
-      .single();
+      .maybeSingle();
 
     if (updateErr) {
       request.log.error({ error: updateErr }, "tracking transition update failed");
