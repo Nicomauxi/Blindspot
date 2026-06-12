@@ -27,6 +27,7 @@ echo "Levantando '$NAME' en :$PORT ..."
 docker run -d \
   --name "$NAME" \
   --restart unless-stopped \
+  --dns 1.1.1.1 --dns 8.8.8.8 \
   -p "$PORT:8080" \
   -v "$CONFIG_DIR:/etc/searxng" \
   searxng/searxng >/dev/null
