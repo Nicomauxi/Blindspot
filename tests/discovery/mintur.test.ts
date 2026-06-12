@@ -202,7 +202,7 @@ describe("mapRecord", () => {
     const candidate = mapRecord(record);
 
     expect(candidate.source).toBe("mintur");
-    expect(candidate.external_id).toBe("42");
+    expect(candidate.external_id).toMatch(/^[0-9a-f]{16}$/); // N82: hash estable, no el _id CKAN
     expect(candidate.source_confidence).toBe(0.8);
     expect(candidate.name).toBe("Restaurant Test");
     expect(candidate.address).toBe("Rambla 100, PUNTA DEL ESTE, MALDONADO");
@@ -370,7 +370,7 @@ describe("MINTURProvider.discover", () => {
     const result = await provider.discover(BASE_QUERY);
 
     expect(result).toHaveLength(1);
-    expect(result[0]!.external_id).toBe("1");
+    expect(result[0]!.external_id).toMatch(/^[0-9a-f]{16}$/); // N82
   });
 
   it("propaga errores de red sin swallow", async () => {

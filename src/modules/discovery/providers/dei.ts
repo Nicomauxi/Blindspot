@@ -5,6 +5,7 @@ import type {
   DiscoveryQuery,
   DiscoveryCandidate,
 } from "../../../shared/types.js";
+import { stableBusinessId } from "../stable-id.js";
 import { normalizeNiche, asciiFold } from "../filters.js";
 
 // Directorio de Empresas Industriales (DEI) del MIEM — dato abierto del Estado uruguayo
@@ -108,7 +109,9 @@ export function mapRecord(record: DEIRecord): DiscoveryCandidate {
     : asStr(record["Nombre comercial"]).trim();
   return {
     source: SOURCE,
-    external_id: asStr(record.RUT),
+    // N86: RUT + discriminador de establecimiento — un mismo RUT puede tener varios
+    // EP y el upsert por RUT solo colapsaba sucursales.
+    external_id: `${asStr(record.RUT)}#${stableBusinessId([record["Calle (EP)"], record["Numero (EP)"], record["Localidad (EP)"]]).slice(0, 8)}`,
     source_confidence: SOURCE_CONFIDENCE,
     name,
     address: buildAddress(record),

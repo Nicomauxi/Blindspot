@@ -96,10 +96,11 @@ describe("inferNiche", () => {
 });
 
 describe("mapRecord", () => {
-  it("mapea a DiscoveryCandidate: RUT como external_id, nombre comercial, contacto, sin GPS", () => {
+  it("mapea a DiscoveryCandidate: RUT#establecimiento como external_id, nombre comercial, contacto, sin GPS", () => {
     const c = mapRecord(makeRecord());
     expect(c.source).toBe("miem_dei");
-    expect(c.external_id).toBe("217231960015");
+    // N86: RUT + discriminador de establecimiento (8 hex)
+    expect(c.external_id).toMatch(/^217231960015#[0-9a-f]{8}$/);
     expect(c.source_confidence).toBe(0.9);
     expect(c.name).toBe("CULTO");
     expect(c.address).toBe("canelones 2154, MONTEVIDEO, MONTEVIDEO");
@@ -123,7 +124,8 @@ describe("mapRecord", () => {
       "Numero de telefono": 94974477 as unknown as string,
     });
     const c = mapRecord(rec);
-    expect(c.external_id).toBe("217231960015");
+    // N86: RUT + discriminador de establecimiento (8 hex)
+    expect(c.external_id).toMatch(/^217231960015#[0-9a-f]{8}$/);
     expect(c.phone).toBe("94974477");
   });
 });

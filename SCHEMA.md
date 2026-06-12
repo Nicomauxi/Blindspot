@@ -149,3 +149,12 @@ ORDER BY matched DESC;
 - `digital_footprint->'stack'`: plataforma/stack detectado.
 - `digital_footprint->'ssl'`: señal HTTPS derivada de la URL final.
 - `digital_footprint->'viewport'`: señal de viewport responsive.
+
+## external_id estables (N8.2, 2026-06-12)
+
+- **El `_id` del datastore CKAN NO es estable**: es un row-id autoincremental que cambia
+  al republicarse el dataset. Nunca usarlo como `external_id`.
+- `mintur`: `external_id = stableBusinessId(Operador, Direccion, Localidad)` (16 hex).
+- `miem_dei`: `external_id = RUT + '#' + stableBusinessId(Calle EP, Numero EP, Localidad EP)[0:8]`
+  (un RUT puede tener varios establecimientos — el discriminador preserva cada EP).
+- Migración one-shot aplicada: `scripts/migrate-stable-external-ids.ts` (2337 leads, backup 171628).

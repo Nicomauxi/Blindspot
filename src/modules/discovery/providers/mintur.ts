@@ -1,3 +1,4 @@
+import { stableBusinessId } from "../stable-id.js";
 import { fetch, Agent } from "undici";
 import type {
   IDiscoveryProvider,
@@ -76,7 +77,9 @@ export function mapRecord(record: MINTURRecord): DiscoveryCandidate {
     .join(", ");
   return {
     source: SOURCE,
-    external_id: String(record._id),
+    // N82: id derivado del negocio (operador+dirección+localidad) — el _id del
+    // datastore CKAN cambia al republicarse el dataset.
+    external_id: stableBusinessId([record.Operador, record.Direccion, record.Localidad]),
     source_confidence: SOURCE_CONFIDENCE,
     name: record.Operador,
     address: address || null,
