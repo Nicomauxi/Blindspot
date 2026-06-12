@@ -221,12 +221,31 @@ async function runInvariantCheck(runId: string, _isDryRun: boolean): Promise<Pha
     await appendRunLog(runId, `Invariant violated: ${passedSinScore} passed_filter leads without score`, "error");
   }
 
+  // N18/N37: re-validar el stock geo en cada run (el gate solo corre at-insert; sin esto
+  // cualquier endurecimiento futuro deja cohortes grandfathered indetectables). Solo
+  // warning — la limpieza es una decisión de datos, no un fallo del run.
+  let geoViolations: number | null = null;
+  try {
+    const { data: geoCount, error: geoError } = await supabase.rpc("count_pool_geo_violations");
+    if (!geoError && typeof geoCount === "number") {
+      geoViolations = geoCount;
+      if (geoCount > 0) {
+        await appendRunLog(runId, `Invariant warning: ${geoCount} pool leads with GPS outside Uruguay bbox`, "warn");
+      }
+    }
+  } catch {
+    // RPC ausente (migración no aplicada) → se omite el invariante geo.
+  }
+
   const result: PhaseResult = {
     started_at: startedAt,
     completed_at: new Date().toISOString(),
     status: passed ? "ok" : "failed",
   };
   if (!passed) result.error = `passed_sin_score=${passedSinScore}`;
+  if (geoViolations != null && geoViolations > 0) {
+    result.error = [result.error, `pool_geo_violations=${geoViolations}`].filter(Boolean).join("; ");
+  }
   return result;
 }
 

@@ -70,6 +70,19 @@ describe("computeContactProfile", () => {
     expect(landlineSig?.weight).toBe(8);
   });
 
+  it("N3.4/N36: un phone compartido (gestor) NO suma señal de contacto", () => {
+    const own = computeContactProfile({ ...empty_lead, niche: "restaurant", phone: "29030797" });
+    const shared = computeContactProfile({
+      ...empty_lead,
+      niche: "restaurant",
+      phone: "29030797",
+      tags: ["shared-phone-generic"],
+    });
+    expect(shared.score).toBeLessThan(own.score);
+    expect(shared.signals.find((s) => s.name === "phone" || s.name === "phone_landline")).toBeUndefined();
+    expect(shared.signals.find((s) => s.name === "phone_third_party")).toBeDefined();
+  });
+
   it("direccion sola informa ubicación pero no contacto listo", () => {
     const profile = computeContactProfile({
       ...empty_lead,

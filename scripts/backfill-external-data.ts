@@ -123,7 +123,7 @@ async function requalifyExternals(apply: boolean): Promise<{ scanned: number; ch
     for (;;) {
       const { data, error } = await db
         .from("leads")
-        .select("id, source, passed_filter, phone, website, canonical_fields, digital_footprint, corroborating_sources")
+        .select("id, source, passed_filter, phone, website, canonical_fields, digital_footprint, corroborating_sources, tags") // N19: tags imprescindible — leadHasContact excluye redes muertas por fb-dead/ig-dead
         .eq("source", source)
         .range(from, from + PAGE_SIZE - 1);
       if (error) throw new Error(`requalify load(${source}) failed: ${error.message}`);

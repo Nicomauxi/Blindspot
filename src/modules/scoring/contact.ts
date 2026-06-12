@@ -128,13 +128,19 @@ export function computeContactProfile(lead: Lead): ContactProfile {
 
   const phoneValue = getCanonicalPhone(lead) ?? lead.phone;
   if (phoneValue != null) {
-    // F3.3: el móvil (señal del dueño) pesa más que el fijo (gestor/oficina, típico DEI).
-    // Un fijo conocido usa phone_landline; móvil o desconocido usan el peso base.
-    const isLandline =
-      classifyUruguayPhone(phoneValue).type === "landline" || lead.tags.includes("landline-phone");
-    const phoneWeight = isLandline ? weights.phone_landline ?? weights.phone : weights.phone;
-    score += phoneWeight;
-    pushSignal(signals, isLandline ? "phone_landline" : "phone", phoneWeight, true);
+    // N36: un phone compartido por muchos leads no relacionados (gestor/estudio contable,
+    // típico DEI) NO es contacto del negocio — no suma, solo se registra la señal.
+    if (lead.tags.includes("shared-phone-generic")) {
+      signals.push({ name: "phone_third_party", weight: 0, value: true });
+    } else {
+      // F3.3: el móvil (señal del dueño) pesa más que el fijo (gestor/oficina, típico DEI).
+      // Un fijo conocido usa phone_landline; móvil o desconocido usan el peso base.
+      const isLandline =
+        classifyUruguayPhone(phoneValue).type === "landline" || lead.tags.includes("landline-phone");
+      const phoneWeight = isLandline ? weights.phone_landline ?? weights.phone : weights.phone;
+      score += phoneWeight;
+      pushSignal(signals, isLandline ? "phone_landline" : "phone", phoneWeight, true);
+    }
   }
 
   if (fp?.phone_confirmed) {

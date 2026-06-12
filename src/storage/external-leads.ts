@@ -38,7 +38,13 @@ export async function insertExternalLead(
     ...(vertical ? { vertical } : {}),
   });
 
-  const tags = [...(opts.extraTags ?? []), ...(vertical ? [verticalTag(vertical)] : [])];
+  // N20: espejo rejected:* en tags para rechazados — mismo contrato que el path google
+  // (upsertLeads), que las vistas/queries operativas asumen.
+  const tags = [
+    ...(opts.extraTags ?? []),
+    ...(vertical ? [verticalTag(vertical)] : []),
+    ...(qualification.passed_filter ? [] : qualification.rejection_reasons.map((r) => `rejected:${r}`)),
+  ];
 
   // N16: el dedup intra-fuente excluye leads de la misma fuente del match, así que en
   // re-runs TODO candidato re-fetcheado cae acá sobre su propia fila. El upsert ciego
