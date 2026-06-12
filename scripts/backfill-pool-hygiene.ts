@@ -94,7 +94,9 @@ async function applyExclusions(
   if (failures.length > 0) {
     console.error(`  fallos (${failures.length}):`);
     for (const f of failures.slice(0, 10)) console.error(`    ! ${f}`);
-    process.exit(1);
+    // throw (no exit): deja que main() decida — un fallo parcial no debe saltearse
+    // las fases siguientes sin aviso.
+    throw new Error(`applyExclusions(${reason}) falló para ${failures.length} lead(s)`);
   }
 }
 

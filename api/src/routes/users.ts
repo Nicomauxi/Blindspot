@@ -432,7 +432,8 @@ export async function usersRoutes(app: FastifyInstance): Promise<void> {
     }
 
     // N28: el audit se escribe DESPUÉS del delete exitoso — antes quedaba un
-    // 'user.delete' registrado aunque el delete fallara por FK.
+    // 'user.delete' registrado aunque el delete fallara por FK. Si el audit falla,
+    // el delete ya ocurrió: se loguea fuerte, no se pierde en silencio.
     await writeAuditLog(
       authUser.id,
       authUser.role,
@@ -442,6 +443,8 @@ export async function usersRoutes(app: FastifyInstance): Promise<void> {
       { email: (existing as { email: string }).email, role: (existing as { role: string }).role },
       request.ip,
       request.headers["user-agent"]
+    ).catch((err: unknown) =>
+      request.log.error({ err, deletedUserId: id }, "audit write failed AFTER user delete — registrar manualmente")
     );
 
     return reply.status(204).send();

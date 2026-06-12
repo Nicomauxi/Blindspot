@@ -136,7 +136,11 @@ function computeBuyerScore(
     weightTotal += weight;
   }
   let base = weightTotal > 0 ? Math.round(weightedSum / weightTotal) : 0;
-  base = Math.round(base * tagMultiplier * uncertaintyMultiplier);
+  // Los multiplicadores COMPONEN (derived 0.7 × uncertain 0.5 = 0.35): es intencional
+  // —dos dudas valen menos que una— pero con piso 1 para no colapsar la señal a 0
+  // en leads que pasaron los gates.
+  const combined = tagMultiplier * uncertaintyMultiplier;
+  base = combined < 1 && base > 0 ? Math.max(1, Math.round(base * combined)) : Math.round(base * combined);
 
   const modifiers: string[] = [...(tagModifier ? [tagModifier] : []), ...uncertaintyModifiers];
   let adjustments = 0;

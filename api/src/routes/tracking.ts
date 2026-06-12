@@ -118,7 +118,18 @@ export async function trackingRoutes(app: FastifyInstance): Promise<void> {
     // N24: el lead_filter COMPLETO (mismo gate que GET /leads), no solo contact_tier —
     // trackear es lo que desbloquea contactos, así que el bypass acá rompía el RBAC.
     if (authUser.role === "cm" && authUser.lead_filter) {
-      if (!passesLeadFilter(lead as Record<string, unknown>, authUser.lead_filter)) {
+      const leadForFilter = { ...(lead as Record<string, unknown>) };
+      // lead_dashboard no expone lead_company_data: si el filtro restringe por
+      // detected_sub_niche hay que traerlo de leads o el gate se saltea en silencio.
+      if (Array.isArray(authUser.lead_filter["detected_sub_niche"]) && leadForFilter["lead_company_data"] === undefined) {
+        const { data: companyRow } = await db
+          .from("leads")
+          .select("lead_company_data")
+          .eq("id", parsed.data.lead_id)
+          .maybeSingle();
+        leadForFilter["lead_company_data"] = (companyRow as { lead_company_data?: unknown } | null)?.lead_company_data ?? null;
+      }
+      if (!passesLeadFilter(leadForFilter, authUser.lead_filter)) {
         return reply.status(404).send({ error: "Lead not found", error_code: "not_found" });
       }
     }
@@ -232,7 +243,8 @@ export async function trackingRoutes(app: FastifyInstance): Promise<void> {
 
     // N26: la búsqueda va en SQL ANTES del limit — filtrar en memoria después del limit
     // hacía inhallables los case_codes fuera de la primera página y mentía el total.
-    const sanitizeTerm = (value: string): string => value.replace(/[%_,()]/g, " ").trim();
+    // '.' y ':' son sintaxis de PostgREST dentro de or() — un término como 'john.doe' rompía el parseo del filtro.
+    const sanitizeTerm = (value: string): string => value.replace(/[%_,().:*]/g, " ").trim();
     if (f.case_code && sanitizeTerm(f.case_code)) {
       query = query.ilike("case_code", `%${sanitizeTerm(f.case_code)}%`);
     }
