@@ -1,3 +1,4 @@
+import { estimateCostUsd } from "./pricing.js";
 import { z } from "zod";
 import type {
   LeadAssistantBrief,
@@ -10,9 +11,6 @@ import {
   buildCommercialAssistantMessages,
   parseCommercialAssistant,
 } from "./lead-assistant.js";
-
-const DEFAULT_COST_PER_1K_IN = 0.0005;
-const DEFAULT_COST_PER_1K_OUT = 0.0015;
 
 const openAiCompatResponseSchema = z.object({
   choices: z
@@ -90,7 +88,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
     const text = (data.choices?.[0]?.message?.content ?? "").trim();
     const tokensIn = data.usage?.prompt_tokens ?? 0;
     const tokensOut = data.usage?.completion_tokens ?? 0;
-    const cost = (tokensIn / 1000) * DEFAULT_COST_PER_1K_IN + (tokensOut / 1000) * DEFAULT_COST_PER_1K_OUT;
+    const cost = estimateCostUsd(this.model, tokensIn, tokensOut);
 
     return { text, tokensIn, tokensOut, cost };
   }
