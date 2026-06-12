@@ -140,6 +140,20 @@ function hasEmailConflict(primary: Lead, secondary: Lead): boolean {
   return primaryEmail !== null && secondaryEmail !== null && primaryEmail !== secondaryEmail;
 }
 
+// Duplicado INTRA-fuente: la misma fuente listó el negocio dos veces. findCrossSourceMatch
+// ignora pares de la misma fuente, así que estos dups nunca se consolidaban (F2.6). Señal
+// segura: nombre normalizado idéntico + misma puerta (o, sin puertas, misma calle).
+function isIntraSourceDuplicate(a: Lead, b: Lead): boolean {
+  if (a.source !== b.source) return false;
+  if (normalizeName(a.name) !== normalizeName(b.name)) return false;
+  const pa = parseStreetAddress(a.address);
+  const pb = parseStreetAddress(b.address);
+  if (pa.door !== null && pb.door !== null) {
+    return pa.door === pb.door && streetAddressesMatch(pa, pb);
+  }
+  return streetAddressesMatch(pa, pb);
+}
+
 function chooseBestKeeper(
   lead: Lead,
   keepers: Lead[],
@@ -151,8 +165,9 @@ function chooseBestKeeper(
   let bestSimilarity = -1;
 
   for (const keeper of keepers) {
-    const match = findCrossSourceMatch(candidate, [keeper], threshold, geoRadiusMeters);
-    if (!match) continue;
+    const crossMatch = findCrossSourceMatch(candidate, [keeper], threshold, geoRadiusMeters);
+    const intraDup = isIntraSourceDuplicate(lead, keeper);
+    if (!crossMatch && !intraDup) continue;
     if (!franchiseSafeToMerge(lead, keeper, geoRadiusMeters)) continue;
 
     const similarity = nameSimilarity(lead.name, keeper.name);
