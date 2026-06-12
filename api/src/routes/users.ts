@@ -385,6 +385,12 @@ export async function usersRoutes(app: FastifyInstance): Promise<void> {
       { table: "outreach_campaigns", column: "user_id", label: "outreach_campaigns" },
       { table: "discovery_jobs", column: "user_id", label: "discovery_jobs" },
       { table: "llm_usage_log", column: "user_id", label: "llm_usage_log" },
+      // N28: estos FKs a users faltaban en los checks — el delete los pasaba y luego
+      // reventaba 500 contra el FK RESTRICT, con el audit 'user.delete' ya escrito.
+      { table: "lead_tracking", column: "owner_id", label: "lead_tracking" },
+      { table: "lead_feedback", column: "actor_user_id", label: "lead_feedback" },
+      { table: "discovery_job_batches", column: "user_id", label: "discovery_job_batches" },
+      { table: "leads", column: "contacted_by", label: "leads_contacted" },
     ] as const;
 
     const blockers: string[] = [];
@@ -412,7 +418,13 @@ export async function usersRoutes(app: FastifyInstance): Promise<void> {
       });
     }
 
-    // Write audit log BEFORE destructive action
+    const { error: deleteError } = await db.from("users").delete().eq("id", id);
+    if (deleteError) {
+      return reply.status(500).send({ error: "Database error", error_code: "db_error" });
+    }
+
+    // N28: el audit se escribe DESPUÉS del delete exitoso — antes quedaba un
+    // 'user.delete' registrado aunque el delete fallara por FK.
     await writeAuditLog(
       authUser.id,
       authUser.role,
@@ -423,11 +435,6 @@ export async function usersRoutes(app: FastifyInstance): Promise<void> {
       request.ip,
       request.headers["user-agent"]
     );
-
-    const { error: deleteError } = await db.from("users").delete().eq("id", id);
-    if (deleteError) {
-      return reply.status(500).send({ error: "Database error", error_code: "db_error" });
-    }
 
     return reply.status(204).send();
   });

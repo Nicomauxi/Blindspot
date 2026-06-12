@@ -88,7 +88,12 @@ vi.mock("../../api/src/db/client.js", () => ({
         table === "service_pricing" ||
         table === "outreach_campaigns" ||
         table === "discovery_jobs" ||
-        table === "llm_usage_log"
+        table === "llm_usage_log" ||
+        // N28: FKs CRM agregados a los historyChecks
+        table === "lead_tracking" ||
+        table === "lead_feedback" ||
+        table === "discovery_job_batches" ||
+        table === "leads"
       ) {
         return {
           select: () => ({

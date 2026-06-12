@@ -87,19 +87,6 @@ function isRegressionTransition(from: CrmStatus, to: CrmStatus): boolean {
   return STATUS_ORDER[to] < STATUS_ORDER[from];
 }
 
-function matchesTrackingSearch(tracking: Record<string, unknown>, searchTerms: string[]): boolean {
-  if (searchTerms.length === 0) return true;
-  const haystack = [
-    tracking["case_code"],
-    tracking["title"],
-    tracking["lead_name"],
-    tracking["lead_id"],
-  ]
-    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
-    .join(" ")
-    .toLowerCase();
-  return searchTerms.every((term) => haystack.includes(term));
-}
 
 export async function trackingRoutes(app: FastifyInstance): Promise<void> {
   // POST /api/v1/tracking — create a new CRM tracking entry
@@ -243,6 +230,29 @@ export async function trackingRoutes(app: FastifyInstance): Promise<void> {
     if (f.created_after) query = query.gte("started_at", f.created_after);
     if (restrictLeadIds) query = query.in("lead_id", restrictLeadIds);
 
+    // N26: la búsqueda va en SQL ANTES del limit — filtrar en memoria después del limit
+    // hacía inhallables los case_codes fuera de la primera página y mentía el total.
+    const sanitizeTerm = (value: string): string => value.replace(/[%_,()]/g, " ").trim();
+    if (f.case_code && sanitizeTerm(f.case_code)) {
+      query = query.ilike("case_code", `%${sanitizeTerm(f.case_code)}%`);
+    }
+    if (f.title && sanitizeTerm(f.title)) {
+      query = query.ilike("title", `%${sanitizeTerm(f.title)}%`);
+    }
+    if (f.q && sanitizeTerm(f.q)) {
+      const term = sanitizeTerm(f.q);
+      // q también puede matchear el nombre del lead: resolver ids por nombre primero.
+      const { data: nameMatches } = await db
+        .from("leads")
+        .select("id")
+        .ilike("name", `%${term}%`)
+        .limit(1000);
+      const nameIds = ((nameMatches ?? []) as Array<{ id: string }>).map((l) => l.id);
+      const ors = [`case_code.ilike.%${term}%`, `title.ilike.%${term}%`];
+      if (nameIds.length > 0) ors.push(`lead_id.in.(${nameIds.join(",")})`);
+      query = query.or(ors.join(","));
+    }
+
     const { data, error, count } = await query.limit(f.limit);
     if (error) {
       request.log.error({ error }, "tracking list failed");
@@ -267,14 +277,7 @@ export async function trackingRoutes(app: FastifyInstance): Promise<void> {
       lead_name: leadNames[t["lead_id"] as string] ?? null,
     }));
 
-    const searchTerms = [f.q, f.case_code, f.title]
-      .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
-      .map((value) => value.trim().toLowerCase());
-    const filtered = searchTerms.length > 0
-      ? enriched.filter((tracking) => matchesTrackingSearch(tracking, searchTerms))
-      : enriched;
-
-    return reply.status(200).send({ data: filtered, total: searchTerms.length > 0 ? filtered.length : (count ?? filtered.length) });
+    return reply.status(200).send({ data: enriched, total: count ?? enriched.length });
   });
 
   // GET /api/v1/tracking/:id — get tracking with events
@@ -492,7 +495,20 @@ export async function trackingRoutes(app: FastifyInstance): Promise<void> {
       channel:       parsed.data.channel ?? null,
       reminder_at:   parsed.data.reminder_at ?? null,
     });
-    if (eventErr) request.log.error({ error: eventErr }, "tracking transition event insert failed");
+    if (eventErr) {
+      // N25: sin evento no hay timeline ni canal registrado — revertir la transición
+      // (compensación best-effort, no hay transacción vía PostgREST) y avisar 500.
+      request.log.error({ error: eventErr }, "tracking transition event insert failed — reverting status");
+      const { error: revertErr } = await db
+        .from("lead_tracking")
+        .update({ status: currentStatus })
+        .eq("id", id)
+        .eq("status", toStatus);
+      if (revertErr) {
+        request.log.error({ error: revertErr }, "tracking transition revert failed (estado inconsistente)");
+      }
+      return reply.status(500).send({ error: "Database error", error_code: "db_error" });
+    }
 
     const { error: auditErr } = await db.from("audit_log").insert({
       actor_user_id: authUser.id,
