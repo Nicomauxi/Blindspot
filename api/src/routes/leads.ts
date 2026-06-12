@@ -235,6 +235,11 @@ const listQuerySchema = z.object({
     .enum(["true", "false"])
     .optional()
     .transform((v) => (v === undefined ? undefined : v === "true")),
+  // C1: filtrar el segmento caliente demanda-sin-web.
+  opportunity_no_web: z
+    .enum(["true", "false"])
+    .optional()
+    .transform((v) => (v === undefined ? undefined : v === "true")),
   commercial_offer_type: z.enum(["marketing", "software", "both", "unknown"]).optional(),
   q: z.string().optional(),
   location_key: z.string().trim().min(1).optional(),
@@ -1041,6 +1046,9 @@ function normalizeLeadRow(row: JsonRecord): JsonRecord {
     // M3/D10: columnas derivadas de lead_dashboard para badges de UI.
     sellable: asBooleanOrNull(row["sellable"]),
     website_kind: asNullableString(row["website_kind"]),
+    // C1/B1: segmento "demanda sin web" + score demand-gap.
+    opportunity_no_web: asBooleanOrNull(row["opportunity_no_web"]),
+    demand_gap_score: asNullableNumber(row["demand_gap_score"]),
   };
 
   const fieldSources = buildFieldSources(normalized, canonicalFields, corroboratingSources);
@@ -1269,6 +1277,7 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
         source,
         primary_offer,
         sellable,
+        opportunity_no_web,
         commercial_offer_type,
         q,
         location_key,
@@ -1333,6 +1342,9 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
       }
       if (sellable !== undefined) {
         query = query.eq("sellable", sellable);
+      }
+      if (opportunity_no_web !== undefined) {
+        query = query.eq("opportunity_no_web", opportunity_no_web);
       }
       if (q) {
         query = query.textSearch("search_vector", q, { type: "plain", config: "spanish" });

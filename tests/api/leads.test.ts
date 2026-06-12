@@ -453,6 +453,22 @@ describe("GET /api/v1/leads", () => {
     await app.close();
   });
 
+  it("C1: el filtro opportunity_no_web=true se traduce a eq sobre esa columna", async () => {
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/leads?opportunity_no_web=true",
+      headers: { authorization: `Bearer ${token}` },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(_eqFilterCalls).toContainEqual({ column: "opportunity_no_web", value: true });
+    await app.close();
+  });
+
   it("M3: sin el parámetro sellable no se filtra por esa columna", async () => {
     const { buildServer } = await import("../../api/src/server.js");
     const app = await buildServer();
