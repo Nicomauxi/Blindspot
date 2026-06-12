@@ -119,6 +119,32 @@ export function makeSearxngDeps(opts: { baseUrl?: string; throttleMs?: number; f
   };
 }
 
+function normalizeAlnum(s: string): string {
+  return s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function profileHandle(profileUrl: string): string {
+  try {
+    const seg = new URL(profileUrl).pathname.split("/").filter(Boolean);
+    if (seg[0] === "profile.php") return new URL(profileUrl).searchParams.get("id") ?? "";
+    return seg[0] ?? "";
+  } catch {
+    return "";
+  }
+}
+
+// El handle del perfil "se parece" al nombre del negocio. Clave para engines como yandex
+// que devuelven la URL correcta pero SIN título/snippet usable (el scorer por-snippet falla).
+// clearbarberia ≈ "CLEAR barberia"; barberia_black_jack_uruguay ⊇ "Barberia Black jack".
+export function handleMatchesName(profileUrl: string, name: string): boolean {
+  const handle = normalizeAlnum(profileHandle(profileUrl));
+  const n = normalizeAlnum(name);
+  if (handle.length < 4 || n.length < 4) return false;
+  return handle.includes(n) || n.includes(handle);
+}
+
+const DISCOVERY_THRESHOLD = 0.4;
+
 async function discoverPlatform(
   platform: SocialSearchPlatform,
   lead: Pick<Lead, "name" | "address">,
@@ -126,14 +152,35 @@ async function discoverPlatform(
 ): Promise<SocialSearchPlatformResult> {
   const query = buildQuery(platform, lead);
   const raw = await deps.search(query);
-  const results = raw
+  const scored = raw
     .filter((r) => typeof r.url === "string" && r.url.length > 0)
     // Normalizar a URL de PERFIL y descartar contenido (/p/, /reel/, /explore/). Sin esto
     // ~64% de los "hits" eran posts sueltos, inservibles para identidad/followers del negocio.
     .map((r) => ({ r, profile: extractProfileUrl(r.url!, platform) }))
     .filter((x): x is { r: SearxngSearchResult; profile: string } => x.profile !== null)
-    .map(({ r, profile }) => scoreResult({ title: r.title ?? "", snippet: r.content ?? "", url: profile }, platform, lead));
-  return selectBest(query, results);
+    .map(({ r, profile }) => {
+      const result = scoreResult({ title: r.title ?? "", snippet: r.content ?? "", url: profile }, platform, lead);
+      // handle_match: rescata engines sin snippet (yandex devuelve la URL correcta pero
+      // título/contenido vacíos). SOLO instagram: los handles de IG son identidad limpia;
+      // los de FB son ruidosos (ej. "dragonchinoecija" = otro negocio en España). FB sigue
+      // exigiendo match por snippet (name_in_title).
+      const handleMatch = platform === "instagram" && handleMatchesName(profile, lead.name);
+      const score = handleMatch ? Number(Math.min(1, result.score + 0.6).toFixed(2)) : result.score;
+      return { result: { ...result, score }, handleMatch };
+    });
+
+  // Aceptar si hay name_in_title (snippet rico) O handle_match (URL confiable sin snippet).
+  const eligible = scored.filter(
+    ({ result, handleMatch }) => result.score >= DISCOVERY_THRESHOLD && (result.signals.includes("name_in_title") || handleMatch)
+  );
+  const best = [...eligible].sort((a, b) => b.result.score - a.result.score)[0] ?? null;
+  return {
+    query,
+    results: scored.map((s) => s.result),
+    best_url: best?.result.url ?? null,
+    additional_phones: best?.result.phones_found ?? [],
+    confidence: best?.result.score ?? 0,
+  };
 }
 
 // Descubre IG + FB de un lead vía SearXNG. throttleMs se aplica entre las dos queries

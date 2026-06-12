@@ -11,6 +11,7 @@ import { runSocialDiscovery } from "../../src/modules/social-enrich/social-disco
 import {
   discoverSocialViaSearxng,
   extractProfileUrl,
+  handleMatchesName,
   type SocialDiscoverDeps,
 } from "../../src/modules/social-enrich/social-discover-searxng.js";
 import { isDiscoverCandidate } from "../../src/modules/social-enrich/social-discover-run.js";
@@ -59,7 +60,32 @@ describe("extractProfileUrl (perfil vs contenido)", () => {
   });
 });
 
+describe("handleMatchesName (rescate de engines sin snippet)", () => {
+  it("matchea handle ≈ nombre del negocio", () => {
+    expect(handleMatchesName("https://www.instagram.com/clearbarberia/", "CLEAR barberia")).toBe(true);
+    expect(handleMatchesName("https://www.instagram.com/barberia_black_jack_uruguay/", "Barberia Black jack")).toBe(true);
+  });
+  it("rechaza handles que no se parecen", () => {
+    expect(handleMatchesName("https://www.instagram.com/otracosa/", "CLEAR barberia")).toBe(false);
+    expect(handleMatchesName("https://www.instagram.com/ab/", "AB")).toBe(false); // muy corto
+  });
+});
+
 describe("discoverSocialViaSearxng", () => {
+  it("rescata un perfil de IG por handle aunque el engine no traiga snippet (caso yandex)", async () => {
+    const deps: SocialDiscoverDeps = {
+      // yandex: URL correcta pero título/contenido vacíos.
+      search: vi.fn(async (q: string) =>
+        q.includes("instagram")
+          ? [{ url: "https://www.instagram.com/clearbarberia/", title: "Link to instagram.com", content: "The site owner hides the web page description." }]
+          : []
+      ),
+      delay: async () => {},
+    };
+    const res = await discoverSocialViaSearxng({ name: "CLEAR barberia", address: "Montevideo" }, deps);
+    expect(res.instagram.best_url).toBe("https://www.instagram.com/clearbarberia/");
+  });
+
   it("selecciona el mejor perfil de IG por nombre+ciudad", async () => {
     const deps: SocialDiscoverDeps = {
       search: vi.fn(async (q: string) =>
