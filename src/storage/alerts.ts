@@ -113,20 +113,25 @@ export async function getUnreadCount(userId: string): Promise<number> {
 
 export async function markAlertRead(alertId: string, userId: string): Promise<void> {
   const db = getSupabase();
+  // N93: solo alertas propias o broadcast — sin el filtro, un cm podía marcar/archivar
+  // alertas dirigidas a OTRO usuario adivinando IDs.
   const { error } = await db
     .from("system_alerts")
     .update({ status: "read", read_at: new Date().toISOString(), read_by: userId })
     .eq("id", alertId)
-    .eq("status", "pending");
+    .eq("status", "pending")
+    .or(`target_user_id.eq.${userId},target_user_id.is.null`);
   if (error) throw new Error(`markAlertRead failed: ${error.message}`);
 }
 
-export async function archiveAlert(alertId: string, _userId: string): Promise<void> {
+export async function archiveAlert(alertId: string, userId: string): Promise<void> {
   const db = getSupabase();
+  // N93: ídem markAlertRead — propiedad o broadcast.
   const { error } = await db
     .from("system_alerts")
     .update({ status: "archived" })
     .eq("id", alertId)
+    .or(`target_user_id.eq.${userId},target_user_id.is.null`)
     .neq("status", "archived");
   if (error) throw new Error(`archiveAlert failed: ${error.message}`);
 }

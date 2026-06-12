@@ -1439,7 +1439,7 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
 
     let rows;
     try {
-      rows = await bulkInsertDiscoveryJobs(jobDefs, parsed.data.jobs.some((job) => job.predictive_context) ? "predictive_location" : "manual");
+      rows = await bulkInsertDiscoveryJobs(jobDefs, parsed.data.jobs.some((job) => job.predictive_context) ? "predictive_location" : "manual", getAuthUser(request).id);
     } catch (err) {
       request.log.error({ err }, "bulk discovery job insert failed");
       return reply.status(500).send({ error: "Database error", error_code: "db_error" });

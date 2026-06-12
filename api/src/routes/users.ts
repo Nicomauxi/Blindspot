@@ -263,6 +263,14 @@ export async function usersRoutes(app: FastifyInstance): Promise<void> {
     }
 
     const patch = parseResult.data;
+    // N94: un admin no puede auto-desactivarse ni auto-degradarse (lockout).
+    const authUserPatch = getAuthUser(request);
+    if (id === authUserPatch.id && (patch.active === false || (patch.role && patch.role !== "admin"))) {
+      return reply.status(400).send({
+        error: "No podés desactivarte ni degradarte a vos mismo",
+        error_code: "self_modify_forbidden",
+      });
+    }
     const effectiveRole =
       patch.role ?? (existing as { role: string }).role;
 

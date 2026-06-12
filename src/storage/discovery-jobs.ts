@@ -183,7 +183,9 @@ export interface BulkJobDefinition {
 
 export async function bulkInsertDiscoveryJobs(
   jobs: BulkJobDefinition[],
-  triggeredBy = "admin_bulk"
+  triggeredBy = "admin_bulk",
+  // N95: trazabilidad — alineado con POST /discovery/jobs y /job-batches.
+  userId: string | null = null
 ): Promise<DiscoveryJobRow[]> {
   if (jobs.length === 0) return [];
   const db = getSupabase();
@@ -195,6 +197,7 @@ export async function bulkInsertDiscoveryJobs(
     cpu_budget: "balanced",
     status: "queued",
     triggered_by: triggeredBy,
+    user_id: userId,
     leads_found: 0,
     leads_new: 0,
     batch_id: null,
