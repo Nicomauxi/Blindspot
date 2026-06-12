@@ -6,6 +6,19 @@ import { getLeadInferredState, inferredBool } from "./state.js";
 
 export const CONTACTABLE_TIERS = new Set<ContactTier>(["A", "B", "C"]);
 
+/**
+ * El tier A es el target comercial top. Un lead con contacto rico pero sin relevancia
+ * comercial NO debe colapsar a A (F3.1). Se excluyen:
+ *  - verticales B2B (industrial/otro de F1.4): fuera del ICP comercial.
+ *  - niche no reconocido ('other'/null): sin relevancia de rubro confirmada.
+ */
+export function qualifiesForCommercialTierA(lead: Lead): boolean {
+  const tags = lead.tags ?? [];
+  if (tags.includes("vertical-industrial") || tags.includes("vertical-otro")) return false;
+  if (!lead.niche || lead.niche === "other") return false;
+  return true;
+}
+
 export interface ContactProfile {
   score: number;
   tier: ContactTier;
@@ -171,9 +184,15 @@ export function computeContactProfile(lead: Lead): ContactProfile {
 
   const clampedScore = Math.max(0, Math.min(config.cap, score));
 
+  let tier = resolveTier(clampedScore, config.thresholds);
+  // F3.1: degradar A→B si el lead no es target comercial (vertical B2B o niche no reconocido).
+  if (tier === "A" && !qualifiesForCommercialTierA(lead)) {
+    tier = "B";
+  }
+
   return {
     score: clampedScore,
-    tier: resolveTier(clampedScore, config.thresholds),
+    tier,
     signals,
   };
 }

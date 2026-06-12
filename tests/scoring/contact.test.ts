@@ -16,9 +16,10 @@ describe("computeContactProfile", () => {
     ]);
   });
 
-  it("multicanal fuerte sube a tier A", () => {
+  it("multicanal fuerte sube a tier A (con relevancia de niche)", () => {
     const profile = computeContactProfile({
       ...empty_lead,
+      niche: "restaurant",
       canonical_fields: { email: "owner@example.com" },
       phone: "099123456",
       whatsapp: "099123456",
@@ -29,6 +30,34 @@ describe("computeContactProfile", () => {
     expect(profile.score).toBe(100);
     expect(profile.tier).toBe("A");
     expect(CONTACTABLE_TIERS.has(profile.tier)).toBe(true);
+  });
+
+  it("F3.1: contacto multicanal pero niche 'other' NO colapsa a A (→ B)", () => {
+    const profile = computeContactProfile({
+      ...empty_lead,
+      niche: "other",
+      canonical_fields: { email: "owner@example.com" },
+      phone: "099123456",
+      whatsapp: "099123456",
+      website: "https://negocio.test",
+      address: "18 de Julio 1234",
+    });
+    expect(profile.score).toBe(100);
+    expect(profile.tier).toBe("B");
+  });
+
+  it("F3.1: vertical B2B (industrial) con contacto rico NO es tier A (→ B)", () => {
+    const profile = computeContactProfile({
+      ...empty_lead,
+      niche: "restaurant",
+      tags: ["vertical-industrial"],
+      canonical_fields: { email: "owner@example.com" },
+      phone: "099123456",
+      whatsapp: "099123456",
+      website: "https://negocio.test",
+      address: "18 de Julio 1234",
+    });
+    expect(profile.tier).toBe("B");
   });
 
   it("direccion sola informa ubicación pero no contacto listo", () => {
