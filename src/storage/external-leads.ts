@@ -3,7 +3,7 @@ import type { CorroboratingSource, DiscoveryCandidate, Lead } from "../shared/ty
 import { calculateContactReliability, calculateDataConfidence } from "../modules/scoring/confidence.js";
 import { isValidCoord } from "../modules/discovery/geo-text.js";
 import { isForeignAddress } from "../modules/discovery/geo-validator.js";
-import { candidateHasContact, qualifyExternalLead } from "../modules/discovery/qualification.js";
+import { candidateHasContact, leadHasContact, qualifyExternalLead } from "../modules/discovery/qualification.js";
 import { classifyVertical, verticalTag } from "../modules/discovery/vertical.js";
 import { mergeCanonicalFields } from "./canonical-field.js";
 
@@ -39,6 +39,20 @@ export async function insertExternalLead(
   });
 
   const tags = [...(opts.extraTags ?? []), ...(vertical ? [verticalTag(vertical)] : [])];
+
+  // N16: el dedup intra-fuente excluye leads de la misma fuente del match, así que en
+  // re-runs TODO candidato re-fetcheado cae acá sobre su propia fila. El upsert ciego
+  // pisaba tags/state/passed_filter/niche de leads ya deduplicados/enriquecidos.
+  const { data: existingRow, error: existingError } = await db
+    .from("leads")
+    .select("*")
+    .eq("place_id", placeId)
+    .maybeSingle();
+  if (existingError) throw new Error(`insertExternalLead lookup failed: ${existingError.message}`);
+
+  if (existingRow) {
+    return updateExistingExternalLead(existingRow as Lead, candidate, vertical);
+  }
 
   const { data, error } = await db
     .from("leads")
@@ -84,6 +98,61 @@ export async function insertExternalLead(
   }
 
   return lead;
+}
+
+// Razones de higiene que NUNCA se rescatan automáticamente (las puso un proceso de
+// dedup/limpieza, no la calificación de contacto).
+const NON_RESCUABLE_REASONS = new Set(["duplicate-secondary", "placeholder-name"]);
+
+// N16: re-descubrimiento de la misma fuente → refrescar SOLO los datos crudos del
+// provider (source_data, name, address, phone, website, gps faltante), preservando
+// tags/state/niche/dedup. N17: única excepción — rescue one-way de passed_filter
+// false→true si el lead ahora corrobora/tiene contacto y su rechazo era rescatable.
+async function updateExistingExternalLead(
+  existing: Lead,
+  candidate: DiscoveryCandidate,
+  vertical: ReturnType<typeof classifyVertical> | undefined
+): Promise<Lead> {
+  const db = getSupabase();
+
+  const corroborated = (existing.corroborating_sources ?? []).length > 0;
+  const qualification = qualifyExternalLead({
+    source: candidate.source,
+    hasContact: candidateHasContact(candidate) || leadHasContact(existing),
+    corroborated,
+    foreign: isForeignAddress(candidate.address ?? existing.address),
+    ...(vertical ? { vertical } : {}),
+  });
+
+  const reasons = existing.rejection_reasons ?? [];
+  const canRescue =
+    existing.passed_filter === false &&
+    qualification.passed_filter &&
+    !reasons.some((reason) => NON_RESCUABLE_REASONS.has(reason));
+
+  const payload: Record<string, unknown> = {
+    source_data: candidate.raw,
+    name: candidate.name,
+    address: candidate.address ?? existing.address,
+    phone: candidate.phone ?? existing.phone,
+    website: candidate.website ?? existing.website,
+    ...(existing.gps == null &&
+    candidate.latitude != null &&
+    candidate.longitude != null &&
+    isValidCoord(candidate.latitude, candidate.longitude)
+      ? { gps: `SRID=4326;POINT(${candidate.longitude} ${candidate.latitude})` }
+      : {}),
+    ...(canRescue ? { passed_filter: true, rejection_reasons: [] } : {}),
+  };
+
+  const { data, error } = await db
+    .from("leads")
+    .update(payload)
+    .eq("id", existing.id)
+    .select()
+    .single();
+  if (error) throw new Error(`insertExternalLead refresh failed: ${error.message}`);
+  return data as Lead;
 }
 
 export async function addCorroboratingSource(

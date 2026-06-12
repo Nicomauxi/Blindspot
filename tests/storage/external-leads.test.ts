@@ -92,6 +92,8 @@ describe("insertExternalLead", () => {
     const returnedLead = { id: "lead-1", place_id: "mintur:42", name: "Hotel Ejemplo" };
     const singleFn = vi.fn(async () => ({ data: returnedLead, error: null }));
     const upsertTable = {
+      // N3.1: lookup previo por place_id → no existe
+      select: vi.fn(() => ({ eq: vi.fn(() => ({ maybeSingle: vi.fn(async () => ({ data: null, error: null })) })) })),
       upsert: vi.fn(() => ({
         select: vi.fn(() => ({ single: singleFn })),
       })),
@@ -111,6 +113,8 @@ describe("insertExternalLead", () => {
     let capturedPayload: Record<string, unknown> | null = null;
     const singleFn = vi.fn(async () => ({ data: { id: "lead-2" }, error: null }));
     const upsertTable = {
+      // N3.1: lookup previo por place_id → no existe
+      select: vi.fn(() => ({ eq: vi.fn(() => ({ maybeSingle: vi.fn(async () => ({ data: null, error: null })) })) })),
       upsert: vi.fn((payload: Record<string, unknown>) => {
         capturedPayload = payload;
         return { select: vi.fn(() => ({ single: singleFn })) };
@@ -127,6 +131,8 @@ describe("insertExternalLead", () => {
     const returnedLead = { id: "lead-1", place_id: "mintur:42", name: "Hotel Ejemplo", canonical_fields: null };
     const singleFn = vi.fn(async () => ({ data: returnedLead, error: null }));
     const upsertTable = {
+      // N3.1: lookup previo por place_id → no existe
+      select: vi.fn(() => ({ eq: vi.fn(() => ({ maybeSingle: vi.fn(async () => ({ data: null, error: null })) })) })),
       upsert: vi.fn(() => ({
         select: vi.fn(() => ({ single: singleFn })),
       })),
@@ -141,7 +147,8 @@ describe("insertExternalLead", () => {
 
     supabaseRef.current = {
       from: vi.fn()
-        .mockReturnValueOnce(upsertTable)
+        .mockReturnValueOnce(upsertTable) // lookup place_id
+        .mockReturnValueOnce(upsertTable) // upsert
         .mockReturnValueOnce(leadsUpdateTable),
     };
 
@@ -156,21 +163,25 @@ describe("insertExternalLead", () => {
     const returnedLead = { id: "lead-1", place_id: "mintur:42", name: "Hotel Ejemplo", canonical_fields: null };
     const singleFn = vi.fn(async () => ({ data: returnedLead, error: null }));
     const upsertTable = {
+      // N3.1: lookup previo por place_id → no existe
+      select: vi.fn(() => ({ eq: vi.fn(() => ({ maybeSingle: vi.fn(async () => ({ data: null, error: null })) })) })),
       upsert: vi.fn(() => ({
         select: vi.fn(() => ({ single: singleFn })),
       })),
     };
-    const fromFn = vi.fn().mockReturnValueOnce(upsertTable);
+    const fromFn = vi.fn().mockReturnValue(upsertTable);
     supabaseRef.current = { from: fromFn };
 
     await insertExternalLead(candidate({ email: null }));
 
-    expect(fromFn).toHaveBeenCalledTimes(1);
+    expect(fromFn).toHaveBeenCalledTimes(2); // lookup + upsert (sin update de email)
   });
 
   it("propagates DB error", async () => {
     const singleFn = vi.fn(async () => ({ data: null, error: { message: "db error" } }));
     const upsertTable = {
+      // N3.1: lookup previo por place_id → no existe
+      select: vi.fn(() => ({ eq: vi.fn(() => ({ maybeSingle: vi.fn(async () => ({ data: null, error: null })) })) })),
       upsert: vi.fn(() => ({
         select: vi.fn(() => ({ single: singleFn })),
       })),
@@ -184,6 +195,8 @@ describe("insertExternalLead", () => {
     let capturedPayload: Record<string, unknown> | null = null;
     const singleFn = vi.fn(async () => ({ data: { id: "lead-gps" }, error: null }));
     const upsertTable = {
+      // N3.1: lookup previo por place_id → no existe
+      select: vi.fn(() => ({ eq: vi.fn(() => ({ maybeSingle: vi.fn(async () => ({ data: null, error: null })) })) })),
       upsert: vi.fn((payload: Record<string, unknown>) => {
         capturedPayload = payload;
         return { select: vi.fn(() => ({ single: singleFn })) };
@@ -200,6 +213,8 @@ describe("insertExternalLead", () => {
     let capturedPayload: Record<string, unknown> | null = null;
     const singleFn = vi.fn(async () => ({ data: { id: "lead-nogps" }, error: null }));
     const upsertTable = {
+      // N3.1: lookup previo por place_id → no existe
+      select: vi.fn(() => ({ eq: vi.fn(() => ({ maybeSingle: vi.fn(async () => ({ data: null, error: null })) })) })),
       upsert: vi.fn((payload: Record<string, unknown>) => {
         capturedPayload = payload;
         return { select: vi.fn(() => ({ single: singleFn })) };
@@ -216,6 +231,8 @@ describe("insertExternalLead", () => {
     let capturedPayload: Record<string, unknown> | null = null;
     const singleFn = vi.fn(async () => ({ data: { id: "lead-3" }, error: null }));
     const upsertTable = {
+      // N3.1: lookup previo por place_id → no existe
+      select: vi.fn(() => ({ eq: vi.fn(() => ({ maybeSingle: vi.fn(async () => ({ data: null, error: null })) })) })),
       upsert: vi.fn((payload: Record<string, unknown>) => {
         capturedPayload = payload;
         return { select: vi.fn(() => ({ single: singleFn })) };
@@ -418,5 +435,90 @@ describe("addCorroboratingSource", () => {
     await expect(addCorroboratingSource("lead-1", candidate())).rejects.toThrow(
       "addCorroboratingSource update failed: rpc error"
     );
+  });
+});
+
+describe("insertExternalLead — re-descubrimiento (N3.1/N16)", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  function mockWithExisting(existing: Partial<Lead>) {
+    const updates: Array<Record<string, unknown>> = [];
+    const row = leadRow(existing);
+    const table = {
+      select: vi.fn(() => ({
+        eq: vi.fn(() => ({
+          maybeSingle: vi.fn(async () => ({ data: row, error: null })),
+        })),
+      })),
+      update: vi.fn((payload: Record<string, unknown>) => {
+        updates.push(payload);
+        return {
+          eq: vi.fn(() => ({
+            select: vi.fn(() => ({
+              single: vi.fn(async () => ({ data: { ...row, ...payload }, error: null })),
+            })),
+          })),
+        };
+      }),
+      upsert: vi.fn(),
+    };
+    supabaseRef.current = { from: vi.fn(() => table) };
+    return { table, updates };
+  }
+
+  it("NO pisa tags/state/niche/passed_filter de un lead existente", async () => {
+    const { table, updates } = mockWithExisting({
+      place_id: "mintur:42",
+      source: "mintur",
+      tags: ["possible-duplicate", "duplicate-secondary", "landline-phone"],
+      state: "enriched" as Lead["state"],
+      niche: "bakery",
+      passed_filter: false,
+      rejection_reasons: ["duplicate-secondary"],
+    });
+
+    await insertExternalLead(candidate());
+
+    expect(table.upsert).not.toHaveBeenCalled();
+    const payload = updates[0]!;
+    expect(payload).not.toHaveProperty("tags");
+    expect(payload).not.toHaveProperty("state");
+    expect(payload).not.toHaveProperty("niche");
+    expect(payload).not.toHaveProperty("passed_filter");
+    expect(payload["source_data"]).toBeDefined();
+    expect(payload["name"]).toBe("Hotel Ejemplo");
+  });
+
+  it("rescata false→true cuando ahora corrobora y tiene contacto (N17 one-way)", async () => {
+    const { updates } = mockWithExisting({
+      place_id: "mintur:42",
+      source: "mintur",
+      passed_filter: false,
+      rejection_reasons: ["no-contact"],
+      corroborating_sources: [
+        { source: "google_places", external_id: "x", seen_at: "2026-01-01", confidence: 0.9 },
+      ],
+      phone: "29151777",
+    });
+
+    await insertExternalLead(candidate({ phone: "29151777" }));
+
+    const payload = updates[0]!;
+    expect(payload["passed_filter"]).toBe(true);
+    expect(payload["rejection_reasons"]).toEqual([]);
+  });
+
+  it("NO resucita un duplicate-secondary aunque califique", async () => {
+    const { updates } = mockWithExisting({
+      place_id: "mintur:42",
+      source: "mintur",
+      passed_filter: false,
+      rejection_reasons: ["duplicate-secondary"],
+      phone: "29151777",
+    });
+
+    await insertExternalLead(candidate({ phone: "29151777" }));
+
+    expect(updates[0]).not.toHaveProperty("passed_filter");
   });
 });
