@@ -1201,7 +1201,7 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
       listDiscoveryPlaces({ limit: 2000 }),
       db
         .from("discovery_jobs")
-        .select("source, niche, location, created_at, completed_at, status, leads_found, leads_new, estimated_cost_usd")
+        .select("source, niche, location, created_at, completed_at, status, leads_found, leads_new, estimated_cost_usd, actual_cost_usd")
         .order("created_at", { ascending: false })
         .limit(2000),
       db

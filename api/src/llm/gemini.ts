@@ -59,6 +59,8 @@ export class GeminiProvider implements LLMProvider {
     const response = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      // N80: sin timeout, un Gemini colgado bloqueaba la request del asistente.
+      signal: AbortSignal.timeout(20_000),
       body: JSON.stringify({
         contents: [{ parts: [{ text: prompt }] }],
         generationConfig: { maxOutputTokens, temperature: 0.7 },

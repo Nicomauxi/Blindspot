@@ -29,6 +29,23 @@ const state: {
   leads: [],
 };
 
+
+function rangeChain(rows: () => Array<Record<string, unknown>>) {
+  // Soporta .gte().lt().order().range() y .limit() — filtra por fecha como PostgREST.
+  const makeChain = (filters: Array<(r: Record<string, unknown>) => boolean>) => {
+    const apply = () => rows().filter((r) => filters.every((f) => f(r)));
+    const chain: Record<string, unknown> = {};
+    chain["gte"] = (col: string, val: string) => makeChain([...filters, (r) => String(r[col] ?? "") >= val]);
+    chain["lt"] = (col: string, val: string) => makeChain([...filters, (r) => String(r[col] ?? "") < val]);
+    chain["eq"] = (col: string, val: unknown) => makeChain([...filters, (r) => r[col] === val]);
+    chain["order"] = () => chain;
+    chain["range"] = async (from: number, to: number) => ({ data: apply().slice(from, to + 1), error: null });
+    chain["limit"] = async (n: number) => ({ data: apply().slice(0, n), error: null });
+    return chain;
+  };
+  return makeChain([]);
+}
+
 vi.mock("../../api/src/db/client.js", () => ({
   getDb: () => ({
     from: (table: string) => {
@@ -54,35 +71,15 @@ vi.mock("../../api/src/db/client.js", () => ({
       }
 
       if (table === "llm_usage_log") {
-        return {
-          select: () => ({
-            order: () => ({
-              limit: async (n: number) => ({ data: state.llmRows.slice(0, n), error: null }),
-            }),
-          }),
-        };
+        return { select: () => rangeChain(() => state.llmRows) };
       }
 
       if (table === "runs") {
-        return {
-          select: () => ({
-            eq: () => ({
-              order: () => ({
-                limit: async (n: number) => ({ data: state.runs.slice(0, n), error: null }),
-              }),
-            }),
-          }),
-        };
+        return { select: () => rangeChain(() => state.runs) };
       }
 
       if (table === "leads") {
-        return {
-          select: () => ({
-            order: () => ({
-              limit: async (n: number) => ({ data: state.leads.slice(0, n), error: null }),
-            }),
-          }),
-        };
+        return { select: () => rangeChain(() => state.leads) };
       }
 
       return {};

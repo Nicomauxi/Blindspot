@@ -25,6 +25,7 @@ export type OpportunityDiscoveryJob = {
   leads_found?: number | null;
   leads_new?: number | null;
   estimated_cost_usd?: number | null;
+  actual_cost_usd?: number | null;
 };
 
 export type OpportunityLead = {
@@ -209,7 +210,10 @@ function buildJobAggregate(jobs: OpportunityDiscoveryJob[], nicheFilter: string 
     entry.candidates_seen += candidatesSeen;
     entry.new_leads_count += newLeads;
     entry.duplicate_count += duplicates;
-    entry.total_cost_usd += Math.max(0, asNumber(job.estimated_cost_usd));
+    // N76: el costo REAL (actual) — la estimación conservadora pre-run inflaba 9.4x
+    // el cost-per-new-lead y penalizaba ubicaciones eficientes.
+    const jobCost = job.actual_cost_usd != null ? asNumber(job.actual_cost_usd) : asNumber(job.estimated_cost_usd);
+    entry.total_cost_usd += Math.max(0, jobCost);
     if (lastAt && (!entry.last_discovery_at || lastAt > entry.last_discovery_at)) {
       entry.last_discovery_at = lastAt;
     }

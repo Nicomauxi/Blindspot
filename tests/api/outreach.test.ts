@@ -541,7 +541,7 @@ describe("POST /api/v1/outreach/generate-offer", () => {
         prompt_tokens: 0,
         completion_tokens: 0,
         cost_usd: 0,
-        success: true,
+        success: false, // N80: la llamada al provider falló aunque se sirva el template
         error: expect.stringContaining("fallback:Gemini API error: 429"),
       })
     );

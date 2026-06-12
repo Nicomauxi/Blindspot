@@ -468,7 +468,10 @@ export async function outreachRoutes(app: FastifyInstance): Promise<void> {
         const templateModule = await import("../llm/template.js");
         const templateProvider = new templateModule.TemplateProvider();
         const fallbackReason = err instanceof Error ? err.message : String(err);
-        usageSuccess = true;
+        // N80: la llamada al provider FALLÓ — success=false aunque se sirva el template
+        // (si no, el monitoreo de failure-rate ve 100% éxito con Gemini caído, y el
+        // costo de llamadas fallidas-pero-facturadas desaparece).
+        usageSuccess = false;
         usageError = `fallback:${fallbackReason}`;
         result = await templateProvider.generateOffer({
           lead_id: body.lead_id,
