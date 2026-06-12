@@ -1,6 +1,8 @@
 // F5 — Higiene de pool. Backfills idempotentes, dry-run por defecto.
 //   F5.1: leads con tag 'duplicate-secondary' y passed_filter=true → fuera del pool
 //         (passed_filter=false + rejection_reason 'duplicate-secondary').
+//   F5.2: leads en pool SIN canal de contacto accionable (leadHasContact, incluye tags
+//         para excluir redes muertas — N19) → fuera del pool con razón 'no-contact'.
 //
 // Uso:
 //   node --env-file=.env --import tsx/esm scripts/backfill-pool-hygiene.ts [--apply]
@@ -8,6 +10,8 @@
 // ⚠️ Mutación masiva: correr `bash scripts/backup.sh` antes de --apply.
 
 import { getSupabase } from "../src/shared/supabase.js";
+import { leadHasContact } from "../src/modules/discovery/qualification.js";
+import type { Lead } from "../src/shared/types.js";
 
 const PAGE_SIZE = 1000;
 
@@ -36,24 +40,44 @@ async function loadPooledDuplicateSecondaries(): Promise<Row[]> {
   return rows;
 }
 
-async function main(): Promise<void> {
-  const apply = process.argv.includes("--apply");
-  console.log(`\n=== F5.1 backfill pool-hygiene — ${apply ? "APPLY" : "DRY-RUN"} ===\n`);
+interface ContactRow {
+  id: string;
+  name: string;
+  phone: string | null;
+  website: string | null;
+  canonical_fields: Lead["canonical_fields"];
+  digital_footprint: Lead["digital_footprint"];
+  tags: string[];
+  rejection_reasons: string[] | null;
+}
 
-  const rows = await loadPooledDuplicateSecondaries();
-  console.log(`duplicate-secondary en pool: ${rows.length}`);
-  for (const r of rows.slice(0, 10)) console.log(`  - ${r.id} ${r.name}`);
-
-  if (!apply) {
-    console.log("\n(dry-run — no se escribió nada. Re-ejecutar con --apply.)\n");
-    return;
+async function loadPooledWithoutContact(): Promise<ContactRow[]> {
+  const db = getSupabase();
+  const rows: ContactRow[] = [];
+  let from = 0;
+  for (;;) {
+    const { data, error } = await db
+      .from("leads")
+      .select("id, name, phone, website, canonical_fields, digital_footprint, tags, rejection_reasons")
+      .eq("passed_filter", true)
+      .range(from, from + PAGE_SIZE - 1);
+    if (error) throw new Error(`load pool failed: ${error.message}`);
+    rows.push(...((data ?? []) as ContactRow[]));
+    if (!data || data.length < PAGE_SIZE) break;
+    from += PAGE_SIZE;
   }
+  return rows.filter((r) => !leadHasContact(r as unknown as Lead));
+}
 
+async function applyExclusions(
+  rows: Array<{ id: string; rejection_reasons: string[] | null }>,
+  reason: string
+): Promise<void> {
   const db = getSupabase();
   let updated = 0;
   const failures: string[] = [];
   for (const r of rows) {
-    const reasons = Array.from(new Set([...(r.rejection_reasons ?? []), "duplicate-secondary"]));
+    const reasons = Array.from(new Set([...(r.rejection_reasons ?? []), reason]));
     const { error } = await db
       .from("leads")
       .update({ passed_filter: false, rejection_reasons: reasons })
@@ -61,13 +85,33 @@ async function main(): Promise<void> {
     if (error) failures.push(`${r.id}: ${error.message}`);
     else updated++;
   }
-
-  console.log(`\nActualizados: ${updated}`);
+  console.log(`  actualizados (${reason}): ${updated}`);
   if (failures.length > 0) {
-    console.error(`Fallos (${failures.length}):`);
-    for (const f of failures.slice(0, 10)) console.error(`  ! ${f}`);
+    console.error(`  fallos (${failures.length}):`);
+    for (const f of failures.slice(0, 10)) console.error(`    ! ${f}`);
     process.exit(1);
   }
+}
+
+async function main(): Promise<void> {
+  const apply = process.argv.includes("--apply");
+  console.log(`\n=== F5 backfill pool-hygiene — ${apply ? "APPLY" : "DRY-RUN"} ===\n`);
+
+  const dupes = await loadPooledDuplicateSecondaries();
+  console.log(`F5.1 duplicate-secondary en pool: ${dupes.length}`);
+  for (const r of dupes.slice(0, 10)) console.log(`  - ${r.id} ${r.name}`);
+
+  const noContact = await loadPooledWithoutContact();
+  console.log(`F5.2 sin contacto accionable en pool: ${noContact.length}`);
+  for (const r of noContact.slice(0, 10)) console.log(`  - ${r.id} ${r.name}`);
+
+  if (!apply) {
+    console.log("\n(dry-run — no se escribió nada. Re-ejecutar con --apply.)\n");
+    return;
+  }
+
+  await applyExclusions(dupes, "duplicate-secondary");
+  await applyExclusions(noContact, "no-contact");
 }
 
 main().catch((err) => {

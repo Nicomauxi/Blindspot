@@ -25,9 +25,15 @@ function candidate(overrides: Partial<DiscoveryCandidate> = {}): DiscoveryCandid
 }
 
 describe("qualifyExternalLead", () => {
-  it("un lead corroborado siempre pasa, sin importar contacto/fuente", () => {
-    expect(qualifyExternalLead({ source: "pedidosya", hasContact: false, corroborated: true }))
+  it("un lead corroborado CON contacto pasa, sin importar la fuente", () => {
+    expect(qualifyExternalLead({ source: "pedidosya", hasContact: true, corroborated: true }))
       .toEqual({ passed_filter: true, rejection_reasons: [] });
+  });
+
+  it("F5.2: corroborado pero SIN contacto accionable NO entra al pool", () => {
+    const r = qualifyExternalLead({ source: "pedidosya", hasContact: false, corroborated: true });
+    expect(r.passed_filter).toBe(false);
+    expect(r.rejection_reasons).toContain("no-contact");
   });
 
   it("rechaza sin contacto accionable", () => {

@@ -40,17 +40,18 @@ export function qualifyExternalLead(input: QualificationInput): QualificationRes
     return { passed_filter: false, rejection_reasons: ["non-commercial-vertical"] };
   }
 
-  // Un lead corroborado por otra fuente es un negocio real confirmado → siempre pasa.
-  if (input.corroborated) {
-    return { passed_filter: true, rejection_reasons: [] };
-  }
-
   const rejection_reasons: string[] = [];
-  if (SIGNAL_ONLY_SOURCES.has(input.source)) {
-    rejection_reasons.push("signal-source-only");
-  }
+  // F5.2: sin canal de contacto accionable no hay pool, ni corroborado — un negocio
+  // confirmado real al que no se le puede escribir/llamar no es vendible.
   if (!input.hasContact) {
     rejection_reasons.push("no-contact");
+  }
+  // Un lead corroborado por otra fuente (y contactable) es un negocio real confirmado → pasa.
+  if (input.corroborated) {
+    return { passed_filter: rejection_reasons.length === 0, rejection_reasons };
+  }
+  if (SIGNAL_ONLY_SOURCES.has(input.source)) {
+    rejection_reasons.push("signal-source-only");
   }
 
   return { passed_filter: rejection_reasons.length === 0, rejection_reasons };
