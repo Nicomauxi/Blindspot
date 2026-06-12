@@ -98,7 +98,9 @@ async function finalizeRun(
   phaseResults: PhaseResults
 ): Promise<RunResult> {
   const supabase = getSupabase();
-  await supabase
+  // N42: CAS running→terminal. Sin el guard, un executor zombie resucitaba runs ya
+  // marcados 'aborted' por crash-recovery escribiéndoles 'completed' encima.
+  const { data: finalized, error: finalizeError } = await supabase
     .from("pipeline_runs")
     .update({
       status,
@@ -107,7 +109,17 @@ async function finalizeRun(
       dashboard_stale: status !== "completed",
       invariant_details: phaseResults.invariant_check ?? null,
     })
-    .eq("id", runId);
+    .eq("id", runId)
+    .eq("status", "running")
+    .select("id");
+
+  if (finalizeError || !finalized || finalized.length === 0) {
+    logger.warn(
+      { runId, intendedStatus: status, error: finalizeError?.message ?? null },
+      "finalizeRun: el run ya no estaba 'running' (abortado/finalizado por otro proceso) — no se sobrescribe ni se notifica"
+    );
+    return { status: "aborted", phase_results: phaseResults };
+  }
 
   await appendRunLog(runId, `Run finished with status=${status}`, status === "completed" ? "info" : "warn");
 

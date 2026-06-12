@@ -1,4 +1,5 @@
 import { PipelineScheduler } from "../../../../src/modules/pipeline/scheduler.js";
+import { recoverOrphanedRuns } from "../../../../src/modules/pipeline/crash-recovery.js";
 import { pushToSchedulerBuffer } from "./log-buffer.js";
 
 type SchedulerStatus = "running" | "stopped" | "disabled";
@@ -33,6 +34,26 @@ export function initEmbeddedScheduler(): PipelineScheduler {
 export async function startEmbeddedScheduler(): Promise<void> {
   if (!isSchedulerEmbedded()) throw new Error("EMBED_SCHEDULER is not enabled");
   if (_status === "running") return; // Already running — idempotent
+
+  // N39: la topología real (EMBED_SCHEDULER=true) nunca corría crash recovery — un
+  // crash mid-run dejaba el run 'running' zombie y POST /pipeline/run devolvía 409
+  // para siempre. Mismo recovery que el core standalone (con umbral de edad).
+  try {
+    const recovered = await recoverOrphanedRuns();
+    if (recovered > 0) {
+      pushToSchedulerBuffer({
+        ts: new Date().toISOString(),
+        level: "warn",
+        msg: `Crash recovery: ${recovered} run(s) huérfanos abortados`,
+      });
+    }
+  } catch (err) {
+    pushToSchedulerBuffer({
+      ts: new Date().toISOString(),
+      level: "error",
+      msg: `Crash recovery falló: ${err instanceof Error ? err.message : String(err)}`,
+    });
+  }
 
   const scheduler = initEmbeddedScheduler();
   await scheduler.start();

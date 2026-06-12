@@ -6,20 +6,31 @@ const logger = getLogger();
 
 // Runs stuck in 'pending' for longer than this are considered orphaned (worker never claimed them).
 const STALE_PENDING_TIMEOUT_MS = 60 * 60 * 1000; // 1 hour
+// N39: un run 'running' solo se considera zombie si lleva al menos esto desde started_at.
+// Abortar incondicionalmente mataba runs legítimos vivos en OTRO proceso (caso real: 6h15m
+// de trabajo perdido cuando el core standalone arrancó mientras la API embebida ejecutaba).
+const STALE_RUNNING_MIN_AGE_MS = 15 * 60 * 1000; // 15 min
 
 export async function recoverOrphanedRuns(): Promise<number> {
   const supabase = getSupabase();
   let recovered = 0;
 
   // 1. Abort runs stuck in 'running' (worker crashed mid-execution).
-  const { data: runningOrphans, error: runningError } = await supabase
+  const { data: runningRows, error: runningError } = await supabase
     .from("pipeline_runs")
-    .select("id, log_lines")
+    .select("id, log_lines, started_at")
     .eq("status", "running");
+
+  const cutoff = Date.now() - STALE_RUNNING_MIN_AGE_MS;
+  const runningOrphans = (runningRows ?? []).filter((run) => {
+    const started = typeof run.started_at === "string" ? Date.parse(run.started_at) : NaN;
+    // Sin started_at parseable se asume zombie; reciente → se deja vivir.
+    return !Number.isFinite(started) || started < cutoff;
+  });
 
   if (runningError) {
     logger.error({ error: runningError }, "Failed to query orphaned running runs");
-  } else if (runningOrphans && runningOrphans.length > 0) {
+  } else if (runningOrphans.length > 0) {
     const now = new Date().toISOString();
     for (const run of runningOrphans) {
       const existing: LogLine[] = Array.isArray(run.log_lines) ? run.log_lines : [];
