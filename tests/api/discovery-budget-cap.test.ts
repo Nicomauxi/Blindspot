@@ -37,6 +37,7 @@ describe("getGooglePlacesBudgetStatus — budget cap enforcement", () => {
       makeBudgetChain({
         google_places_budget_total: 200,
         google_places_budget_spent: 75,
+        google_places_budget_month: new Date().toISOString().slice(0, 7), // N4.4b: spent del mes corriente
         google_places_alert_threshold: 50,
       })
     );
@@ -51,6 +52,7 @@ describe("getGooglePlacesBudgetStatus — budget cap enforcement", () => {
       makeBudgetChain({
         google_places_budget_total: 200,
         google_places_budget_spent: 165,
+        google_places_budget_month: new Date().toISOString().slice(0, 7), // N4.4b: spent del mes corriente
         google_places_alert_threshold: 50,
       })
     );
@@ -64,6 +66,7 @@ describe("getGooglePlacesBudgetStatus — budget cap enforcement", () => {
       makeBudgetChain({
         google_places_budget_total: 200,
         google_places_budget_spent: 100,
+        google_places_budget_month: new Date().toISOString().slice(0, 7), // N4.4b: spent del mes corriente
         google_places_alert_threshold: 50,
       })
     );
