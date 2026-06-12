@@ -109,7 +109,7 @@ export const DASHBOARD_TPL = `<!DOCTYPE html>
           <td>{{#if lead.phone}}<a href="tel:{{lead.phone}}">{{lead.phone}}</a>{{else}}<span class="dash">—</span>{{/if}}</td>
           <td>{{#if lead.address}}{{lead.address}}{{else}}<span class="dash">—</span>{{/if}}</td>
           <td>
-            {{#if lead.website}}<a href="{{lead.website}}" target="_blank" rel="noopener noreferrer">web</a> &middot; {{/if}}<a href="{{mapsUrl}}" target="_blank" rel="noopener noreferrer">maps</a>
+            {{#if (safeUrl lead.website)}}<a href="{{safeUrl lead.website}}" target="_blank" rel="noopener noreferrer">web</a> &middot; {{/if}}<a href="{{mapsUrl}}" target="_blank" rel="noopener noreferrer">maps</a>
           </td>
           <td><button class="btn-toggle" data-target="detail-{{rank}}">ver</button></td>
         </tr>

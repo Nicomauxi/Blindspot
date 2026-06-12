@@ -74,3 +74,15 @@ describe("generateHtml", () => {
     expect(html).toContain("&lt;/script&gt;");
   });
 });
+
+describe("N9.3/N101: safeUrl en href de website", () => {
+  it("un website javascript: no llega al href", () => {
+    const html = generateHtml([{ ...fullScored, website: "javascript:alert(1)" }], runMeta);
+    expect(html).not.toContain('href="javascript:');
+  });
+
+  it("un website https sí se linkea", () => {
+    const html = generateHtml([{ ...fullScored, website: "https://negocio.uy" }], runMeta);
+    expect(html).toContain('href="https://negocio.uy"');
+  });
+});

