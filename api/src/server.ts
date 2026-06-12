@@ -56,6 +56,18 @@ function isAllowedDevelopmentOrigin(origin: string): boolean {
 export async function buildServer() {
   const jwtSecret = process.env["API_JWT_SECRET"];
   if (!jwtSecret) throw new Error("API_JWT_SECRET is required");
+  // N72: en producción el secret debe ser fuerte (la validación de solo-presencia
+  // dejaba pasar secrets de test). En dev solo se advierte.
+  const weakSecret = jwtSecret.length < 32 || /^(test|dev|secret|changeme)/i.test(jwtSecret);
+  if (weakSecret) {
+    if (process.env["NODE_ENV"] === "production") {
+      throw new Error("API_JWT_SECRET demasiado débil para producción (≥32 chars, sin prefijos test/dev)");
+    }
+    console.warn("[security] API_JWT_SECRET débil — aceptado solo fuera de producción (N72)");
+  }
+  if (!process.env["NODE_ENV"]) {
+    console.warn("[security] NODE_ENV no seteado — CORS de desarrollo habilitado por default (setear NODE_ENV=production en deploy) (N73)");
+  }
 
   const app = Fastify({ logger: true });
   const explicitOrigins = normalizeOrigins(CORS_ORIGIN);
