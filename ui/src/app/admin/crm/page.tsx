@@ -198,7 +198,7 @@ export default function CrmBoardPage() {
       notes: "Ningún canal funcionó",
       channel: "",
       reminder_at: "",
-      isRegression: false,
+      isRegression: isRegressionTransition(tracking.status, "observed"),
     });
 
   const openNote = (tracking: LeadTracking) =>
@@ -948,7 +948,7 @@ export default function CrmBoardPage() {
                         const tracking = trackings.find((t) => t.id === detail.trackingId);
                         if (tracking) {
                           closeAll();
-                          setTransition({ tracking, to_status: "validation", notes: "", channel: contactChannelPick, reminder_at: "", isRegression: false });
+                          setTransition({ tracking, to_status: "validation", notes: "", channel: contactChannelPick, reminder_at: "", isRegression: isRegressionTransition(tracking.status, "validation") });
                         }
                       }}
                       className="rounded-lg bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700"
