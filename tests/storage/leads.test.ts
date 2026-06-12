@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  buildDuplicateTagUpdates,
   detectDuplicates,
   listLeads,
   mergeFootprint,
@@ -258,6 +259,51 @@ describe("detectDuplicates", () => {
     const group = [...detectDuplicates([a, b]).values()][0];
 
     expect(group?.[0]?.id).toBe("b");
+  });
+});
+
+describe("buildDuplicateTagUpdates (F5.1)", () => {
+  it("saca al secundario del pool: passed_filter=false + rejection reason", () => {
+    const a = lead({
+      id: "a",
+      prospect_score: 90,
+      digital_footprint: footprintWithIdentity("https://negocio.uy"),
+    });
+    const b = lead({
+      id: "b",
+      prospect_score: 10,
+      digital_footprint: footprintWithIdentity("https://negocio.uy"),
+    });
+
+    const updates = buildDuplicateTagUpdates(detectDuplicates([a, b]));
+    const primary = updates.find((u) => u.id === "a");
+    const secondary = updates.find((u) => u.id === "b");
+
+    expect(primary?.tags).toContain("possible-duplicate");
+    expect(primary?.passed_filter).toBeUndefined();
+
+    expect(secondary?.tags).toContain("duplicate-secondary");
+    expect(secondary?.passed_filter).toBe(false);
+    expect(secondary?.rejection_reasons).toContain("duplicate-secondary");
+  });
+
+  it("no duplica la razón si el secundario ya la tenía", () => {
+    const a = lead({
+      id: "a",
+      prospect_score: 90,
+      digital_footprint: footprintWithIdentity("https://negocio.uy"),
+    });
+    const b = lead({
+      id: "b",
+      prospect_score: 10,
+      rejection_reasons: ["duplicate-secondary"],
+      digital_footprint: footprintWithIdentity("https://negocio.uy"),
+    });
+
+    const updates = buildDuplicateTagUpdates(detectDuplicates([a, b]));
+    const secondary = updates.find((u) => u.id === "b");
+
+    expect(secondary?.rejection_reasons).toEqual(["duplicate-secondary"]);
   });
 });
 

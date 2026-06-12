@@ -207,16 +207,28 @@ async function sleep(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+interface LeadTagUpdate {
+  id: string;
+  tags: string[];
+  /** F5.1: los duplicate-secondary se fuerzan fuera del pool. */
+  passed_filter?: boolean;
+  rejection_reasons?: string[];
+}
+
 async function updateLeadTagsWithRetry(
   id: string,
   tags: string[],
-  label: string
+  label: string,
+  extra: { passed_filter?: boolean | undefined; rejection_reasons?: string[] | undefined } = {}
 ): Promise<{ id: string; error: Error | null }> {
   const db = getSupabase();
+  const payload: Record<string, unknown> = { tags };
+  if (extra.passed_filter !== undefined) payload.passed_filter = extra.passed_filter;
+  if (extra.rejection_reasons !== undefined) payload.rejection_reasons = extra.rejection_reasons;
 
   for (let attempt = 1; attempt <= TAG_UPDATE_MAX_RETRIES; attempt++) {
     try {
-      const { error } = await db.from("leads").update({ tags }).eq("id", id);
+      const { error } = await db.from("leads").update(payload).eq("id", id);
       if (!error) return { id, error: null };
 
       const message = error.message ?? `${label} update failed`;
@@ -237,7 +249,7 @@ async function updateLeadTagsWithRetry(
 }
 
 async function runLeadTagUpdates(
-  updates: Array<{ id: string; tags: string[] }>,
+  updates: LeadTagUpdate[],
   label: string
 ): Promise<void> {
   const failures: Array<{ id: string; error: Error }> = [];
@@ -245,7 +257,9 @@ async function runLeadTagUpdates(
   for (let offset = 0; offset < updates.length; offset += TAG_UPDATE_BATCH_SIZE) {
     const batch = updates.slice(offset, offset + TAG_UPDATE_BATCH_SIZE);
     const results = await Promise.all(
-      batch.map(({ id, tags }) => updateLeadTagsWithRetry(id, tags, label))
+      batch.map(({ id, tags, passed_filter, rejection_reasons }) =>
+        updateLeadTagsWithRetry(id, tags, label, { passed_filter, rejection_reasons })
+      )
     );
 
     for (const result of results) {
@@ -259,6 +273,33 @@ async function runLeadTagUpdates(
   }
 }
 
+// F5.1: el secundario de un grupo de duplicados no es un negocio distinto — queda
+// fuera del pool (passed_filter=false) con la razón explícita, además del tag.
+export function buildDuplicateTagUpdates(groups: Map<string, Lead[]>): LeadTagUpdate[] {
+  const updates: LeadTagUpdate[] = [];
+  for (const group of groups.values()) {
+    for (let i = 0; i < group.length; i++) {
+      const lead = group[i]!;
+      const tagSet = new Set(lead.tags);
+      tagSet.add(DUPLICATE_TAG);
+      if (i === 0) {
+        updates.push({ id: lead.id, tags: Array.from(tagSet) });
+        continue;
+      }
+      tagSet.add(DUPLICATE_SECONDARY_TAG);
+      const reasons = new Set(lead.rejection_reasons);
+      reasons.add(DUPLICATE_SECONDARY_TAG);
+      updates.push({
+        id: lead.id,
+        tags: Array.from(tagSet),
+        passed_filter: false,
+        rejection_reasons: Array.from(reasons),
+      });
+    }
+  }
+  return updates;
+}
+
 export async function tagDuplicates(leads: Lead[]): Promise<void> {
   const groups = detectDuplicates(leads);
   if (groups.size === 0) return;
@@ -266,18 +307,7 @@ export async function tagDuplicates(leads: Lead[]): Promise<void> {
   // Build update plans first, then execute in bounded batches with retries.
   // The full scoring flow can touch thousands of rows; unbounded Promise.all()
   // against PostgREST causes transient fetch failures under load.
-  const updates: Array<{ id: string; tags: string[] }> = [];
-  for (const group of groups.values()) {
-    for (let i = 0; i < group.length; i++) {
-      const lead = group[i]!;
-      const tagSet = new Set(lead.tags);
-      tagSet.add(DUPLICATE_TAG);
-      if (i > 0) tagSet.add(DUPLICATE_SECONDARY_TAG);
-      updates.push({ id: lead.id, tags: Array.from(tagSet) });
-    }
-  }
-
-  await runLeadTagUpdates(updates, "tagDuplicates");
+  await runLeadTagUpdates(buildDuplicateTagUpdates(groups), "tagDuplicates");
 }
 
 export async function tagFranchises(
