@@ -15,6 +15,7 @@ import type {
   SocialSearchPlatform,
   SocialSearchPlatformResult,
 } from "../../shared/types.js";
+import { SearxngPool } from "./searxng-pool.js";
 
 const DEFAULT_SEARXNG_URL = "http://localhost:8080";
 const SEARXNG_TIMEOUT_MS = 8000;
@@ -35,28 +36,48 @@ export interface SocialDiscoverDeps {
   delay: (ms: number) => Promise<void>;
 }
 
-async function searxngSearch(query: string, baseUrl: string, fetchImpl: typeof fetch): Promise<SearxngSearchResult[]> {
+interface SearxngResponse {
+  results: SearxngSearchResult[];
+  /** engines pedidos que no respondieron (rate-limit/CAPTCHA) → señal de IP throttleada. */
+  unresponsive: string[];
+}
+
+async function searxngSearch(query: string, baseUrl: string, fetchImpl: typeof fetch): Promise<SearxngResponse> {
   const engines = process.env["SEARXNG_ENGINES"] ?? DEFAULT_ENGINES;
   const url = `${baseUrl}/search?q=${encodeURIComponent(query)}&format=json&engines=${encodeURIComponent(engines)}`;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), SEARXNG_TIMEOUT_MS);
   try {
     const res = await fetchImpl(url, { headers: { Accept: "application/json" }, signal: controller.signal });
-    if (!res.ok) return [];
-    const json = (await res.json()) as { results?: SearxngSearchResult[] };
-    return Array.isArray(json.results) ? json.results : [];
+    if (!res.ok) return { results: [], unresponsive: [] };
+    const json = (await res.json()) as { results?: SearxngSearchResult[]; unresponsive_engines?: unknown[] };
+    const unresponsive = Array.isArray(json.unresponsive_engines)
+      ? json.unresponsive_engines.map((u) => (Array.isArray(u) ? String(u[0]) : String(u)))
+      : [];
+    return { results: Array.isArray(json.results) ? json.results : [], unresponsive };
   } catch {
-    return [];
+    return { results: [], unresponsive: [] };
   } finally {
     clearTimeout(timer);
   }
 }
 
-export function makeSearxngDeps(opts: { baseUrl?: string; throttleMs?: number; fetchImpl?: typeof fetch } = {}): SocialDiscoverDeps {
-  const base = (opts.baseUrl ?? process.env["SEARXNG_URL"] ?? DEFAULT_SEARXNG_URL).replace(/\/+$/, "");
+// (b) Pool multi-instancia: reparte queries round-robin entre las URLs de SEARXNG_URLS
+// (cada una con IP de salida distinta) y pone en cooldown la instancia cuya IP está
+// throttleada (todos los engines pedidos unresponsive). Con una sola URL = instancia única.
+export function makeSearxngDeps(opts: { baseUrl?: string; throttleMs?: number; fetchImpl?: typeof fetch; pool?: SearxngPool } = {}): SocialDiscoverDeps {
   const fetchImpl = opts.fetchImpl ?? fetch;
+  const pool = opts.pool ?? (opts.baseUrl ? new SearxngPool([opts.baseUrl.replace(/\/+$/, "")]) : SearxngPool.fromEnv());
+  const requestedEngines = (process.env["SEARXNG_ENGINES"] ?? DEFAULT_ENGINES).split(",").map((e) => e.trim());
   return {
-    search: (query) => searxngSearch(query, base, fetchImpl),
+    search: async (query) => {
+      const instance = pool.next();
+      const { results, unresponsive } = await searxngSearch(query, instance.url, fetchImpl);
+      // Si TODOS los engines pedidos quedaron unresponsive, esa IP está quemada → cooldown.
+      const allDown = requestedEngines.length > 0 && requestedEngines.every((e) => unresponsive.includes(e));
+      if (allDown) pool.markThrottled(instance.url);
+      return results;
+    },
     delay: (ms) => new Promise((r) => setTimeout(r, ms)),
   };
 }
