@@ -24,6 +24,17 @@ export function getFetchRetries(): number {
   return Number.isInteger(n) && n >= 0 ? n : DEFAULT_FETCH_RETRIES;
 }
 
+const SCHEME_RE = /^https?:\/\//i;
+
+/**
+ * Garantiza que la URL tenga esquema antes de pasarla a fetch() (undici lanza ante
+ * URLs sin esquema como "www.foo.com"). Por defecto asume https. F1.2.
+ * NO confundir con normalizeDomain de whois.ts, que QUITA el esquema.
+ */
+export function ensureScheme(url: string): string {
+  return SCHEME_RE.test(url) ? url : `https://${url}`;
+}
+
 export interface FetchHtmlResult {
   status: number | null;
   finalUrl: string | null;
@@ -125,7 +136,7 @@ async function attemptFetch(url: string): Promise<FetchHtmlResult> {
   }
 }
 
-export async function fetchHtml(url: string): Promise<FetchHtmlResult> {
+async function fetchWithRetries(url: string): Promise<FetchHtmlResult> {
   const log = getLogger();
   try {
     return await pRetry(() => attemptFetch(url), {
@@ -156,6 +167,20 @@ export async function fetchHtml(url: string): Promise<FetchHtmlResult> {
       error: `network: ${msg}`,
     };
   }
+}
+
+export async function fetchHtml(rawUrl: string): Promise<FetchHtmlResult> {
+  const hadScheme = SCHEME_RE.test(rawUrl);
+  const primaryUrl = ensureScheme(rawUrl); // https:// por defecto
+  const result = await fetchWithRetries(primaryUrl);
+
+  // Fallback http:// SOLO si nosotros sintetizamos el https y falló a nivel de red/TLS
+  // (no degradamos un https provisto por el usuario). F1.2.
+  if (!hadScheme && result.error?.startsWith("network:")) {
+    return await fetchWithRetries(`http://${rawUrl}`);
+  }
+
+  return result;
 }
 
 export function checkSsl(finalUrl: string | null): {
