@@ -66,6 +66,35 @@ const CITY_TO_DEPARTAMENTO: Record<string, string> = {
   young:          "Río Negro",
 };
 
+// Países extranjeros limítrofes que aparecen en direcciones de fuentes externas.
+const FOREIGN_COUNTRY_TOKENS = new Set(["argentina", "brasil", "brazil"]);
+
+function normalizeSegment(segment: string): string {
+  return segment
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .replace(/[^a-z ]/g, "")
+    .trim();
+}
+
+/**
+ * ¿La dirección corresponde a un negocio fuera de Uruguay? F1.3.
+ * Se ANCLA en el ÚLTIMO segmento (el país), no en una búsqueda libre del token:
+ * eso evita falsos positivos por calles llamadas "Argentina"/"Brasil" en UY
+ * (p.ej. "Av. Argentina esq. ..., Canelones, Uruguay" o "BRASIL 2524, Montevideo").
+ */
+export function isForeignAddress(address: string | null | undefined): boolean {
+  if (!address) return false;
+  const segments = address
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+  if (segments.length === 0) return false;
+  const last = normalizeSegment(segments[segments.length - 1] ?? "");
+  return FOREIGN_COUNTRY_TOKENS.has(last);
+}
+
 export function isWithinUruguay(lat: number, lng: number): boolean {
   return (
     lat >= URUGUAY_LAT_MIN &&

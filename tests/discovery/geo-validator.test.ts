@@ -1,5 +1,27 @@
 import { describe, expect, it } from "vitest";
-import { isWithinUruguay, inferDepartamento } from "../../src/modules/discovery/geo-validator.js";
+import { isWithinUruguay, inferDepartamento, isForeignAddress } from "../../src/modules/discovery/geo-validator.js";
+
+describe("isForeignAddress (F1.3)", () => {
+  it("detecta direcciones con país extranjero en el último segmento", () => {
+    expect(isForeignAddress("C. 31 273, Mercedes, Provincia de Buenos Aires, Argentina")).toBe(true);
+    expect(isForeignAddress("Rua X, Santana do Livramento, Brasil")).toBe(true);
+    expect(isForeignAddress("Some St, Brazil")).toBe(true);
+  });
+
+  it("NO marca extranjeras direcciones uruguayas con calles 'Argentina'/'Brasil'", () => {
+    // Calle llamada Argentina pero el país es Uruguay (último segmento).
+    expect(isForeignAddress("Av. Argentina esq. Italia, Parque del Plata, Canelones, Uruguay")).toBe(false);
+    // Calle Brasil en Montevideo, sin segmento país.
+    expect(isForeignAddress("BRASIL 2524, MONTEVIDEO, MONTEVIDEO")).toBe(false);
+    expect(isForeignAddress("ENTRE REPUBLICA ARGENTINA Y JOSE IGNACIO, LA JUANITA, MALDONADO")).toBe(false);
+  });
+
+  it("maneja vacío/null", () => {
+    expect(isForeignAddress(null)).toBe(false);
+    expect(isForeignAddress("")).toBe(false);
+    expect(isForeignAddress("Montevideo")).toBe(false);
+  });
+});
 
 describe("isWithinUruguay", () => {
   it("returns true for Montevideo city center coordinates", () => {

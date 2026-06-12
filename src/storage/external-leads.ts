@@ -2,6 +2,7 @@ import { getSupabase } from "../shared/supabase.js";
 import type { CorroboratingSource, DiscoveryCandidate, Lead } from "../shared/types.js";
 import { calculateContactReliability, calculateDataConfidence } from "../modules/scoring/confidence.js";
 import { isValidCoord } from "../modules/discovery/geo-text.js";
+import { isForeignAddress } from "../modules/discovery/geo-validator.js";
 import { candidateHasContact, qualifyExternalLead } from "../modules/discovery/qualification.js";
 import { mergeCanonicalFields } from "./canonical-field.js";
 
@@ -25,6 +26,7 @@ export async function insertExternalLead(
     source: candidate.source,
     hasContact: candidateHasContact(candidate),
     corroborated: false,
+    foreign: isForeignAddress(candidate.address),
   });
 
   const { data, error } = await db

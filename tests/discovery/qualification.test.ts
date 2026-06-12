@@ -46,6 +46,12 @@ describe("qualifyExternalLead", () => {
     expect(r.passed_filter).toBe(false);
     expect(r.rejection_reasons).toContain("signal-source-only");
   });
+
+  it("F1.3: un lead extranjero NO entra al pool, ni siquiera corroborado", () => {
+    const r = qualifyExternalLead({ source: "osm", hasContact: true, corroborated: true, foreign: true });
+    expect(r.passed_filter).toBe(false);
+    expect(r.rejection_reasons).toEqual(["geo-out-of-country"]);
+  });
 });
 
 describe("candidateHasContact", () => {

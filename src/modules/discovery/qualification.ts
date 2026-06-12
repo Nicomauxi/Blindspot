@@ -8,6 +8,8 @@ export interface QualificationInput {
   source: DiscoverySource;
   hasContact: boolean;
   corroborated: boolean;
+  /** El negocio está fuera de Uruguay (AR/BR). Excluye del pool aun si corrobora. F1.3. */
+  foreign?: boolean;
 }
 
 export interface QualificationResult {
@@ -21,6 +23,11 @@ export interface QualificationResult {
 // Solo se descarta lo inaccionable (sin ningún canal de contacto) y las fuentes-señal
 // que no corroboran a nadie.
 export function qualifyExternalLead(input: QualificationInput): QualificationResult {
+  // Fuera de Uruguay → nunca entra al pool, ni siquiera corroborado (F1.3).
+  if (input.foreign) {
+    return { passed_filter: false, rejection_reasons: ["geo-out-of-country"] };
+  }
+
   // Un lead corroborado por otra fuente es un negocio real confirmado → siempre pasa.
   if (input.corroborated) {
     return { passed_filter: true, rejection_reasons: [] };
