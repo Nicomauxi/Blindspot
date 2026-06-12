@@ -1750,6 +1750,10 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
         request.log.error({ error, leadId: id }, "lead feedback summary query error");
         return reply.status(500).send({ error: "Database error", error_code: "db_error" });
       }
+      // N104: si llegamos al cap, el resumen está truncado (faltan votos viejos).
+      if ((data ?? []).length === 1000) {
+        request.log.warn({ leadId: id }, "lead feedback summary truncated at 1000 rows");
+      }
 
       return reply.status(200).send({
         data: summarizeFeedbackRows((data ?? []) as Array<Record<string, unknown>>),
@@ -1786,6 +1790,9 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
       if (error) {
         request.log.error({ error, leadId: id }, "lead feedback adjusted confidence query error");
         return reply.status(500).send({ error: "Database error", error_code: "db_error" });
+      }
+      if ((data ?? []).length === 1000) {
+        request.log.warn({ leadId: id }, "lead feedback adjusted confidence truncated at 1000 rows");
       }
 
       const summary = summarizeFeedbackRows((data ?? []) as Array<Record<string, unknown>>);

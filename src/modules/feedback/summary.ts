@@ -80,7 +80,10 @@ export function computeFeedbackAdjustedConfidence(params: {
   const confirmedFields: string[] = [];
 
   for (const entry of params.summary) {
-    const isBad = entry.latest_verdict === "bad";
+    // N103: el delta lo decide el BALANCE de votos (no solo el último) — un campo con
+    // 5 good y 1 bad reciente quedaba penalizado. Empate → desempata el último verdict.
+    const balance = entry.bad_count - entry.good_count;
+    const isBad = balance > 0 || (balance === 0 && entry.latest_verdict === "bad");
     if (isBad) flaggedFields.push(entry.field_key);
     else confirmedFields.push(entry.field_key);
 
