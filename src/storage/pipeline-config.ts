@@ -32,7 +32,7 @@ export async function getGooglePlacesBudgetStatus(): Promise<BudgetStatus | null
   const db = getSupabase();
   const { data, error } = await db
     .from("pipeline_config")
-    .select("google_places_budget_total, google_places_budget_spent, google_places_alert_threshold")
+    .select("google_places_budget_total, google_places_budget_spent, google_places_alert_threshold, google_places_budget_month")
     .limit(1)
     .single();
 
@@ -45,12 +45,17 @@ export async function getGooglePlacesBudgetStatus(): Promise<BudgetStatus | null
     google_places_budget_total: number;
     google_places_budget_spent: number;
     google_places_alert_threshold: number;
+    google_places_budget_month?: string | null;
   };
 
-  const budget_remaining = row.google_places_budget_total - row.google_places_budget_spent;
+  // N4.4: el spent es MENSUAL — si la fila quedó de un mes anterior, el gasto efectivo
+  // de este mes es 0 (el RPC de increment resetea al primer gasto del mes nuevo).
+  const currentMonth = new Date().toISOString().slice(0, 7);
+  const effectiveSpent = row.google_places_budget_month === currentMonth ? row.google_places_budget_spent : 0;
+  const budget_remaining = row.google_places_budget_total - effectiveSpent;
   return {
     budget_total: row.google_places_budget_total,
-    budget_spent: row.google_places_budget_spent,
+    budget_spent: effectiveSpent,
     budget_remaining,
     alert_threshold: row.google_places_alert_threshold,
     over_alert: budget_remaining < row.google_places_alert_threshold,
