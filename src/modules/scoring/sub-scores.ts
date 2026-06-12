@@ -83,7 +83,16 @@ function scoreSoftware(lead: Lead, sgScore: number): number {
   return score;
 }
 
+// F3.5/N1.4: la oferta "catálogo/ecommerce" solo aplica a rubros que venden producto o
+// tienen menú. Antes scoreCatalogo daba ~+45 constante a casi todo footprint válido
+// (ecommerce_platforms=[] +25 y menu_links=[] +20 se cumplen para casi todos) — sin sentido
+// para servicios (peluquería, gimnasio, salud, hospedaje, taller).
+const CATALOG_NICHES = new Set<string>([
+  "restaurant", "bakery", "grocery", "pharmacy", "hardware_store", "car_dealer",
+]);
+
 function scoreCatalogo(lead: Lead): number {
+  if (!CATALOG_NICHES.has(lead.niche ?? "other")) return 0;
   let score = 0;
   if (hasTag(lead, "hours-missing-on-web")) score += 3;
   const fp = getEnrichedFootprint(lead);
