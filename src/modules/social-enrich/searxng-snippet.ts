@@ -15,6 +15,7 @@ import { pickProfileFromSnippets } from "./duckduckgo-snippet.js";
 import type { SocialProfileData } from "./social-fusion.js";
 
 const DEFAULT_SEARXNG_URL = "http://localhost:8080";
+const SEARXNG_TIMEOUT_MS = 8000; // F4.3
 
 interface SearxngResult {
   content?: string;
@@ -40,7 +41,11 @@ export async function fetchInstagramSnippetViaSearxng(
   const query = `site:instagram.com/${username}`;
   try {
     const url = `${base}/search?q=${encodeURIComponent(query)}&format=json`;
-    const res = await doFetch(url, { headers: { Accept: "application/json" } });
+    // F4.3: timeout para no colgar el enrich si SearXNG no responde (patrón de http.ts).
+    const res = await doFetch(url, {
+      headers: { Accept: "application/json" },
+      signal: AbortSignal.timeout(SEARXNG_TIMEOUT_MS),
+    });
     if (!res.ok) return null;
     const data = (await res.json()) as { results?: SearxngResult[] };
     const snippets = (data.results ?? []).flatMap((r) =>

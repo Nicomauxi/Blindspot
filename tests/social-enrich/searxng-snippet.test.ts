@@ -51,6 +51,9 @@ describe("fetchInstagramSnippetViaSearxng", () => {
     expect(calledUrl).toContain("/search?q=");
     expect(decodeURIComponent(calledUrl)).toContain("site:instagram.com/aberfervi");
     expect(calledUrl).toContain("format=json");
+    // F4.3: la consulta lleva un AbortSignal (timeout) para no colgar el enrich.
+    const calledOpts = fetchImpl.mock.calls[0]![1] as { signal?: AbortSignal };
+    expect(calledOpts.signal).toBeInstanceOf(AbortSignal);
   });
 
   it("devuelve null si ningún resultado trae métricas (cuenta personal)", async () => {

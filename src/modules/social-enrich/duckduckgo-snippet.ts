@@ -12,6 +12,7 @@ import type { SocialProfileData } from "./social-fusion.js";
 const LITE_ENDPOINT = "https://lite.duckduckgo.com/lite/";
 const HTML_ENDPOINT = "https://html.duckduckgo.com/html/";
 const UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36";
+const DDG_SNIPPET_TIMEOUT_MS = 8000; // F4.3
 
 export function isAntiBot(html: string): boolean {
   return /anomaly-modal|unfortunately, bots use duckduckgo too|challenge/i.test(html);
@@ -97,7 +98,11 @@ export async function fetchInstagramSnippet(
   for (const endpoint of [LITE_ENDPOINT, HTML_ENDPOINT]) {
     try {
       const url = `${endpoint}?q=${encodeURIComponent(query)}`;
-      const res = await doFetch(url, { headers: { "User-Agent": UA, Accept: "text/html" } });
+      // F4.3: timeout para no colgar el enrich si el endpoint no responde (patrón de http.ts).
+      const res = await doFetch(url, {
+        headers: { "User-Agent": UA, Accept: "text/html" },
+        signal: AbortSignal.timeout(DDG_SNIPPET_TIMEOUT_MS),
+      });
       const html = await res.text();
       if (isAntiBot(html)) continue; // probar el otro endpoint; si ambos bloquean → null
       const found = pickProfileFromSnippets(extractSnippets(html), username);
