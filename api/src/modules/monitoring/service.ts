@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { getLogger } from "../../../../src/shared/logger.js";
 import { getDb } from "../../db/client.js";
 import { buildBackupOverview, getDefaultBackupSchedulerSnapshot, type BackupOverview } from "../backups/service.js";
 import { getBackupScheduler } from "../backups/runtime.js";
@@ -295,6 +296,16 @@ export async function listUnifiedRuns(
       .order("created_at", { ascending: false })
       .limit(limit),
   ]);
+
+  // N111: un fallo de cualquiera de las 3 queries se veía como "dashboard vacío"
+  // sin rastro — se loguea el rechazo.
+  for (const [name, res] of [["pipeline_runs", pipelineRes], ["runs", runsRes], ["discovery_jobs", discoveryRes]] as const) {
+    if (res.status === "rejected") {
+      getLogger().error({ source: name, err: String(res.reason) }, "listUnifiedRuns: query failed (sección omitida)");
+    } else if ((res.value as { error?: { message: string } | null }).error) {
+      getLogger().error({ source: name, err: (res.value as { error: { message: string } }).error.message }, "listUnifiedRuns: query error (sección omitida)");
+    }
+  }
 
   const items: UnifiedRunItem[] = [];
 

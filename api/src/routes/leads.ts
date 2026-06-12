@@ -1,3 +1,4 @@
+import { getLogger } from "../../../src/shared/logger.js";
 import { passesLeadFilter } from "../services/lead-filter.js";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
@@ -1200,12 +1201,18 @@ async function getCmActiveTrackedLeadIds(userId: string, leadIds: string[]): Pro
   if (leadIds.length === 0) return new Set();
 
   const db = getDb();
-  const { data } = await db
+  const { data, error } = await db
     .from("lead_tracking")
     .select("lead_id")
     .eq("owner_id", userId)
     .in("status", [...ACTIVE_TRACKING_STATUSES])
     .in("lead_id", leadIds);
+
+  // N114: el error se destructuraba al vacío — fallo silencioso. Set vacío = fail-closed
+  // (los contactos quedan redactados), pero ahora queda rastro.
+  if (error) {
+    getLogger().error({ err: error.message, userId }, "getCmActiveTrackedLeadIds query failed — contactos quedan redactados");
+  }
 
   return new Set(((data ?? []) as { lead_id: string }[]).map((r) => r.lead_id));
 }

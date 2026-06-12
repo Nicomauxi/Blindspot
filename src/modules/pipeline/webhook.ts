@@ -67,7 +67,12 @@ export async function notifyWebhook(
   }
 
   const db = getSupabase();
-  await db.from("pipeline_runs").update({ webhook_status: status }).eq("id", runId);
+  // N115: el update se hacía sin chequear error — webhook_status podía quedar
+  // desactualizado en silencio.
+  const { error } = await db.from("pipeline_runs").update({ webhook_status: status }).eq("id", runId);
+  if (error) {
+    getLogger().warn({ runId, status, err: error.message }, "webhook_status update failed");
+  }
 
   return status;
 }

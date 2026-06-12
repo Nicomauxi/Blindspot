@@ -120,7 +120,7 @@ export async function runIgSnippetEnrich(opts: IgSnippetOptions): Promise<IgSnip
       stats.no_snippet += 1;
       nullStreak += 1;
       // Marcar no_data para no re-consultar (cuenta personal o sin og:description).
-      await updateLeadSocialEnrichStatus(lead.id, "no_data").catch(() => undefined);
+      await updateLeadSocialEnrichStatus(lead.id, "no_data").catch((err) => getLogger().warn({ leadId: lead.id, err: String(err) }, "social_enrich_status no_data no persistido — el lead se re-consultará"));
       // Abortar solo si NUNCA hubo un éxito: señal de proveedor caído/bloqueado de entrada.
       if (stats.enriched === 0 && nullStreak >= PROVIDER_DOWN_STREAK) {
         stats.aborted_provider_down = true;
@@ -135,7 +135,7 @@ export async function runIgSnippetEnrich(opts: IgSnippetOptions): Promise<IgSnip
       Boolean(lead.website) || Boolean(lead.digital_footprint?.heuristic_discovery?.selected.website?.url);
     const fusion = await buildSocialFusion(lead, igUrl, profile, { ranAt: nowIso, nowIso, hasWebsite, allowLlm: false });
     await updateLeadSocialSearch(lead.id, fusion.socialSearch, fusion.tags, null, fusion.socialActivity, fusion.socialCanonical);
-    await updateLeadSocialEnrichStatus(lead.id, "ok").catch(() => undefined);
+    await updateLeadSocialEnrichStatus(lead.id, "ok").catch((err) => getLogger().warn({ leadId: lead.id, err: String(err) }, "social_enrich_status ok no persistido — el lead se re-consultará"));
     stats.enriched += 1;
   }
 

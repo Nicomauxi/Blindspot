@@ -50,19 +50,26 @@ export async function statsRoutes(app: FastifyInstance): Promise<void> {
       query = query.eq("user_id", authUser.id);
     }
 
-    const { data } = await query;
+    const { data, error } = await query;
+    if (error) {
+      request.log.error({ error }, "stats outreach query failed");
+      return reply.status(500).send({ error: "Database error", error_code: "db_error" });
+    }
     return reply.status(200).send({ data: data ?? [] });
   });
 
   // GET /stats/pipeline — pipeline runs summary
-  app.get("/stats/pipeline", { preHandler: requireAuth }, async (_request, reply) => {
+  app.get("/stats/pipeline", { preHandler: requireAuth }, async (request, reply) => {
     const db = getDb();
-    const { data } = await db
+    const { data, error } = await db
       .from("pipeline_runs")
       .select("status, created_at, completed_at")
       .order("created_at", { ascending: false })
       .limit(10);
-
+    if (error) {
+      request.log.error({ error }, "stats pipeline query failed");
+      return reply.status(500).send({ error: "Database error", error_code: "db_error" });
+    }
     return reply.status(200).send({ data: data ?? [] });
   });
 
