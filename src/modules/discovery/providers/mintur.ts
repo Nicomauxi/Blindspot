@@ -47,7 +47,8 @@ export function isBlank(value: string | null | undefined): boolean {
 
 export function parsePhone(telefono: string): string | null {
   if (isBlank(telefono)) return null;
-  const tokens = telefono.split(/\s*[-,|]\s*/);
+  // N85: separador unificado con DEI (incluye '/'): '2916 1234 / 2916 5678'.
+  const tokens = telefono.split(/\s*[-,/|]\s*/);
   const first = tokens.find((t) => !isBlank(t));
   return first?.trim() ?? null;
 }
@@ -113,7 +114,9 @@ async function fetchAllRecords(filters: string | null): Promise<MINTURRecord[]> 
     const data = await fetchPage(params);
     records.push(...data.result.records);
 
-    if (records.length >= data.result.total) break;
+    // N83: si una página vuelve vacía (total inflado/datastore inconsistente), cortar —
+    // sin esto el loop quedaba infinito pidiendo páginas vacías (igual que dei.ts).
+    if (records.length >= data.result.total || data.result.records.length === 0) break;
     offset += PAGE_SIZE;
   }
 

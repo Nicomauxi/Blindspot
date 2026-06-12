@@ -156,7 +156,7 @@ describe("mapElement", () => {
         "addr:city": "Montevideo",
       },
     }));
-    expect(candidate.address).toBe("Agraciada, 1234, Montevideo");
+    expect(candidate.address).toBe("Agraciada 1234, Montevideo"); // N84: numero pegado a la calle
   });
 
   it('niche inferido: amenity=dentist → "dentist"', () => {

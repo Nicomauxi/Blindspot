@@ -121,11 +121,15 @@ export function mapElement(element: OSMElement): DiscoveryCandidate {
   const lon =
     element.type === "node" ? (element.lon ?? null) : (element.center?.lon ?? null);
 
+  // N84: un housenumber sin calle no es una dirección ('1234, Montevideo' rompía el
+  // matching por puerta). El número solo acompaña a la calle.
+  const street = typeof tags["addr:street"] === "string" && tags["addr:street"].length > 0 ? tags["addr:street"] : null;
+  const houseNumber = typeof tags["addr:housenumber"] === "string" && tags["addr:housenumber"].length > 0 ? tags["addr:housenumber"] : null;
+  const city = typeof tags["addr:city"] === "string" && tags["addr:city"].length > 0 ? tags["addr:city"] : null;
   const addressParts = [
-    tags["addr:street"],
-    tags["addr:housenumber"],
-    tags["addr:city"],
-  ].filter((v): v is string => typeof v === "string" && v.length > 0);
+    street ? (houseNumber ? `${street} ${houseNumber}` : street) : null,
+    city,
+  ].filter((v): v is string => v !== null);
 
   let niche = "other";
   for (const [tagStr, nicheVal] of Object.entries(OSM_TAG_TO_NICHE)) {
