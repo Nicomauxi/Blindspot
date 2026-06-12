@@ -1113,7 +1113,25 @@ function redactContactContainer(value: unknown): unknown {
   return next;
 }
 
+// N0.2: la redacción por NOMBRE de clave dejaba escapar PII embebida en strings bajo
+// claves no-contacto (last_change_diff.changes[].to, fetch_error, social_search.query,
+// attempted_url, final_url…). Complemento por VALOR: se enmascara cualquier email,
+// link de WhatsApp o teléfono UY dentro de cualquier string del subárbol.
+const EMAIL_IN_TEXT_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
+const WHATSAPP_LINK_RE = /(?:https?:\/\/)?(?:wa\.me|api\.whatsapp\.com|whatsapp\.com)\/[^\s"']*/gi;
+const UY_PHONE_IN_TEXT_RE = /\+?598[\s.()-]?\d(?:[\s.()-]?\d){6,}|\b09\d(?:[\s.-]?\d){6,7}\b/g;
+
+function maskContactPatternsInString(value: string): string {
+  return value
+    .replace(EMAIL_IN_TEXT_RE, "***")
+    .replace(WHATSAPP_LINK_RE, "***")
+    .replace(UY_PHONE_IN_TEXT_RE, "***");
+}
+
 function redactNestedContactData(value: unknown): unknown {
+  if (typeof value === "string") {
+    return maskContactPatternsInString(value);
+  }
   if (Array.isArray(value)) {
     return value.map((entry) => redactNestedContactData(entry));
   }
@@ -1136,6 +1154,9 @@ function redactContactFields(lead: JsonRecord): JsonRecord {
     phone:    lead["phone"]    != null ? "***" : null,
     whatsapp: lead["whatsapp"] != null ? "***" : null,
     email:    lead["email"]    != null ? "***" : null,
+    // N31: hay leads cuyo website es un email o un link wa.me — eso ES contacto.
+    website:
+      typeof lead["website"] === "string" ? maskContactPatternsInString(lead["website"]) : lead["website"],
     // Also redact field_sources so the UI doesn't leak values via evidence.
     field_sources: isRecord(lead["field_sources"])
       ? {

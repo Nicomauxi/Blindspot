@@ -75,6 +75,15 @@ const mockLeadViewRow = {
     phone_alternatives: ["+598 98 111 222"],
     email_quality: [{ email: "ventas@parrilla.example.com", quality: "generic", mx_valid: true }],
     nested: { contact_phone: "+598 99 123456", additional_phones: ["+598 97 333 444"] },
+    // N0.2: paths que escapaban a la redacción por nombre de clave — el valor lleva PII
+    // bajo claves NO-contacto.
+    last_change_diff: {
+      changes: [{ field: "contact_email", from: null, to: "silca@silca.com.uy" }],
+    },
+    fetch_error: "Failed to parse URL from gperalta@estudiovanini.com.uy",
+    attempted_url: "https://api.whatsapp.com/send?phone=59899951138",
+    final_url: "https://wa.me/59893592683",
+    social_search: { facebook: { query: 'site:facebook.com "DONDESEATRANSPORTES@OUTLOOK.ES"' } },
   },
   inferred_state: {
     has_delivery: { value: true, confidence: 0.9 },
@@ -941,6 +950,12 @@ describe("GET /api/v1/leads/:id", () => {
     expect(res.json().data.digital_footprint.nested.contact_phone).toBe("***");
     expect(res.json().data.digital_footprint.nested.additional_phones).toEqual(["***"]);
     expect(res.json().data.lead_company_data.manager_phone).toBe("***");
+
+    // N0.2: assert recursivo — cero emails / links whatsapp / teléfonos UY en TODO el JSON.
+    const body = JSON.stringify(res.json().data);
+    expect(body).not.toMatch(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/i);
+    expect(body).not.toMatch(/wa\.me\/\d|api\.whatsapp\.com\/send\?phone=\d/i);
+    expect(body).not.toMatch(/\+?598\s?9\d[\d\s]{6,}/);
     await app.close();
   });
 
