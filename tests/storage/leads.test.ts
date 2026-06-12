@@ -287,6 +287,26 @@ describe("buildDuplicateTagUpdates (F5.1)", () => {
     expect(secondary?.rejection_reasons).toContain("duplicate-secondary");
   });
 
+  it("al PRIMARIO se le limpia un duplicate-secondary viejo (era secundario, hoy gana)", () => {
+    const a = lead({
+      id: "a",
+      prospect_score: 90,
+      tags: ["possible-duplicate", "duplicate-secondary"], // tag arrastrado de un run viejo
+      digital_footprint: footprintWithIdentity("https://negocio.uy"),
+    });
+    const b = lead({
+      id: "b",
+      prospect_score: 10,
+      digital_footprint: footprintWithIdentity("https://negocio.uy"),
+    });
+
+    const updates = buildDuplicateTagUpdates(detectDuplicates([a, b]));
+    const primary = updates.find((u) => u.id === "a");
+
+    expect(primary?.tags).not.toContain("duplicate-secondary");
+    expect(primary?.tags).toContain("possible-duplicate");
+  });
+
   it("no duplica la razón si el secundario ya la tenía", () => {
     const a = lead({
       id: "a",

@@ -283,6 +283,9 @@ export function buildDuplicateTagUpdates(groups: Map<string, Lead[]>): LeadTagUp
       const tagSet = new Set(lead.tags);
       tagSet.add(DUPLICATE_TAG);
       if (i === 0) {
+        // El primario de HOY puede arrastrar un duplicate-secondary de un run viejo
+        // (ej. fue rescatado por corroboración) — se limpia para no contradecir su rol.
+        tagSet.delete(DUPLICATE_SECONDARY_TAG);
         updates.push({ id: lead.id, tags: Array.from(tagSet) });
         continue;
       }
