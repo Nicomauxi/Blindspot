@@ -42,8 +42,19 @@ export function isValidCoord(lat: number, lng: number): boolean {
   );
 }
 
+// Memo: normalizeAddress se llama O(n²) veces en la reconciliación. Pura → cacheable. F2.8.
+const normalizeAddressCache = new Map<string, string | null>();
+
 export function normalizeAddress(value: string | null | undefined): string | null {
   if (!value) return null;
+  const cached = normalizeAddressCache.get(value);
+  if (cached !== undefined) return cached;
+  const out = normalizeAddressUncached(value);
+  normalizeAddressCache.set(value, out);
+  return out;
+}
+
+function normalizeAddressUncached(value: string): string | null {
   const normalized = value
     .toLowerCase()
     .normalize("NFD")
@@ -72,7 +83,19 @@ function isCountryToken(part: string): boolean {
 // Extrae la ciudad de una dirección, robusta a las diferencias de formato entre fuentes:
 // Google termina en "…, Departamento de X, Uruguay"; mintur en "…, CIUDAD, DEPARTAMENTO";
 // osm en "…, ciudad". Descarta país, "departamento de …" y códigos postales.
+const extractAddressCityCache = new Map<string, string | null>();
+
 export function extractAddressCity(value: string | null | undefined): string | null {
+  if (value) {
+    const cached = extractAddressCityCache.get(value);
+    if (cached !== undefined) return cached;
+  }
+  const out = extractAddressCityUncached(value);
+  if (value) extractAddressCityCache.set(value, out);
+  return out;
+}
+
+function extractAddressCityUncached(value: string | null | undefined): string | null {
   const normalized = normalizeAddress(value);
   if (!normalized) return null;
 
@@ -178,10 +201,19 @@ export function parseEwkbHexPoint(hex: string): { lat: number; lng: number } | n
   return { lng: readF64(offset), lat: readF64(offset + 8) };
 }
 
+// Memo para inputs string (EWKB hex / WKT): la reconciliación parsea el mismo gps
+// miles de veces. Pura → cachear por string es seguro. F2.8/N5.2.
+const parseLeadGpsCache = new Map<string, { lat: number; lng: number } | null>();
+
 export function parseLeadGps(
   gps: unknown
 ): { lat: number; lng: number } | null {
   if (!gps) return null;
+
+  if (typeof gps === "string") {
+    const cached = parseLeadGpsCache.get(gps);
+    if (cached !== undefined) return cached;
+  }
 
   const result = ((): { lat: number; lng: number } | null => {
     if (typeof gps === "string") {
@@ -217,8 +249,9 @@ export function parseLeadGps(
     return null;
   })();
 
-  if (result && !isValidCoord(result.lat, result.lng)) return null;
-  return result;
+  const valid = result && !isValidCoord(result.lat, result.lng) ? null : result;
+  if (typeof gps === "string") parseLeadGpsCache.set(gps, valid);
+  return valid;
 }
 
 export function haversineMeters(

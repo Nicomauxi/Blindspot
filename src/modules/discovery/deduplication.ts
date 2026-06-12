@@ -7,18 +7,24 @@ const DEFAULT_GEO_RADIUS_METERS = 500;
 export function levenshtein(a: string, b: string): number {
   const m = a.length;
   const n = b.length;
-  const dp: number[][] = Array.from({ length: m + 1 }, (_, i) =>
-    Array.from({ length: n + 1 }, (_, j) => (i === 0 ? j : j === 0 ? i : 0))
-  );
+  if (m === 0) return n;
+  if (n === 0) return m;
+
+  // Dos filas rodantes en vez de la matriz completa (N5.2): O(n) memoria, ~8× más rápido.
+  let prev = Array.from({ length: n + 1 }, (_, j) => j);
+  let curr = new Array<number>(n + 1);
   for (let i = 1; i <= m; i++) {
+    curr[0] = i;
+    const ai = a[i - 1];
     for (let j = 1; j <= n; j++) {
-      dp[i]![j] =
-        a[i - 1] === b[j - 1]
-          ? dp[i - 1]![j - 1]!
-          : 1 + Math.min(dp[i - 1]![j]!, dp[i]![j - 1]!, dp[i - 1]![j - 1]!);
+      curr[j] =
+        ai === b[j - 1]
+          ? prev[j - 1]!
+          : 1 + Math.min(prev[j]!, curr[j - 1]!, prev[j - 1]!);
     }
+    [prev, curr] = [curr, prev];
   }
-  return dp[m]![n]!;
+  return prev[n]!;
 }
 
 export function normalizeName(name: string): string {

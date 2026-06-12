@@ -91,9 +91,21 @@ function isCityishSegment(normalized: string): boolean {
   return false;
 }
 
+// Memo de parseo: la reconciliación O(n²) parsea la misma dirección miles de veces. F2.8/N5.2.
+// La función es pura y su resultado se trata como solo-lectura → cachear por string es seguro.
+const parseStreetAddressCache = new Map<string, ParsedStreetAddress>();
+
 export function parseStreetAddress(value: string | null | undefined): ParsedStreetAddress {
   if (!value) return { streetTokens: [], door: null, hasPluscode: false };
 
+  const cached = parseStreetAddressCache.get(value);
+  if (cached) return cached;
+  const parsed = parseStreetAddressUncached(value);
+  parseStreetAddressCache.set(value, parsed);
+  return parsed;
+}
+
+function parseStreetAddressUncached(value: string): ParsedStreetAddress {
   const hasPluscode = PLUSCODE_RE.test(value);
 
   // La calle es el primer segmento; sumamos los siguientes hasta el primero "ciudadesco".
