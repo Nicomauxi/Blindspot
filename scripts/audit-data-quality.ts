@@ -23,7 +23,7 @@ async function main(): Promise<void> {
 
   const { data: rows, error } = await db
     .from("leads")
-    .select("id, prospect_score, phone, website, whatsapp, address, source, canonical_fields, corroborating_sources, digital_footprint, data_confidence_score, contact_reliability_score")
+    .select("id, prospect_score, phone, website, whatsapp, address, source, canonical_fields, corroborating_sources, digital_footprint, inferred_state, data_confidence_score, contact_reliability_score")
     .limit(10000);
   if (error) throw new Error(error.message);
 
@@ -36,6 +36,8 @@ async function main(): Promise<void> {
     canonical: { with_fields: 0, with_conflict: 0, multi_source: 0, stale: 0, with_alternatives: 0 },
     corroboration: { multi_source_leads: 0, avg_sources: 0 },
     social: { with_search: 0, with_activity: 0, real_fb: 0, real_ig: 0, abandoned: 0 },
+    // F4.5: cobertura de la brecha digital (digitalization_level) para hacer visible el gap.
+    digitalization: { known: 0, unknown: 0, levels: {} as Record<string, number> },
     hot_leads: 0,
     confidence: { avg_data: 0, avg_contact_reliability: 0 },
   };
@@ -54,6 +56,15 @@ async function main(): Promise<void> {
     const cfEmail = (r.canonical_fields as Record<string, { value?: string }> | null)?.["email"]?.value;
     const fpEmails = (r.digital_footprint as { contact_emails?: unknown[] } | null)?.contact_emails;
     if (cfEmail || (Array.isArray(fpEmails) && fpEmails.length > 0)) agg.coverage.email++;
+
+    // Cobertura de digitalization_level (columna inferred_state) — F4.5.
+    const level = (r.inferred_state as { digitalization_level?: string } | null)?.digitalization_level;
+    if (typeof level === "string" && level.length > 0) {
+      agg.digitalization.known++;
+      agg.digitalization.levels[level] = (agg.digitalization.levels[level] ?? 0) + 1;
+    } else {
+      agg.digitalization.unknown++;
+    }
 
     const tier = tierById.get(r.id as string) ?? "none";
     agg.tiers[tier] = (agg.tiers[tier] ?? 0) + 1;
