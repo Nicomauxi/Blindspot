@@ -1,3 +1,4 @@
+import { HOT_LEAD_THRESHOLD } from "@/lib/hot-leads";
 import Link from "next/link";
 import { AdminPageLayout, HelpTip, SectionCard } from "@/components/admin-shell";
 
@@ -65,7 +66,7 @@ export default function HelpPage() {
           description="Combinaciones simples para admins que recién entran al panel."
         >
           <div className="space-y-3 text-sm text-slate-600">
-            <ShortcutRow href="/admin/leads?prospect_score_gte=70" label="Hot leads" text="Priorizar oportunidades con score alto." />
+            <ShortcutRow href={`/admin/leads?prospect_score_gte=${HOT_LEAD_THRESHOLD}`} label="Hot leads" text="Priorizar oportunidades con score alto." />
             <ShortcutRow href="/admin/leads?contact_tier=A" label="Contacto A" text="Mejor calidad de contacto (no es ranking de valor)." />
             <ShortcutRow href="/admin/crm" label="CRM" text="Seguir etapas, notas, outcomes y ownership comercial." />
             <ShortcutRow href="/admin/operations" label="Operaciones · Discovery" text="Ver si están entrando leads nuevos o si hay jobs fallidos." />

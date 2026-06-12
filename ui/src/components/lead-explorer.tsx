@@ -1,5 +1,6 @@
 "use client";
 
+import { HOT_LEAD_THRESHOLD } from "@/lib/hot-leads";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
@@ -117,7 +118,7 @@ const SORT_OPTIONS = [
 
 // Umbral canónico de "hot lead" (prospect_score). Alineado con el backend
 // (discovery-insights, performance, costs usan >= 55).
-const HOT_LEAD_THRESHOLD = 55;
+
 
 const PRESETS = [
   { id: "hot", label: "Hot leads", description: `Score ${HOT_LEAD_THRESHOLD}+`, apply: () => ({ minScore: String(HOT_LEAD_THRESHOLD) }) },

@@ -1,5 +1,6 @@
 "use client";
 
+import { HOT_LEAD_THRESHOLD } from "@/lib/hot-leads";
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
@@ -250,7 +251,7 @@ export default function AdminHomePage() {
       description="Entrá por prioridades comerciales: leads accionables y contexto operativo sin salir de Inicio."
       actions={
         <>
-          <Link href="/admin/leads?prospect_score_gte=70" className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-sm font-medium text-sky-700 transition-colors hover:bg-sky-100">
+          <Link href={`/admin/leads?prospect_score_gte=${HOT_LEAD_THRESHOLD}`} className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-sm font-medium text-sky-700 transition-colors hover:bg-sky-100">
             Ver hot leads
           </Link>
           <Link href="/admin/help" className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50">
