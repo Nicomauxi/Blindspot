@@ -276,8 +276,8 @@ buyer_types:
       catalogo: 0.20
     inferred_bonuses:
       has_delivery: 10
-    inferred_penalties:
-      has_reservations: -100
+    # N08: inferred_penalties has_reservations eliminado — inalcanzable (el gate
+    # inferred_required ya bloquea has_reservations=true)
 
   catalogo_digital:
     niche_required:
@@ -289,8 +289,7 @@ buyer_types:
       catalogo:  0.55
       web_nuevo: 0.25
       marketing: 0.20
-    inferred_penalties:
-      has_online_catalog: -100
+    # N08: ídem — el gate ya bloquea has_online_catalog=true
 
   whatsapp_business:
     tag_required: whatsapp-confirmed

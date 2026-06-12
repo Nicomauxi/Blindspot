@@ -46,6 +46,19 @@ function inferredBool(lead: Lead, field: string): boolean {
   return resolveField(lead, `inferred_state.${field}.value`) === true;
 }
 
+// N13: tri-estado — 'false' solo cuenta como ausencia VERIFICADA si el campo existe
+// con confidence > 0; sin evidencia es 'unknown' (no bloquea, pero degrada).
+function inferredTri(lead: Lead, field: string): boolean | "unknown" {
+  const value = resolveField(lead, `inferred_state.${field}.value`);
+  if (value === true) return true;
+  if (value !== false) return "unknown";
+  const confidence = resolveField(lead, `inferred_state.${field}.confidence`);
+  return typeof confidence === "number" && confidence > 0 ? false : "unknown";
+}
+
+const UNCERTAINTY_MULTIPLIER = 0.5;
+const DERIVED_WHATSAPP_MULTIPLIER = 0.7;
+
 function computeBuyerScore(
   lead: Lead,
   buyerType: string,
@@ -58,14 +71,23 @@ function computeBuyerScore(
     breakdown: { base: 0, adjustments: 0, applied_modifiers: [] },
   };
 
+  // N14: con el path social muerto, whatsapp-confirmed era inalcanzable (0/9444) y el
+  // buyer type computaba 9444 ceros. whatsapp-derived pasa el gate con penalización.
+  let tagMultiplier = 1;
+  let tagModifier: string | null = null;
   if (config.tag_required && !lead.tags.includes(config.tag_required)) {
-    return {
-      ...noScore,
-      breakdown: {
-        ...noScore.breakdown,
-        applied_modifiers: [`blocked:tag:${config.tag_required}`],
-      },
-    };
+    if (config.tag_required === "whatsapp-confirmed" && lead.tags.includes("whatsapp-derived")) {
+      tagMultiplier = DERIVED_WHATSAPP_MULTIPLIER;
+      tagModifier = `tag:whatsapp-derived:x${DERIVED_WHATSAPP_MULTIPLIER}`;
+    } else {
+      return {
+        ...noScore,
+        breakdown: {
+          ...noScore.breakdown,
+          applied_modifiers: [`blocked:tag:${config.tag_required}`],
+        },
+      };
+    }
   }
 
   if (config.niche_required) {
@@ -81,9 +103,17 @@ function computeBuyerScore(
     }
   }
 
+  let uncertaintyMultiplier = 1;
+  const uncertaintyModifiers: string[] = [];
   if (config.inferred_required) {
     for (const [field, required] of Object.entries(config.inferred_required)) {
-      const actual = inferredBool(lead, field);
+      const actual = inferredTri(lead, field);
+      if (required === false && actual === "unknown") {
+        // N13: no sabemos si lo tiene — el gate no se pasa "por falta de datos" limpio.
+        uncertaintyMultiplier *= UNCERTAINTY_MULTIPLIER;
+        uncertaintyModifiers.push(`uncertain:${field}`);
+        continue;
+      }
       if (actual !== required) {
         return {
           ...noScore,
@@ -96,14 +126,19 @@ function computeBuyerScore(
     }
   }
 
-  let base = 0;
+  // N08: normalizar a la escala alcanzable — sin dividir por la suma de pesos, las
+  // fórmulas con pesos <1 daban avg 0-4/100 (señal degenerada).
+  let weightedSum = 0;
+  let weightTotal = 0;
   for (const [key, weight] of Object.entries(config.formula)) {
     const val = subScores?.[key as keyof typeof subScores];
-    if (typeof val === "number") base += val * weight;
+    if (typeof val === "number") weightedSum += val * weight;
+    weightTotal += weight;
   }
-  base = Math.round(base);
+  let base = weightTotal > 0 ? Math.round(weightedSum / weightTotal) : 0;
+  base = Math.round(base * tagMultiplier * uncertaintyMultiplier);
 
-  const modifiers: string[] = [];
+  const modifiers: string[] = [...(tagModifier ? [tagModifier] : []), ...uncertaintyModifiers];
   let adjustments = 0;
 
   for (const [field, bonus] of Object.entries(config.inferred_bonuses ?? {})) {
