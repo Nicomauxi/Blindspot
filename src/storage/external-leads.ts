@@ -213,7 +213,31 @@ export async function addCorroboratingSource(
   // sí las trae, completamos el gps (la mejor señal para futuros cruces).
   // Se chequea contra el lead ya leído (primaryLead), no contra la respuesta del RPC,
   // para no pisar un gps existente si el RPC no devuelve la columna.
-  const mergedResult = data as Lead;
+  let mergedResult = data as Lead;
+
+  // N17: passed_filter era write-once — un rejected 'no-contact' que ahora ESTÁ
+  // corroborado y tiene contacto mergeado en canonical_fields quedaba fuera del pool
+  // para siempre (caso real: 'Soho' con email+phone+web de 2 fuentes). Rescue one-way:
+  // nunca degrada, y nunca toca rechazos de higiene (duplicate-secondary, etc.).
+  const rescueReasons = lead.rejection_reasons ?? [];
+  if (
+    lead.passed_filter === false &&
+    !rescueReasons.some((reason) => NON_RESCUABLE_REASONS.has(reason)) &&
+    qualifyExternalLead({
+      source: candidate.source,
+      hasContact: leadHasContact({ ...mergedLead, ...mergedResult }) || candidateHasContact(candidate),
+      corroborated: true,
+      foreign: isForeignAddress(lead.address ?? candidate.address),
+    }).passed_filter
+  ) {
+    const { error: rescueError } = await db
+      .from("leads")
+      .update({ passed_filter: true, rejection_reasons: [] })
+      .eq("id", leadId);
+    if (rescueError) throw new Error(`addCorroboratingSource rescue failed: ${rescueError.message}`);
+    mergedResult = { ...mergedResult, passed_filter: true, rejection_reasons: [] };
+  }
+
   if (
     lead.gps == null &&
     candidate.latitude != null &&

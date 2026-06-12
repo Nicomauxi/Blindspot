@@ -522,3 +522,52 @@ describe("insertExternalLead — re-descubrimiento (N3.1/N16)", () => {
     expect(updates[0]).not.toHaveProperty("passed_filter");
   });
 });
+
+describe("addCorroboratingSource — rescue de passed_filter (N3.2/N17)", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  function setup(existing: Partial<Lead>) {
+    const row = leadRow(existing);
+    const rescueUpdates: Array<Record<string, unknown>> = [];
+    const leadsTable = {
+      select: vi.fn(() => ({
+        eq: vi.fn(() => ({ single: vi.fn(async () => ({ data: row, error: null })) })),
+      })),
+      update: vi.fn((payload: Record<string, unknown>) => {
+        rescueUpdates.push(payload);
+        return { eq: vi.fn(async () => ({ error: null })) };
+      }),
+    };
+    const merged = { ...row, canonical_fields: { phone: { value: "099123456", confidence: 0.8, sources: ["mintur"], conflict: false } } };
+    const rpcFn = vi.fn(() => ({ single: vi.fn(async () => ({ data: merged, error: null })) }));
+    supabaseRef.current = { from: vi.fn(() => leadsTable), rpc: rpcFn };
+    return { rescueUpdates };
+  }
+
+  it("un rejected 'no-contact' que corrobora con contacto mergeado vuelve al pool", async () => {
+    const { rescueUpdates } = setup({
+      passed_filter: false,
+      rejection_reasons: ["no-contact"],
+      phone: null,
+      corroborating_sources: [],
+    });
+
+    await addCorroboratingSource("lead-1", candidate({ phone: "099123456" }));
+
+    const rescue = rescueUpdates.find((u) => u["passed_filter"] === true);
+    expect(rescue).toBeDefined();
+    expect(rescue!["rejection_reasons"]).toEqual([]);
+  });
+
+  it("NO rescata un duplicate-secondary", async () => {
+    const { rescueUpdates } = setup({
+      passed_filter: false,
+      rejection_reasons: ["duplicate-secondary"],
+      corroborating_sources: [],
+    });
+
+    await addCorroboratingSource("lead-1", candidate({ phone: "099123456" }));
+
+    expect(rescueUpdates.find((u) => u["passed_filter"] === true)).toBeUndefined();
+  });
+});
