@@ -10,6 +10,7 @@ vi.mock("../../src/storage/leads.js", () => ({
 import { runSocialDiscovery } from "../../src/modules/social-enrich/social-discover-run.js";
 import {
   discoverSocialViaSearxng,
+  extractProfileUrl,
   type SocialDiscoverDeps,
 } from "../../src/modules/social-enrich/social-discover-searxng.js";
 import { isDiscoverCandidate } from "../../src/modules/social-enrich/social-discover-run.js";
@@ -37,6 +38,24 @@ describe("isDiscoverCandidate", () => {
   });
   it("rechaza lead fuera del pool", () => {
     expect(isDiscoverCandidate(lead("d", { passed_filter: false }))).toBe(false);
+  });
+});
+
+describe("extractProfileUrl (perfil vs contenido)", () => {
+  it("normaliza un perfil de IG a su forma canónica", () => {
+    expect(extractProfileUrl("https://instagram.com/clearbarberia", "instagram")).toBe("https://www.instagram.com/clearbarberia/");
+    expect(extractProfileUrl("https://www.instagram.com/la_pasiva_uy/reels/", "instagram")).toBe("https://www.instagram.com/la_pasiva_uy/");
+  });
+  it("descarta posts/reels/explore de IG (contenido, no perfil)", () => {
+    expect(extractProfileUrl("https://www.instagram.com/p/CaARe7kFZgn/", "instagram")).toBeNull();
+    expect(extractProfileUrl("https://www.instagram.com/reel/DWhl/", "instagram")).toBeNull();
+    expect(extractProfileUrl("https://www.instagram.com/explore/locations/123/x/", "instagram")).toBeNull();
+  });
+  it("FB: perfil/página sí, contenido no", () => {
+    expect(extractProfileUrl("https://www.facebook.com/MiNegocioUy/", "facebook")).toBe("https://www.facebook.com/MiNegocioUy/");
+    expect(extractProfileUrl("https://www.facebook.com/profile.php?id=100012345", "facebook")).toBe("https://www.facebook.com/profile.php?id=100012345");
+    expect(extractProfileUrl("https://www.facebook.com/watch/?v=999", "facebook")).toBeNull();
+    expect(extractProfileUrl("https://www.facebook.com/MiNegocio/posts/123", "facebook")).toBe("https://www.facebook.com/MiNegocio/");
   });
 });
 

@@ -31,6 +31,43 @@ export interface SearxngSearchResult {
   content?: string;
 }
 
+// Segmentos que NO son un handle de perfil (son contenido o páginas de sistema).
+const IG_RESERVED = new Set(["p", "reel", "reels", "explore", "tv", "stories", "accounts", "directory", "about", "web", "developer", "legal", "privacy"]);
+const FB_RESERVED = new Set(["posts", "photos", "photo", "videos", "video", "watch", "events", "event", "groups", "marketplace", "media", "reel", "story.php", "permalink.php", "sharer", "sharer.php", "login", "help", "pages"]);
+
+// Devuelve la URL CANÓNICA del perfil (instagram.com/<handle>/) si la URL apunta a un
+// perfil o a una subpágina de perfil (/<handle>/reels/), o null si es contenido (/p/,
+// /reel/, /explore/) o de sistema. Clave para no guardar posts sueltos como "el perfil".
+export function extractProfileUrl(rawUrl: string, platform: SocialSearchPlatform): string | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    return null;
+  }
+  const host = parsed.hostname.toLowerCase().replace(/^www\./, "");
+  const seg = parsed.pathname.split("/").filter(Boolean);
+  if (seg.length === 0) return null;
+
+  if (platform === "instagram") {
+    if (!host.endsWith("instagram.com")) return null;
+    const handle = seg[0]!.toLowerCase();
+    if (IG_RESERVED.has(handle)) return null;
+    if (!/^[a-z0-9._]{1,30}$/.test(handle)) return null;
+    return `https://www.instagram.com/${handle}/`;
+  }
+  // facebook
+  if (!host.endsWith("facebook.com") && !host.endsWith("fb.com")) return null;
+  const first = seg[0]!.toLowerCase();
+  if (FB_RESERVED.has(first)) return null;
+  if (first === "profile.php") {
+    const id = parsed.searchParams.get("id");
+    return id ? `https://www.facebook.com/profile.php?id=${id}` : null;
+  }
+  if (!/^[a-z0-9.\-]{2,}$/.test(first)) return null;
+  return `https://www.facebook.com/${seg[0]}/`;
+}
+
 export interface SocialDiscoverDeps {
   search: (query: string) => Promise<SearxngSearchResult[]>;
   delay: (ms: number) => Promise<void>;
@@ -91,7 +128,11 @@ async function discoverPlatform(
   const raw = await deps.search(query);
   const results = raw
     .filter((r) => typeof r.url === "string" && r.url.length > 0)
-    .map((r) => scoreResult({ title: r.title ?? "", snippet: r.content ?? "", url: r.url! }, platform, lead));
+    // Normalizar a URL de PERFIL y descartar contenido (/p/, /reel/, /explore/). Sin esto
+    // ~64% de los "hits" eran posts sueltos, inservibles para identidad/followers del negocio.
+    .map((r) => ({ r, profile: extractProfileUrl(r.url!, platform) }))
+    .filter((x): x is { r: SearxngSearchResult; profile: string } => x.profile !== null)
+    .map(({ r, profile }) => scoreResult({ title: r.title ?? "", snippet: r.content ?? "", url: profile }, platform, lead));
   return selectBest(query, results);
 }
 
