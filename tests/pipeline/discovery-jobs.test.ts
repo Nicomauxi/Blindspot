@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   claimDiscoveryJob: vi.fn(async () => true),
   updateDiscoveryJobEnrichmentStatus: vi.fn(),
   enrichCommand: vi.fn(),
+  executeGooglePlacesDiscoveryJob: vi.fn(),
 }));
 
 vi.mock("../../src/shared/supabase.js", () => ({
@@ -44,7 +45,7 @@ vi.mock("../../src/cli/commands/enrich.js", () => ({
 }));
 
 vi.mock("../../src/modules/pipeline/google-places-discovery-job.js", () => ({
-  executeGooglePlacesDiscoveryJob: vi.fn(),
+  executeGooglePlacesDiscoveryJob: mocks.executeGooglePlacesDiscoveryJob,
 }));
 
 import { processQueuedDiscoveryJobs } from "../../src/modules/pipeline/discovery-jobs.js";
@@ -135,6 +136,30 @@ describe("processQueuedDiscoveryJobs", () => {
     mocks.listChain.limit.mockResolvedValue({ data: [], error: null });
     const result = await processQueuedDiscoveryJobs(4);
     expect(result).toEqual({ jobs_processed: 0, jobs_failed: 0, leads_found: 0, leads_new: 0 });
+  });
+
+  it("D14: serializa los jobs google_places (nunca corren 2 en paralelo)", async () => {
+    mocks.listChain.limit.mockResolvedValue({
+      data: [
+        { id: "gp-1", source: "google_places", location: "Montevideo", niche: "restaurant", profile: null, concurrency: null, max_results: 50, cost_cap_usd: 5, cpu_budget: null, enrich_after_discovery: false },
+        { id: "gp-2", source: "google_places", location: "Canelones", niche: "hotel", profile: null, concurrency: null, max_results: 50, cost_cap_usd: 5, cpu_budget: null, enrich_after_discovery: false },
+      ],
+      error: null,
+    });
+    let active = 0;
+    let maxActive = 0;
+    mocks.executeGooglePlacesDiscoveryJob.mockImplementation(async () => {
+      active++;
+      maxActive = Math.max(maxActive, active);
+      await new Promise((r) => setTimeout(r, 5));
+      active--;
+      return { fetched: 3, inserted: 1, estimatedCostUsd: 1, actualCostUsd: 1, runId: "gp-run", budgetAborted: false };
+    });
+
+    const result = await processQueuedDiscoveryJobs(4);
+
+    expect(maxActive).toBe(1);
+    expect(result.jobs_processed).toBe(2);
   });
 
   it("D5: cuenta los jobs fallidos en jobs_failed sin contarlos como exitosos", async () => {

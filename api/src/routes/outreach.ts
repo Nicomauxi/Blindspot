@@ -5,6 +5,7 @@ import { getDb } from "../db/client.js";
 import { requireAuth, getAuthUser, type AuthUser } from "../auth/middleware.js";
 import { createLLMProvider } from "../llm/factory.js";
 import type { LlmUsageLog } from "../llm/types.js";
+import { recordLlmUsage } from "../llm/usage-log.js";
 
 // Permissive UUID regex (Zod v4 uuid() is RFC-strict; this matches any 8-4-4-4-12 hex)
 const uuidSchema = z
@@ -500,11 +501,7 @@ export async function outreachRoutes(app: FastifyInstance): Promise<void> {
         success: usageSuccess,
         error: usageError,
       };
-      Promise.resolve(db.from("llm_usage_log").insert(usageRow))
-        .then(({ error: logErr }) => {
-          if (logErr) request.log.warn({ logErr }, "llm_usage_log insert failed");
-        })
-        .catch((err: unknown) => request.log.warn({ err }, "audit log insert threw"));
+      recordLlmUsage(db, usageRow, request.log);
 
       return reply.status(200).send({ data: result });
     }

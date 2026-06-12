@@ -198,9 +198,18 @@ export async function processQueuedDiscoveryJobs(concurrency = 1): Promise<Disco
     return { jobs_processed: 0, jobs_failed: 0, leads_found: 0, leads_new: 0 };
   }
 
+  // D14: los jobs google_places leen budget_remaining al arrancar y recién incrementan
+  // el spent al final. Con concurrency>1, N jobs GP simultáneos ven el MISMO remaining y
+  // cada uno se auto-aprueba contra el cap completo → sobre-gasto colectivo. Se serializan
+  // los GP (limiter dedicado pLimit(1)); los no-GP conservan la concurrencia pedida.
   const limit = pLimit(concurrency);
+  const gpLimit = pLimit(1);
   const results = (
-    await Promise.all(jobs.map((job) => limit(() => executeDiscoveryJob(job))))
+    await Promise.all(
+      jobs.map((job) =>
+        (job.source === "google_places" ? gpLimit : limit)(() => executeDiscoveryJob(job))
+      )
+    )
   ).filter((r): r is DiscoveryJobResult => r !== null);
 
   return {

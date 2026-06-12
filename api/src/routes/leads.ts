@@ -5,6 +5,7 @@ import { z } from "zod";
 import { getDb } from "../db/client.js";
 import { requireAuth, requireAdmin, getAuthUser, type AuthUser } from "../auth/middleware.js";
 import { createLLMProvider } from "../llm/factory.js";
+import { recordLlmUsage } from "../llm/usage-log.js";
 import { countLeadsByFilterSelection, type EnrichmentLeadFilterSelection } from "../../../src/storage/leads.js";
 import { expandNiche } from "../../../src/storage/niches.js";
 import { startFilterEnrichmentJob } from "../../../src/cli/commands/enrich.js";
@@ -2216,8 +2217,9 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
             fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
           errorMessage = `primary:${primaryError}; fallback:${fallbackMessage}`;
           request.log.error({ fallbackErr }, "Template lead brief fallback error");
-          void Promise.resolve(
-            db.from("llm_usage_log").insert({
+          recordLlmUsage(
+            db,
+            {
               provider: provider.name,
               model: provider.model,
               operation: "lead_brief",
@@ -2230,12 +2232,9 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
               duration_ms: Date.now() - startedAt,
               success,
               error: errorMessage,
-            })
-          )
-            .then(({ error: logErr }) => {
-              if (logErr) request.log.warn({ logErr }, "llm_usage_log insert failed");
-            })
-            .catch((err: unknown) => request.log.warn({ err }, "audit log insert threw"));
+            },
+            request.log
+          );
           return reply.status(502).send({
             error: "Assistant brief unavailable",
             error_code: "assistant_unavailable",
@@ -2243,8 +2242,9 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
         }
       }
 
-      void Promise.resolve(
-        db.from("llm_usage_log").insert({
+      recordLlmUsage(
+        db,
+        {
           provider: result.provider ?? provider.name,
           model: result.model ?? provider.model,
           operation: "lead_brief",
@@ -2257,12 +2257,9 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
           duration_ms: Date.now() - startedAt,
           success,
           error: errorMessage,
-        })
-      )
-        .then(({ error: logErr }) => {
-          if (logErr) request.log.warn({ logErr }, "llm_usage_log insert failed");
-        })
-        .catch((err: unknown) => request.log.warn({ err }, "audit log insert threw"));
+        },
+        request.log
+      );
 
       // Solo se cachea el resultado limpio — un fallback por error de Gemini debe
       // poder reintentar con el provider real en la próxima vista.
