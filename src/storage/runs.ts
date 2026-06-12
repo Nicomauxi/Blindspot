@@ -49,7 +49,11 @@ export async function completeRun(runId: string, stats: RunStats): Promise<void>
 export async function failRun(
   runId: string,
   errMsg: string,
-  duration_ms: number
+  duration_ms: number,
+  // N75: el gasto Google YA ejecutado antes del fallo (places_requests /
+  // estimated_cost_usd) debe sobrevivir en stats — antes se pisaba y el costo
+  // real de runs fallidos era irrecuperable para el backfill de presupuesto.
+  extraStats: Record<string, unknown> = {}
 ): Promise<void> {
   const log = getLogger();
 
@@ -59,7 +63,7 @@ export async function failRun(
     .from("runs")
     .update({
       status: "failed" satisfies RunStatus,
-      stats: { duration_ms, error: errMsg },
+      stats: { ...extraStats, duration_ms, error: errMsg },
       finished_at: new Date().toISOString(),
     })
     .eq("id", runId);

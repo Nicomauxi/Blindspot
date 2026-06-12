@@ -5,6 +5,12 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+// N74: el CLI ahora tiene gate de presupuesto GP — null = sin config, gate se omite.
+vi.mock("../../src/storage/pipeline-config.js", () => ({
+  getGooglePlacesBudgetStatus: vi.fn(async () => null),
+  incrementGooglePlacesBudgetSpent: vi.fn(async () => null),
+}));
+
 vi.mock("../../src/modules/discovery/places.js", () => ({
   fetchPlaceCandidates: vi.fn(),
   fetchPlaceDetails: vi.fn(),

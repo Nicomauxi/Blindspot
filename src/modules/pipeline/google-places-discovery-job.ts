@@ -131,6 +131,10 @@ export async function executeGooglePlacesDiscoveryJob(opts: {
   const discoveryConfig = getDiscoveryConfig();
   const profileConfig = getProfileConfig(profileKey, {});
   const startedAt = Date.now();
+  // N75: contadores fuera del try — si el run falla a mitad, el costo ya gastado
+  // se registra igual (stats del failRun + incremento de presupuesto).
+  let textSearchRequestsSoFar = 0;
+  let detailsRequestsSoFar = 0;
 
   const run = await createRun({
     niche: requestedNiche,
@@ -154,6 +158,7 @@ export async function executeGooglePlacesDiscoveryJob(opts: {
       maxResults,
       { minRating: profileConfig.min_rating, minReviews: profileConfig.min_reviews, earlyStop: true }
     );
+    textSearchRequestsSoFar = textSearchRequestCount;
     const { passed, rejected } = applyProfileFilter(candidates, profileConfig, discoveryConfig.social_domains);
 
     const limit = pLimit(concurrency);
@@ -179,7 +184,12 @@ export async function executeGooglePlacesDiscoveryJob(opts: {
               budgetAborted = true;
               logger.warn({ runningCost, runtimeCap }, "Google Places budget cap reached mid-execution — halting remaining detail requests");
             }
+            // N78: NO emitir el request que cruza el cap (antes se seteaba el flag y se
+            // fetcheaba igual). Se devuelve el slot reservado.
+            detailsRequestCount -= 1;
+            return candidate;
           }
+          detailsRequestsSoFar = detailsRequestCount;
 
           const details = await fetchPlaceDetails(candidate.placeId);
           if (details === null) return candidate;
@@ -235,8 +245,9 @@ export async function executeGooglePlacesDiscoveryJob(opts: {
         }).catch((err) => logger.warn({ err }, "Failed to create GP budget alert (non-critical)"));
       }
     } catch (err) {
+      // N75: NO relanzar — el run ya está completed; relanzar lo volteaba a failed
+      // borrando su costo (y el backfill solo suma completed → gasto irrecuperable).
       logger.error({ err, run_id: run.id, cost_usd: actualCostUsd }, "Failed to increment GP budget spent; run saved, use POST /pipeline/gp-budget/backfill to recover");
-      throw err;
     }
 
     if (normalizedNiche && normalizedNiche !== "all") {
@@ -262,7 +273,21 @@ export async function executeGooglePlacesDiscoveryJob(opts: {
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    await failRun(run.id, message, Date.now() - startedAt);
+    // N75: el gasto ya ejecutado (text search + details) se registra y se imputa al
+    // presupuesto aunque el run falle — antes se perdía (failRun pisaba stats y el
+    // increment nunca corría).
+    const costSoFar =
+      textSearchRequestsSoFar * TEXT_SEARCH_COST_PER_REQUEST +
+      detailsRequestsSoFar * DETAILS_COST_PER_REQUEST;
+    if (costSoFar > 0) {
+      await incrementGooglePlacesBudgetSpent(costSoFar).catch((err) =>
+        logger.error({ err, run_id: run.id, cost_usd: costSoFar }, "Failed to record GP spend of failed run")
+      );
+    }
+    await failRun(run.id, message, Date.now() - startedAt, {
+      places_requests: textSearchRequestsSoFar + detailsRequestsSoFar,
+      estimated_cost_usd: costSoFar,
+    });
     throw error;
   }
 }
