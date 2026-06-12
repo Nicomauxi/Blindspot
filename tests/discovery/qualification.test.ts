@@ -52,6 +52,19 @@ describe("qualifyExternalLead", () => {
     expect(r.passed_filter).toBe(false);
     expect(r.rejection_reasons).toEqual(["geo-out-of-country"]);
   });
+
+  it("F1.4: vertical industrial/otro NO entra al pool comercial, aun corroborada", () => {
+    const ind = qualifyExternalLead({ source: "miem_dei", hasContact: true, corroborated: true, vertical: "industrial" });
+    expect(ind).toEqual({ passed_filter: false, rejection_reasons: ["non-commercial-vertical"] });
+    const otro = qualifyExternalLead({ source: "miem_dei", hasContact: true, corroborated: false, vertical: "otro" });
+    expect(otro.passed_filter).toBe(false);
+    expect(otro.rejection_reasons).toContain("non-commercial-vertical");
+  });
+
+  it("F1.4: vertical comercio-local sigue el gate normal (pasa con contacto)", () => {
+    const r = qualifyExternalLead({ source: "miem_dei", hasContact: true, corroborated: false, vertical: "comercio-local" });
+    expect(r).toEqual({ passed_filter: true, rejection_reasons: [] });
+  });
 });
 
 describe("candidateHasContact", () => {

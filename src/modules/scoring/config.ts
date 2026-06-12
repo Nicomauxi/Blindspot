@@ -3,6 +3,28 @@ import { load } from "js-yaml";
 import { z } from "zod";
 import type { ScoringConfig } from "./types.js";
 
+// Fuentes que ingieren leads activamente y DEBEN tener bonus explícito en
+// source_quality_bonus. Sin la clave, computeSourceQualityBonus caía a `?? 0`
+// silencioso (N-SCORE.3) — ahora es error de parse. miem_dei se sumó en F1.4.
+export const ACTIVE_SCORED_SOURCES = [
+  "google_places",
+  "osm",
+  "yelu",
+  "pedidosya",
+  "mintur",
+  "miem_dei",
+] as const;
+
+export function assertSourceCoverage(
+  bonus: Record<string, number | undefined>
+): Record<string, number | undefined> {
+  const missing = ACTIVE_SCORED_SOURCES.filter((s) => !(s in bonus));
+  if (missing.length > 0) {
+    throw new Error(`source_quality_bonus sin cobertura para fuentes activas: ${missing.join(", ")}`);
+  }
+  return bonus;
+}
+
 const FieldConditionSchema = z.object({
   field: z.string(),
   op: z.enum(["eq", "neq", "gte", "lte", "between"]),
@@ -223,6 +245,10 @@ export function getScoringConfig(): ScoringConfig {
   const yamlUrl = new URL("../../../config/scoring.yaml", import.meta.url);
   const yamlString = readFileSync(yamlUrl, "utf-8");
   cached = parseConfig(yamlString);
+  // Cobertura de fuentes activas se valida al cargar la config de producción (N-SCORE.3):
+  // un source sin bonus caería a `?? 0` silencioso. Los fixtures mínimos de tests no pasan
+  // por acá, así que no se ven afectados.
+  assertSourceCoverage(cached.commercial_score.source_quality_bonus);
   return cached;
 }
 

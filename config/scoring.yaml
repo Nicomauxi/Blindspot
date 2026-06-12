@@ -139,6 +139,7 @@ commercial_score:
     yelu: 10
     pedidosya: 15
     mintur: 20
+    miem_dei: 20 # fuente oficial (RUT/MIEM); antes caía a ?? 0 silencioso (N-SCORE.3)
   commercial_breadth:
     secondary_threshold: 30
     secondary_bonus: 8

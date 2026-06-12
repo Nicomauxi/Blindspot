@@ -2,6 +2,7 @@ import { readFileSync } from "fs";
 import { load } from "js-yaml";
 import { z } from "zod";
 import type { ScoreCalibrationConfig } from "./types.js";
+import { assertSourceCoverage } from "./config.js";
 
 const ContactTierSchema = z.enum(["A", "B", "C", "D", "X"]);
 
@@ -98,6 +99,10 @@ export function getScoringCalibrationConfig(): ScoreCalibrationConfig {
   if (cached !== null) return cached;
   const yamlUrl = new URL("../../../config/scoring-calibration.yaml", import.meta.url);
   cached = parseCalibrationConfig(readFileSync(yamlUrl, "utf-8"));
+  // Cobertura de fuentes activas por escenario (N-SCORE.3).
+  for (const scenario of Object.values(cached.scenarios)) {
+    assertSourceCoverage(scenario.source_quality_bonus);
+  }
   return cached;
 }
 

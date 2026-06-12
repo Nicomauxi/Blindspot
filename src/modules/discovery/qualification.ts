@@ -1,4 +1,5 @@
 import type { DiscoveryCandidate, DiscoverySource, Lead } from "../../shared/types.js";
+import type { Vertical } from "./vertical.js";
 
 // Fuentes que solo aportan valor como SEÑAL al corroborar otro lead (no como lead
 // standalone). pedidosya no expone contacto: su valor es la señal "tiene delivery".
@@ -10,6 +11,12 @@ export interface QualificationInput {
   corroborated: boolean;
   /** El negocio está fuera de Uruguay (AR/BR). Excluye del pool aun si corrobora. F1.3. */
   foreign?: boolean;
+  /**
+   * Vertical de negocio (DEI por CIIU). Solo "comercio-local" es ICP comercial;
+   * "industrial"/"otro" se segmentan como vertical B2B y NO entran al pool comercial. F1.4.
+   * undefined = la fuente no tiene vertical (no se aplica el gate).
+   */
+  vertical?: Vertical;
 }
 
 export interface QualificationResult {
@@ -26,6 +33,11 @@ export function qualifyExternalLead(input: QualificationInput): QualificationRes
   // Fuera de Uruguay → nunca entra al pool, ni siquiera corroborado (F1.3).
   if (input.foreign) {
     return { passed_filter: false, rejection_reasons: ["geo-out-of-country"] };
+  }
+
+  // Vertical B2B (industrial/otro) → segmentada fuera del pool comercial, aun corroborada. F1.4.
+  if (input.vertical && input.vertical !== "comercio-local") {
+    return { passed_filter: false, rejection_reasons: ["non-commercial-vertical"] };
   }
 
   // Un lead corroborado por otra fuente es un negocio real confirmado → siempre pasa.

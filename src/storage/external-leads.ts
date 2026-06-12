@@ -4,6 +4,7 @@ import { calculateContactReliability, calculateDataConfidence } from "../modules
 import { isValidCoord } from "../modules/discovery/geo-text.js";
 import { isForeignAddress } from "../modules/discovery/geo-validator.js";
 import { candidateHasContact, qualifyExternalLead } from "../modules/discovery/qualification.js";
+import { classifyVertical, verticalTag } from "../modules/discovery/vertical.js";
 import { mergeCanonicalFields } from "./canonical-field.js";
 
 interface InsertExternalLeadOpts {
@@ -20,6 +21,13 @@ export async function insertExternalLead(
   const db = getSupabase();
   const placeId = `${candidate.source}:${candidate.external_id}`;
 
+  // Vertical de negocio (solo DEI trae CIIU): segmenta industrial/otro fuera del pool
+  // comercial y se taguea para el scoring/tier. F1.4.
+  const vertical =
+    candidate.source === "miem_dei"
+      ? classifyVertical(String(candidate.raw["Codigo CIIU principal"] ?? ""))
+      : undefined;
+
   // Gate de calidad: un lead externo nuevo (aún sin corroborar) solo es "visible" si
   // tiene contacto accionable y no es una fuente-señal standalone.
   const qualification = qualifyExternalLead({
@@ -27,7 +35,10 @@ export async function insertExternalLead(
     hasContact: candidateHasContact(candidate),
     corroborated: false,
     foreign: isForeignAddress(candidate.address),
+    ...(vertical ? { vertical } : {}),
   });
+
+  const tags = [...(opts.extraTags ?? []), ...(vertical ? [verticalTag(vertical)] : [])];
 
   const { data, error } = await db
     .from("leads")
@@ -46,7 +57,7 @@ export async function insertExternalLead(
         state: "discovered",
         passed_filter: qualification.passed_filter,
         rejection_reasons: qualification.rejection_reasons,
-        tags: opts.extraTags ?? [],
+        tags,
         ...(candidate.latitude != null &&
         candidate.longitude != null &&
         isValidCoord(candidate.latitude, candidate.longitude)

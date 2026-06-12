@@ -11,6 +11,7 @@ scenarios:
       yelu: 3
       pedidosya: 4
       mintur: 4
+      miem_dei: 4 # fuente oficial RUT/MIEM (N-SCORE.3)
     commercial_breadth:
       secondary_threshold: 42
       secondary_bonus: 5
@@ -70,6 +71,7 @@ scenarios:
       yelu: 3
       pedidosya: 4
       mintur: 4
+      miem_dei: 4 # fuente oficial RUT/MIEM (N-SCORE.3)
     commercial_breadth:
       secondary_threshold: 45
       secondary_bonus: 4
@@ -129,6 +131,7 @@ scenarios:
       yelu: 3
       pedidosya: 4
       mintur: 4
+      miem_dei: 4 # fuente oficial RUT/MIEM (N-SCORE.3)
     commercial_breadth:
       secondary_threshold: 45
       secondary_bonus: 4
@@ -189,6 +192,7 @@ scenarios:
       yelu: 3
       pedidosya: 4
       mintur: 10
+      miem_dei: 10 # fuente oficial RUT/MIEM (N-SCORE.3)
     commercial_breadth:
       secondary_threshold: 45
       secondary_bonus: 3
