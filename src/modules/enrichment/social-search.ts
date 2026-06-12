@@ -95,7 +95,7 @@ function cleanText(value: string | null | undefined): string {
   return (value ?? "").replace(/\s+/g, " ").trim();
 }
 
-function buildQuery(platform: SocialSearchPlatform, lead: Pick<Lead, "name" | "address">): string {
+export function buildQuery(platform: SocialSearchPlatform, lead: Pick<Lead, "name" | "address">): string {
   const city = deriveDirectoryCitySlug(lead.address);
   const site = platform === "facebook" ? "facebook.com" : "instagram.com";
   return [`site:${site}`, `"${lead.name}"`, city].filter(Boolean).join(" ");
@@ -193,7 +193,7 @@ function extractUruguayPhones(text: string): string[] {
   return Array.from(new Set(normalized));
 }
 
-function scoreResult(
+export function scoreResult(
   result: Omit<SocialSearchResult, "score" | "signals" | "phones_found">,
   platform: SocialSearchPlatform,
   lead: Pick<Lead, "name" | "address">
@@ -265,7 +265,7 @@ function emptyPlatformResult(query: string, error?: string): SocialSearchPlatfor
   };
 }
 
-function selectBest(query: string, results: SocialSearchResult[]): SocialSearchPlatformResult {
+export function selectBest(query: string, results: SocialSearchResult[]): SocialSearchPlatformResult {
   const best = [...results].sort((a, b) => b.score - a.score)[0] ?? null;
   const selected =
     best && best.score >= THRESHOLD && best.signals.includes("name_in_title")

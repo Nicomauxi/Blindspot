@@ -135,6 +135,28 @@ program
   });
 
 program
+  .command("social-discover")
+  .description("F1: descubre IG/FB de leads digital-dark vía SearXNG (gratis). Concurrente + instrumentado.")
+  .option("--run <uuid>", "Solo leads de este run")
+  .option("--all", "Todos los leads del pool digital-dark", false)
+  .option("--limit <number>", "Máx leads a procesar (mejor prospect_score primero)")
+  // Default 4: con IG+FB en paralelo por lead, son ~8 requests concurrentes a SearXNG
+  // (sweet spot medido; más allá el upstream rate-limita y baja el hit-rate).
+  .option("--concurrency <number>", "Workers en paralelo (×2 queries c/u)", "4")
+  .option("--throttle-ms <number>", "Delay entre IG y FB por lead (0 = paralelo)", "0")
+  .action(async (opts: { run?: string; all?: boolean; limit?: string; concurrency?: string; throttleMs?: string }) => {
+    const { runSocialDiscovery } = await import("./../modules/social-enrich/social-discover-run.js");
+    const stats = await runSocialDiscovery({
+      ...(opts.run ? { run: opts.run } : { all: true }),
+      ...(opts.limit ? { limit: Number(opts.limit) } : {}),
+      concurrency: Number(opts.concurrency ?? "4"),
+      throttleMs: Number(opts.throttleMs ?? "0"),
+    });
+    console.log(`\nSocial discover: ${stats.found_any} con perfil (${stats.found_instagram} IG / ${stats.found_facebook} FB) / ${stats.no_match} sin match / ${stats.candidates} candidatos`);
+    console.log(`⏱  throughput: ${stats.leads_per_sec} leads/seg · ${(stats.elapsed_ms / 1000).toFixed(1)}s · concurrency=${opts.concurrency ?? "4"}`);
+  });
+
+program
   .command("ig-snippet-enrich")
   .description("Enrich IG metrics + liveness via search snippet (free, $0). Default provider: self-hosted SearXNG (SEARXNG_URL).")
   .option("--run <uuid>", "Enrich leads of this run")

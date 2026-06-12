@@ -225,7 +225,8 @@ export interface SocialSearchPlatformResult {
 
 export interface DuckDuckGoSocialSearch {
   ran_at: string;
-  source: "duckduckgo" | "duckduckgo-fallback";
+  // searxng: descubrimiento vía SearXNG self-hosted (F1, reemplaza al DDG bloqueado).
+  source: "duckduckgo" | "duckduckgo-fallback" | "searxng";
   facebook: SocialSearchPlatformResult;
   instagram: SocialSearchPlatformResult;
 }
