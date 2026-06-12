@@ -1038,6 +1038,9 @@ function normalizeLeadRow(row: JsonRecord): JsonRecord {
     canonical_fields: canonicalFields,
     search_vector: row["search_vector"] ?? null,
     sources_count: asNullableNumber(row["sources_count"]) ?? corroboratingSources.length,
+    // M3/D10: columnas derivadas de lead_dashboard para badges de UI.
+    sellable: asBooleanOrNull(row["sellable"]),
+    website_kind: asNullableString(row["website_kind"]),
   };
 
   const fieldSources = buildFieldSources(normalized, canonicalFields, corroboratingSources);
