@@ -18,6 +18,11 @@ import type {
 
 const DEFAULT_SEARXNG_URL = "http://localhost:8080";
 const SEARXNG_TIMEOUT_MS = 8000;
+// Engines RESILIENTES medidos para queries site:instagram.com (2026-06): qwant y yandex
+// responden con perfiles + followers y NO ponen CAPTCHA. Google/Brave/DDG/Startpage/Mojeek
+// suspenden nuestra IP (cascada de suspensión que colapsa el hit-rate). Fijar los buenos
+// estabiliza el hit-rate sin restart de contenedor. Override: SEARXNG_ENGINES.
+const DEFAULT_ENGINES = "qwant,yandex";
 
 export interface SearxngSearchResult {
   url?: string;
@@ -31,7 +36,8 @@ export interface SocialDiscoverDeps {
 }
 
 async function searxngSearch(query: string, baseUrl: string, fetchImpl: typeof fetch): Promise<SearxngSearchResult[]> {
-  const url = `${baseUrl}/search?q=${encodeURIComponent(query)}&format=json`;
+  const engines = process.env["SEARXNG_ENGINES"] ?? DEFAULT_ENGINES;
+  const url = `${baseUrl}/search?q=${encodeURIComponent(query)}&format=json&engines=${encodeURIComponent(engines)}`;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), SEARXNG_TIMEOUT_MS);
   try {

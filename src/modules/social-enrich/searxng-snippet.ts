@@ -54,7 +54,9 @@ export async function fetchInstagramSnippetViaSearxng(
 
   const query = `site:instagram.com/${username}`;
   try {
-    const url = `${base}/search?q=${encodeURIComponent(query)}&format=json`;
+    // Engines resilientes (qwant/yandex): los grandes ponen CAPTCHA a nuestra IP. Override SEARXNG_ENGINES.
+    const engines = process.env["SEARXNG_ENGINES"] ?? "qwant,yandex";
+    const url = `${base}/search?q=${encodeURIComponent(query)}&format=json&engines=${encodeURIComponent(engines)}`;
     // F4.3: timeout para no colgar el enrich si SearXNG no responde (patrón de http.ts).
     const res = await doFetch(url, {
       headers: { Accept: "application/json" },
