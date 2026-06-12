@@ -212,6 +212,20 @@ export async function bulkInsertDiscoveryJobs(
   return (data ?? []) as DiscoveryJobRow[];
 }
 
+// N40: claim atómico queued→running. El path viejo (update incondicional) permitía
+// que el timer del scheduler y la fase discovery del run ejecuten el MISMO job.
+export async function claimDiscoveryJob(id: string): Promise<boolean> {
+  const db = getSupabase();
+  const { data, error } = await db
+    .from("discovery_jobs")
+    .update({ status: "running", started_at: new Date().toISOString(), completed_at: null })
+    .eq("id", id)
+    .eq("status", "queued")
+    .select("id");
+  if (error) throw new Error(`claimDiscoveryJob failed: ${error.message}`);
+  return (data ?? []).length > 0;
+}
+
 export async function updateDiscoveryJobStatus(
   id: string,
   status: DiscoveryJobStatus,

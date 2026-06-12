@@ -4,7 +4,7 @@ import { executeExternalDiscovery } from "../../cli/commands/discover-external.j
 import { getSupabase } from "../../shared/supabase.js";
 import { getLogger } from "../../shared/logger.js";
 import { createRun, completeRun, failRun } from "../../storage/runs.js";
-import { updateDiscoveryJobEnrichmentStatus, updateDiscoveryJobStatus } from "../../storage/discovery-jobs.js";
+import { claimDiscoveryJob, updateDiscoveryJobEnrichmentStatus, updateDiscoveryJobStatus } from "../../storage/discovery-jobs.js";
 import { executeGooglePlacesDiscoveryJob } from "./google-places-discovery-job.js";
 import { createAlert } from "../../storage/alerts.js";
 
@@ -79,8 +79,13 @@ export async function listQueuedDiscoveryJobs(limit: number): Promise<QueuedDisc
   return (data ?? []) as QueuedDiscoveryJob[];
 }
 
-async function executeDiscoveryJob(job: QueuedDiscoveryJob): Promise<{ leadsFound: number; leadsNew: number }> {
-  await updateDiscoveryJobStatus(job.id, "running");
+async function executeDiscoveryJob(job: QueuedDiscoveryJob): Promise<{ leadsFound: number; leadsNew: number } | null> {
+  // N40: claim CAS — si otro proceso (timer vs fase de run) ya lo tomó, saltear.
+  const claimed = await claimDiscoveryJob(job.id);
+  if (!claimed) {
+    logger.info({ jobId: job.id }, "Discovery job ya claimeado por otro proceso — salteado");
+    return null;
+  }
 
   let externalRunId: string | null = null;
   let externalRunStartedAt = 0;
@@ -187,9 +192,9 @@ export async function processQueuedDiscoveryJobs(concurrency = 1): Promise<Disco
   }
 
   const limit = pLimit(concurrency);
-  const results = await Promise.all(
-    jobs.map((job) => limit(() => executeDiscoveryJob(job)))
-  );
+  const results = (
+    await Promise.all(jobs.map((job) => limit(() => executeDiscoveryJob(job))))
+  ).filter((r): r is { leadsFound: number; leadsNew: number } => r !== null);
 
   return {
     jobs_processed: results.length,

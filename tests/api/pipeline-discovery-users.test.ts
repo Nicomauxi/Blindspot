@@ -174,17 +174,19 @@ vi.mock("../../api/src/db/client.js", () => ({
                 maybeSingle: async () => ({ data: null }),
               }),
             }),
-            in: (_c: string, values: unknown[]) => ({
-              limit: (_n: number) => ({
-                maybeSingle: async () => ({
-                  data: _activePipelineRun && values.includes(_activePipelineRun["status"]) ? _activePipelineRun : null,
+            in: (_c: string, values: unknown[]) => {
+              // N45: el abort ahora encadena .order().order().limit().maybeSingle()
+              const chain: Record<string, unknown> = {
+                limit: (_n: number) => ({
+                  maybeSingle: async () => ({
+                    data: _activePipelineRun && values.includes(_activePipelineRun["status"]) ? _activePipelineRun : null,
+                  }),
+                  then: (resolve: (v: unknown) => void) => resolve({ data: [], error: null, count: 0 }),
                 }),
-              }),
-              order: () => ({
-                limit: (_n: number) =>
-                  Promise.resolve({ data: [], error: null, count: 0 }),
-              }),
-            }),
+              };
+              chain["order"] = () => chain;
+              return chain;
+            },
           }),
           insert: () => ({
             select: () => ({

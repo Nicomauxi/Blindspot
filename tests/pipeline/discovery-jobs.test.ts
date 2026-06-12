@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   completeRun: vi.fn(),
   failRun: vi.fn(),
   updateDiscoveryJobStatus: vi.fn(),
+  claimDiscoveryJob: vi.fn(async () => true),
   updateDiscoveryJobEnrichmentStatus: vi.fn(),
   enrichCommand: vi.fn(),
 }));
@@ -35,6 +36,7 @@ vi.mock("../../src/storage/runs.js", () => ({
 vi.mock("../../src/storage/discovery-jobs.js", () => ({
   updateDiscoveryJobStatus: mocks.updateDiscoveryJobStatus,
   updateDiscoveryJobEnrichmentStatus: mocks.updateDiscoveryJobEnrichmentStatus,
+  claimDiscoveryJob: mocks.claimDiscoveryJob,
 }));
 
 vi.mock("../../src/cli/commands/enrich.js", () => ({
@@ -116,8 +118,17 @@ describe("processQueuedDiscoveryJobs", () => {
     expect(result.jobs_processed).toBe(2);
     expect(result.leads_found).toBe(18);
     expect(result.leads_new).toBe(5);
-    expect(mocks.updateDiscoveryJobStatus).toHaveBeenCalledWith("job-1", "running");
-    expect(mocks.updateDiscoveryJobStatus).toHaveBeenCalledWith("job-2", "running");
+    expect(mocks.claimDiscoveryJob).toHaveBeenCalledWith("job-1"); // N40: claim CAS
+    expect(mocks.claimDiscoveryJob).toHaveBeenCalledWith("job-2");
+  });
+
+  it("N4.3/N40: un job ya claimeado por otro proceso se saltea (claim CAS)", async () => {
+    mocks.claimDiscoveryJob.mockResolvedValueOnce(false);
+
+    const summary = await processQueuedDiscoveryJobs(1);
+
+    expect(summary.jobs_processed).toBe(0);
+    expect(mocks.executeExternalDiscovery).not.toHaveBeenCalled();
   });
 
   it("returns empty summary when no jobs are queued", async () => {
