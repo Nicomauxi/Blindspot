@@ -1,3 +1,4 @@
+import { processDueCrmReminders } from "../crm/reminder-alerts.js";
 import os from "node:os";
 import cron from "node-cron";
 import { getSupabase } from "../../shared/supabase.js";
@@ -43,12 +44,15 @@ function hostResourceUsage(): { cpuPct: number; ramPct: number } {
 }
 const CONFIG_WATCH_INTERVAL_MS = 60_000;
 const DISCOVERY_POLL_INTERVAL_MS = 30_000;
+// N27: chequeo de reminders CRM vencidos → system_alerts al owner.
+const CRM_REMINDER_POLL_INTERVAL_MS = 5 * 60_000;
 
 export class PipelineScheduler {
   private cronTask: ReturnType<typeof cron.schedule> | null = null;
   private pipelinePollTimer: ReturnType<typeof setInterval> | null = null;
   private configWatchTimer: ReturnType<typeof setInterval> | null = null;
   private discoveryPollTimer: ReturnType<typeof setInterval> | null = null;
+  private crmReminderTimer: ReturnType<typeof setInterval> | null = null;
   private activeRunIds = new Set<string>();
   private lastConfigUpdatedAt: string | null = null;
   private polling = false;
@@ -76,6 +80,13 @@ export class PipelineScheduler {
       );
     }, DISCOVERY_POLL_INTERVAL_MS);
 
+    // N27: reminders CRM → alertas (best-effort, nunca tumba el scheduler).
+    this.crmReminderTimer = setInterval(() => {
+      processDueCrmReminders().catch((err) =>
+        logger.error({ err }, "CRM reminder poll error")
+      );
+    }, CRM_REMINDER_POLL_INTERVAL_MS);
+
     // Initial checks on startup
     await this.pollPendingRuns();
 
@@ -87,6 +98,7 @@ export class PipelineScheduler {
     if (this.pipelinePollTimer) clearInterval(this.pipelinePollTimer);
     if (this.configWatchTimer) clearInterval(this.configWatchTimer);
     if (this.discoveryPollTimer) clearInterval(this.discoveryPollTimer);
+    if (this.crmReminderTimer) clearInterval(this.crmReminderTimer);
     logger.info("Pipeline scheduler stopped");
   }
 
