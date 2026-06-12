@@ -6,6 +6,7 @@
 import type { DiscoveryCandidate } from "../../shared/types.js";
 import type { AllRuntime } from "../../storage/system-lists.js";
 import { normalizeNiche } from "./filters.js";
+import { scrubJunkPhone } from "./phone-quality.js";
 
 // Reclasifica el niche de un candidate con el vocabulario dinámico. Usa el niche_hint crudo
 // (texto de rubro/actividad que conoce el provider) y, si no, el nombre. Si el vocabulario
@@ -26,7 +27,9 @@ export function normalizeCandidate(
         ? providerNiche
         : "other";
 
-  return { ...candidate, niche: nicheFinal };
+  // F5.3: un phone placeholder ('0', <7 dígitos) no es un canal de contacto — anularlo
+  // acá evita que cuente como contacto en qualification o como identidad en dedup.
+  return { ...candidate, niche: nicheFinal, phone: scrubJunkPhone(candidate.phone) };
 }
 
 export function normalizeCandidates(

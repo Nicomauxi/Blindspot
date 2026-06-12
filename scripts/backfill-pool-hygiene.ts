@@ -11,7 +11,12 @@
 
 import { getSupabase } from "../src/shared/supabase.js";
 import { leadHasContact } from "../src/modules/discovery/qualification.js";
+import { findGenericSharedPhones, isJunkPhone } from "../src/modules/discovery/phone-quality.js";
 import type { Lead } from "../src/shared/types.js";
+
+/** F5.3: phone compartido por más de N leads = genérico (gestor/institución). */
+const SHARED_PHONE_THRESHOLD = 5;
+const SHARED_PHONE_TAG = "shared-phone-generic";
 
 const PAGE_SIZE = 1000;
 
@@ -93,6 +98,31 @@ async function applyExclusions(
   }
 }
 
+interface PhoneRow {
+  id: string;
+  name: string;
+  phone: string | null;
+  tags: string[];
+}
+
+async function loadAllPhones(): Promise<PhoneRow[]> {
+  const db = getSupabase();
+  const rows: PhoneRow[] = [];
+  let from = 0;
+  for (;;) {
+    const { data, error } = await db
+      .from("leads")
+      .select("id, name, phone, tags")
+      .not("phone", "is", null)
+      .range(from, from + PAGE_SIZE - 1);
+    if (error) throw new Error(`load phones failed: ${error.message}`);
+    rows.push(...((data ?? []) as PhoneRow[]));
+    if (!data || data.length < PAGE_SIZE) break;
+    from += PAGE_SIZE;
+  }
+  return rows;
+}
+
 async function main(): Promise<void> {
   const apply = process.argv.includes("--apply");
   console.log(`\n=== F5 backfill pool-hygiene — ${apply ? "APPLY" : "DRY-RUN"} ===\n`);
@@ -105,6 +135,19 @@ async function main(): Promise<void> {
   console.log(`F5.2 sin contacto accionable en pool: ${noContact.length}`);
   for (const r of noContact.slice(0, 10)) console.log(`  - ${r.id} ${r.name}`);
 
+  const phoneRows = await loadAllPhones();
+  const junk = phoneRows.filter((r) => isJunkPhone(r.phone));
+  const generic = findGenericSharedPhones(phoneRows.map((r) => r.phone), SHARED_PHONE_THRESHOLD);
+  const genericRows = phoneRows.filter((r) => {
+    if (isJunkPhone(r.phone)) return false; // su phone se anula en el paso junk
+    const digits = (r.phone ?? "").replace(/\D/g, "");
+    return generic.has(digits) && !r.tags.includes(SHARED_PHONE_TAG);
+  });
+  console.log(`F5.3 phones placeholder (→ phone=null): ${junk.length}`);
+  for (const r of junk.slice(0, 10)) console.log(`  - ${r.id} ${r.name} phone='${r.phone}'`);
+  console.log(`F5.3 phones genéricos compartidos >${SHARED_PHONE_THRESHOLD} (→ tag): ${genericRows.length} leads / ${generic.size} números`);
+  for (const d of [...generic].slice(0, 10)) console.log(`  - ${d}`);
+
   if (!apply) {
     console.log("\n(dry-run — no se escribió nada. Re-ejecutar con --apply.)\n");
     return;
@@ -112,6 +155,26 @@ async function main(): Promise<void> {
 
   await applyExclusions(dupes, "duplicate-secondary");
   await applyExclusions(noContact, "no-contact");
+
+  const db = getSupabase();
+  let junkCleared = 0;
+  for (const r of junk) {
+    const { error } = await db.from("leads").update({ phone: null }).eq("id", r.id);
+    if (error) console.error(`  ! junk ${r.id}: ${error.message}`);
+    else junkCleared++;
+  }
+  console.log(`  phones placeholder anulados: ${junkCleared}`);
+
+  let tagged = 0;
+  for (const r of genericRows) {
+    const { error } = await db
+      .from("leads")
+      .update({ tags: [...r.tags, SHARED_PHONE_TAG] })
+      .eq("id", r.id);
+    if (error) console.error(`  ! generic ${r.id}: ${error.message}`);
+    else tagged++;
+  }
+  console.log(`  tagueados ${SHARED_PHONE_TAG}: ${tagged}`);
 }
 
 main().catch((err) => {

@@ -65,11 +65,11 @@ describe("normalizeCandidate", () => {
 describe("normalizeCandidates", () => {
   it("normaliza un lote preservando source y demás campos", () => {
     const out = normalizeCandidates(
-      [cand({ niche_hint: "panaderia", phone: "099" }), cand({ source: "osm", niche: "restaurant" })],
+      [cand({ niche_hint: "panaderia", phone: "099123456" }), cand({ source: "osm", niche: "restaurant" })],
       ALIASES
     );
     expect(out[0]!.niche).toBe("bakery");
-    expect(out[0]!.phone).toBe("099");
+    expect(out[0]!.phone).toBe("099123456");
     expect(out[1]!.niche).toBe("restaurant");
   });
 });
