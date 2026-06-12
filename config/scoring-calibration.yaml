@@ -194,9 +194,12 @@ scenarios:
       mintur: 10
       miem_dei: 10 # fuente oficial RUT/MIEM (N-SCORE.3)
     commercial_breadth:
-      secondary_threshold: 45
+      # N1.2/N02: con 45/55 sobre sub-scores AJUSTADOS, breadth daba 0 en 9444/9444
+      # leads (señal constante = muerta). 30/40 alineado al umbral histórico de
+      # scoring.yaml; medido: ~190 leads del pool ganan breadth con 30.
+      secondary_threshold: 30
       secondary_bonus: 3
-      tertiary_threshold: 55
+      tertiary_threshold: 40
       tertiary_bonus: 1
     business_quality:
       rating_tiers:
