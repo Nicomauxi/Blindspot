@@ -3,16 +3,16 @@ import { computeContactProfile, CONTACTABLE_TIERS } from "../../src/modules/scor
 import { empty_lead } from "./fixtures/leads.js";
 
 describe("computeContactProfile", () => {
-  it("email aislado queda en tier B hasta que aparezcan más canales", () => {
+  it("email aislado queda en tier C (F3.4: ya no alcanza B solo)", () => {
     const profile = computeContactProfile({
       ...empty_lead,
       canonical_fields: { email: "owner@example.com" },
     });
 
-    expect(profile.score).toBe(45);
-    expect(profile.tier).toBe("B");
+    expect(profile.score).toBe(30);
+    expect(profile.tier).toBe("C");
     expect(profile.signals).toEqual([
-      { name: "email", weight: 45, value: 1 },
+      { name: "email", weight: 30, value: 1 },
     ]);
   });
 

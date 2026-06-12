@@ -162,8 +162,8 @@ commercial_score:
     score_adjustment: { base: 0.9, weight: 0.22 }
     contact_score:
       weights:
-        email: 45
-        extra_email: 5
+        email: 30           # F3.4: bajado de 45 — un email aislado no debe alcanzar tier B
+        extra_email: 5      #       solo (45=umbral B). Canal válido pero no inmediato.
         whatsapp_direct: 28
         whatsapp_derived: 18
         phone: 18           # móvil (señal de dueño)
