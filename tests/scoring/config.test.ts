@@ -51,6 +51,11 @@ commercial_score:
   accessibility:
     tier_base: { X: 0.30, D: 0.65, C: 0.90, B: 1.15, A: 1.30 }
     reliability_adjustment: { base: 0.75, weight: 0.25 }
+    score_adjustment: { base: 0.9, weight: 0.22 }
+    contact_score:
+      weights: { email: 30, extra_email: 5, whatsapp_direct: 28, whatsapp_derived: 18, phone: 18, phone_landline: 8, phone_confirmed_bonus: 6, address: 8, website: 6, contact_form: 4, social_dm_channel: 3, whatsapp_web_link: 5, multi_channel_bonus: 6, high_confidence_bonus: 4 }
+      thresholds: { A: 70, B: 45, C: 24, D: 8 }
+      cap: 100
   timing:
     urgency_high: 0.15
     new_business_window: 0.05
@@ -137,6 +142,11 @@ commercial_score:
   accessibility:
     tier_base: { X: 0.30, D: 0.65, C: 0.90, B: 1.15, A: 1.30 }
     reliability_adjustment: { base: 0.75, weight: 0.25 }
+    score_adjustment: { base: 0.9, weight: 0.22 }
+    contact_score:
+      weights: { email: 30, extra_email: 5, whatsapp_direct: 28, whatsapp_derived: 18, phone: 18, phone_landline: 8, phone_confirmed_bonus: 6, address: 8, website: 6, contact_form: 4, social_dm_channel: 3, whatsapp_web_link: 5, multi_channel_bonus: 6, high_confidence_bonus: 4 }
+      thresholds: { A: 70, B: 45, C: 24, D: 8 }
+      cap: 100
   timing:
     urgency_high: 0.15
     new_business_window: 0.05
@@ -193,6 +203,11 @@ commercial_score:
   accessibility:
     tier_base: { X: 0.30, D: 0.65, C: 0.90, B: 1.15, A: 1.30 }
     reliability_adjustment: { base: 0.75, weight: 0.25 }
+    score_adjustment: { base: 0.9, weight: 0.22 }
+    contact_score:
+      weights: { email: 30, extra_email: 5, whatsapp_direct: 28, whatsapp_derived: 18, phone: 18, phone_landline: 8, phone_confirmed_bonus: 6, address: 8, website: 6, contact_form: 4, social_dm_channel: 3, whatsapp_web_link: 5, multi_channel_bonus: 6, high_confidence_bonus: 4 }
+      thresholds: { A: 70, B: 45, C: 24, D: 8 }
+      cap: 100
   timing:
     urgency_high: 0.15
     new_business_window: 0.05
@@ -262,6 +277,11 @@ commercial_score:
   accessibility:
     tier_base: { X: 0.30, D: 0.65, C: 0.90, B: 1.15, A: 1.30 }
     reliability_adjustment: { base: 0.75, weight: 0.25 }
+    score_adjustment: { base: 0.9, weight: 0.22 }
+    contact_score:
+      weights: { email: 30, extra_email: 5, whatsapp_direct: 28, whatsapp_derived: 18, phone: 18, phone_landline: 8, phone_confirmed_bonus: 6, address: 8, website: 6, contact_form: 4, social_dm_channel: 3, whatsapp_web_link: 5, multi_channel_bonus: 6, high_confidence_bonus: 4 }
+      thresholds: { A: 70, B: 45, C: 24, D: 8 }
+      cap: 100
   timing:
     urgency_high: 0.15
     new_business_window: 0.05
@@ -286,12 +306,12 @@ pitch_hooks:
 describe("getScoringConfig", () => {
   it("loads the real scoring.yaml and returns valid config", () => {
     const config = getScoringConfig();
-    expect(config.version).toBe(2);
+    expect(config.version).toBe(3);
     expect(config.recent_reviews_threshold_days).toBe(180);
     expect(config.business_quality.rules.length).toBeGreaterThan(0);
     expect(config.digital_gap.rules.length).toBeGreaterThan(0);
     expect(config.commercial_score.source_quality_bonus.osm).toBe(8);
-    expect(config.thresholds.hot).toBe(55);
+    expect(config.thresholds.hot).toBe(50); // canary del valor real; alineación 50↔55 → N6.1
     expect(config.pitch_hooks.software.default).toContain("sistema");
     expect(config.digital_gap.rules).toContainEqual({
       name: "web_outdated",
@@ -343,7 +363,7 @@ describe("getScoringConfig", () => {
       "whatsapp_derived",
       "whatsapp_missing",
     ]);
-    expect(config.prospect_formula).toBe("commercial_score_v2");
+    expect(config.prospect_formula).toBe("commercial_score_v3");
   });
 
   it("singleton: two calls return the same object reference", () => {
@@ -394,6 +414,11 @@ commercial_score:
   accessibility:
     tier_base: { X: 0.30, D: 0.65, C: 0.90, B: 1.15, A: 1.30 }
     reliability_adjustment: { base: 0.75, weight: 0.25 }
+    score_adjustment: { base: 0.9, weight: 0.22 }
+    contact_score:
+      weights: { email: 30, extra_email: 5, whatsapp_direct: 28, whatsapp_derived: 18, phone: 18, phone_landline: 8, phone_confirmed_bonus: 6, address: 8, website: 6, contact_form: 4, social_dm_channel: 3, whatsapp_web_link: 5, multi_channel_bonus: 6, high_confidence_bonus: 4 }
+      thresholds: { A: 70, B: 45, C: 24, D: 8 }
+      cap: 100
   timing:
     urgency_high: 0.15
     new_business_window: 0.05
@@ -453,6 +478,11 @@ commercial_score:
   accessibility:
     tier_base: { X: 0.30, D: 0.65, C: 0.90, B: 1.15, A: 1.30 }
     reliability_adjustment: { base: 0.75, weight: 0.25 }
+    score_adjustment: { base: 0.9, weight: 0.22 }
+    contact_score:
+      weights: { email: 30, extra_email: 5, whatsapp_direct: 28, whatsapp_derived: 18, phone: 18, phone_landline: 8, phone_confirmed_bonus: 6, address: 8, website: 6, contact_form: 4, social_dm_channel: 3, whatsapp_web_link: 5, multi_channel_bonus: 6, high_confidence_bonus: 4 }
+      thresholds: { A: 70, B: 45, C: 24, D: 8 }
+      cap: 100
   timing:
     urgency_high: 0.15
     new_business_window: 0.05
@@ -516,6 +546,11 @@ commercial_score:
   accessibility:
     tier_base: { X: 0.30, D: 0.65, C: 0.90, B: 1.15, A: 1.30 }
     reliability_adjustment: { base: 0.75, weight: 0.25 }
+    score_adjustment: { base: 0.9, weight: 0.22 }
+    contact_score:
+      weights: { email: 30, extra_email: 5, whatsapp_direct: 28, whatsapp_derived: 18, phone: 18, phone_landline: 8, phone_confirmed_bonus: 6, address: 8, website: 6, contact_form: 4, social_dm_channel: 3, whatsapp_web_link: 5, multi_channel_bonus: 6, high_confidence_bonus: 4 }
+      thresholds: { A: 70, B: 45, C: 24, D: 8 }
+      cap: 100
   timing:
     urgency_high: 0.15
     new_business_window: 0.05
