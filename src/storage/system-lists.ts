@@ -298,7 +298,12 @@ export async function loadRuntimeLists(): Promise<RuntimeLists> {
       platformHosts,
       blockedInstagramHosts:  byName("blocked_instagram_hosts"),
       foreignTlds:            new Set(byName("foreign_tlds")),
-      foreignEmailTlds:       new Set(byName("foreign_tlds")),
+      // F6.2: antes leía foreign_tlds dos veces — los TLDs de email compuestos
+      // (com.br, com.ar…) nunca llegaban. Lista vacía → fallback hardcodeado.
+      foreignEmailTlds: (() => {
+        const raw = byName("foreign_email_tlds");
+        return raw.length > 0 ? new Set(raw) : fallbackLists().foreignEmailTlds;
+      })(),
       foreignGeoTerms:        byName("foreign_geo_terms"),
       foreignPhonePrefixes:   byName("foreign_phone_prefixes"),
       franchiseNames: (() => {

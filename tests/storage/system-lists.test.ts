@@ -36,6 +36,43 @@ describe("loadAllRuntime", () => {
   });
 });
 
+describe("loadRuntimeLists — foreign_email_tlds (F6.2)", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  function mockRows(rows: Array<{ list_name: string; value: string; scope: string | null }>) {
+    vi.mocked(getSupabase).mockReturnValue({
+      from: vi.fn(() => ({
+        select: vi.fn(() => ({
+          eq: vi.fn(async () => ({ data: rows, error: null })),
+        })),
+      })),
+    } as never);
+  }
+
+  it("lee la lista foreign_email_tlds (no foreign_tlds dos veces)", async () => {
+    const { loadRuntimeLists } = await import("../../src/storage/system-lists.js");
+    mockRows([
+      { list_name: "foreign_tlds", value: "ar", scope: null },
+      { list_name: "foreign_email_tlds", value: "com.br", scope: null },
+    ]);
+
+    const lists = await loadRuntimeLists();
+
+    expect(lists.foreignEmailTlds.has("com.br")).toBe(true);
+    expect(lists.foreignTlds.has("ar")).toBe(true);
+    expect(lists.foreignTlds.has("com.br")).toBe(false);
+  });
+
+  it("sin filas foreign_email_tlds usa el fallback hardcodeado", async () => {
+    const { loadRuntimeLists } = await import("../../src/storage/system-lists.js");
+    mockRows([{ list_name: "foreign_tlds", value: "ar", scope: null }]);
+
+    const lists = await loadRuntimeLists();
+
+    expect(lists.foreignEmailTlds.has("com.br")).toBe(true); // del fallback
+  });
+});
+
 describe("detectAndSeedEmailProviders", () => {
   beforeEach(() => vi.clearAllMocks());
 
