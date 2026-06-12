@@ -50,6 +50,7 @@ import type { GeoCtx } from "../social-enrich/geo-penalty.js";
 import { classifyUruguayPhones } from "../../shared/phone.js";
 
 const HTML_CACHE_MS = 7 * 24 * 60 * 60 * 1_000;
+const FETCH_ERROR_CACHE_MS = 30 * 24 * 60 * 60 * 1_000; // F4.4: TTL de errores permanentes
 const WHOIS_CACHE_MS = 30 * 24 * 60 * 60 * 1_000;
 const PHONE_MOBILE_HEURISTIC = /^\+?\d{10,}$/;
 const SOCIAL_SEARCH_THRESHOLD = 0.4;
@@ -126,11 +127,29 @@ function getSocialSearch(footprint: DigitalFootprint | null): SocialSearch | nul
   return footprint?.social_search ?? null;
 }
 
+// F4.4: un error de fetch PERMANENTE (404/403/410, non-html, URL inválida) no se resuelve
+// reintentando → se cachea con TTL para no re-fetchear en cada corrida. Los TRANSITORIOS
+// (timeout, 5xx, 429, 408, red) sí se reintentan.
+export function isPermanentFetchError(error: string): boolean {
+  if (error === "non-html-content" || error === "invalid-domain") return true;
+  const m = /^http-(\d{3})$/.exec(error);
+  if (m) {
+    const code = Number(m[1]);
+    return code >= 400 && code < 500 && code !== 408 && code !== 429;
+  }
+  return false; // network:/http-5xx/read-body:/unknown → transitorio
+}
+
 function isHtmlCacheFresh(footprint: DigitalFootprint | null): boolean {
   const enriched = asEnriched(footprint);
   if (!enriched) return false;
-  // If the previous attempt errored, we don't honor cache — we want to retry.
-  if (enriched.fetch_error) return false;
+  if (enriched.fetch_error) {
+    // Transitorio → no honrar cache, reintentar. Permanente → cachear con TTL. F4.4.
+    if (!isPermanentFetchError(enriched.fetch_error)) return false;
+    const te = parseIso(enriched.fetched_at);
+    if (te === null) return false;
+    return Date.now() - te < FETCH_ERROR_CACHE_MS;
+  }
   const t = parseIso(enriched.fetched_at);
   if (t === null) return false;
   return Date.now() - t < HTML_CACHE_MS;
