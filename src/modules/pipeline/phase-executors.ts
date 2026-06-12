@@ -8,6 +8,8 @@ import type { PipelineConfig } from "./types.js";
 
 interface PhaseExecutionSummary {
   itemsProcessed: number;
+  /** N43: ítems que FALLARON dentro de la fase (la fase puede 'terminar' con 100% de fallos). */
+  failedItems?: number;
   note?: string;
 }
 
@@ -109,14 +111,19 @@ export async function executeEnrichPhase(
     return { itemsProcessed };
   }
 
-  await enrichCommand({
+  const result = await enrichCommand({
     all: true,
     forceRefresh: false,
     withHeuristic: config.with_heuristic,
     concurrency: String(config.concurrency),
   });
 
-  return { itemsProcessed };
+  // N43: items_processed = trabajo real (no el pre-count del pool).
+  return {
+    itemsProcessed: result.stats.leads_processed,
+    failedItems: result.stats.fetched_error + result.stats.whois_errors,
+    note: `fetched_ok=${result.stats.fetched_ok}, fetched_error=${result.stats.fetched_error}`,
+  };
 }
 
 export async function executeScorePhase(
@@ -129,10 +136,15 @@ export async function executeScorePhase(
     return { itemsProcessed };
   }
 
-  await scoreCommand({
+  const result = await scoreCommand({
     all: true,
     dryRun: false,
   });
 
-  return { itemsProcessed };
+  // N43: lo cargado que NO terminó scoreado cuenta como fallo de la fase.
+  return {
+    itemsProcessed: result.leads_scored,
+    failedItems: Math.max(0, result.leads_loaded - result.leads_scored),
+    note: `loaded=${result.leads_loaded}, scored=${result.leads_scored}`,
+  };
 }

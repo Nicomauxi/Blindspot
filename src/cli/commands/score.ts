@@ -91,7 +91,12 @@ async function scoreBuyerTypes(opts: { buyerType?: string; dryRun: boolean }): P
   log.info({ processed, dry_run: opts.dryRun }, "Buyer-type scoring complete");
 }
 
-export async function scoreCommand(rawArgs: RawScoreArgs): Promise<void> {
+export interface ScoreCommandResult {
+  leads_loaded: number;
+  leads_scored: number;
+}
+
+export async function scoreCommand(rawArgs: RawScoreArgs): Promise<ScoreCommandResult> {
   const log = getLogger();
 
   const parsed = ScoreArgsSchema.safeParse(rawArgs);
@@ -128,6 +133,7 @@ export async function scoreCommand(rawArgs: RawScoreArgs): Promise<void> {
 
   try {
     const scored: Array<{ lead: Lead; prospectScore: number }> = [];
+    let leadsLoaded = 0;
     const warnings: string[] = [];
     const deliverySystemCostUyu = await getAdminServicePricing("delivery_system");
     const buyerScoreOpts = deliverySystemCostUyu != null ? { deliverySystemCostUyu } : {};
@@ -137,6 +143,7 @@ export async function scoreCommand(rawArgs: RawScoreArgs): Promise<void> {
         ? await loadAllLeads()
         : await loadLeadsByRunId(opts.run!);
 
+      leadsLoaded = leads.length;
       log.info({ total: leads.length }, "Loaded leads to score");
 
       for (let i = 0; i < leads.length; i++) {
@@ -224,6 +231,9 @@ export async function scoreCommand(rawArgs: RawScoreArgs): Promise<void> {
     if (top_5.length > 0) {
       log.info({ top_5 }, "Top prospects");
     }
+    // N43: devolver el trabajo REAL para que la fase score del pipeline pueda marcar
+    // partial/failed cuando lo procesado no coincide con lo cargado.
+    return { leads_loaded: leadsLoaded, leads_scored: scored.length };
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     await failRun(scoringRun.id, msg, Date.now() - startedAt);

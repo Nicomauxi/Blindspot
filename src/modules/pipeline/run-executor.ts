@@ -176,6 +176,21 @@ async function runPhase(
       await appendRunLog(runId, `Phase ${phase}: ${summary.note}`, "info");
     }
 
+    // N43: una fase con >5% de fallos no es 'ok' — antes las fases reportaban ok
+    // desacopladas del resultado real (run 55b3bcd9: 4 fases ok, 1317 sin score).
+    const failedItems = summary.failedItems ?? 0;
+    const totalItems = summary.itemsProcessed + failedItems;
+    const failureRatio = totalItems > 0 ? failedItems / totalItems : 0;
+    if (failureRatio > 0.05) {
+      await appendRunLog(runId, `Phase ${phase}: ${failedItems}/${totalItems} items failed`, "error");
+      return {
+        started_at: startedAt,
+        completed_at: new Date().toISOString(),
+        status: "failed",
+        items_processed: summary.itemsProcessed,
+        error: `failed_items=${failedItems}/${totalItems}`,
+      };
+    }
     return {
       started_at: startedAt,
       completed_at: new Date().toISOString(),

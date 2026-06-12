@@ -250,3 +250,37 @@ describe("finalizeRun CAS (N42)", () => {
     expect(mockNotifyWebhook).not.toHaveBeenCalled();
   });
 });
+
+describe("N4.2/N43: fases con fallos reales no reportan ok", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockAppendRunLog.mockResolvedValue(undefined);
+    mockLoadWebhookConfig.mockResolvedValue({ url: null, secret: null, events: [] });
+    mockNotifyWebhook.mockResolvedValue("not_configured");
+    mockExecuteRefreshPhase.mockResolvedValue({ itemsProcessed: 2 });
+    mockExecuteDiscoveryPhase.mockResolvedValue({ itemsProcessed: 1 });
+    mockExecuteScorePhase.mockResolvedValue({ itemsProcessed: 5 });
+  });
+
+  it("una fase con >5% de ítems fallidos marca failed → run partial", async () => {
+    mockExecuteEnrichPhase.mockResolvedValue({ itemsProcessed: 50, failedItems: 50 });
+    buildPipelineRunTable([false, false, false, false, false, false, false, false], 0);
+
+    const result = await executeRun(makeRun());
+
+    expect(result.status).toBe("partial");
+    expect(result.phase_results.enrich).toMatchObject({
+      status: "failed",
+      error: "failed_items=50/100",
+    });
+  });
+
+  it("fallos ≤5% siguen siendo ok", async () => {
+    mockExecuteEnrichPhase.mockResolvedValue({ itemsProcessed: 100, failedItems: 2 });
+    buildPipelineRunTable([false, false, false, false, false, false, false, false], 0);
+
+    const result = await executeRun(makeRun());
+
+    expect(result.status).toBe("completed");
+  });
+});
