@@ -98,6 +98,19 @@ export async function whoisLookup(domain: string): Promise<WhoisLookupResult> {
     };
   }
 
+  // .uy / .com.uy no exponen WHOIS de forma fiable (1/1179 éxitos en producción) y la
+  // consulta cuesta ~5-6s/lead. Se salta la llamada de red y se cachea como no-soportado. F4.1.
+  if (/\.uy$/i.test(cleanDomain)) {
+    return {
+      fetched_at,
+      created_at: null,
+      registrar: null,
+      expires_at: null,
+      age_years: null,
+      error: "uy-whois-unsupported",
+    };
+  }
+
   try {
     const raw = await withTimeout(
       whoisDomain(cleanDomain, { timeout: TIMEOUT_MS, follow: 1 }),
