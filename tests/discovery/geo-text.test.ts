@@ -4,7 +4,9 @@ import {
   haversineMeters,
   normalizeAddress,
   parseLeadGps,
+  parseEwkbHexPoint,
 } from "../../src/modules/discovery/geo-text.js";
+import { EWKB_POINT_PAYSANDU, POINT_TEXT_PAYSANDU, GPS_EPSILON } from "./fixtures/gps-ewkb.js";
 
 describe("extractAddressCity", () => {
   it("extrae la ciudad de una dirección de Google ignorando país y departamento", () => {
@@ -79,6 +81,31 @@ describe("parseLeadGps", () => {
     expect(parseLeadGps({ lat: 999, lng: -56 })).toBeNull();
     expect(parseLeadGps({ lat: -34.9, lng: 999 })).toBeNull();
     expect(parseLeadGps({ coordinates: [Infinity, -34.9] })).toBeNull();
+  });
+
+  it("F2.1: parsea EWKB hex real de la DB", () => {
+    const got = parseLeadGps(EWKB_POINT_PAYSANDU.hex);
+    expect(got).not.toBeNull();
+    expect(got!.lng).toBeCloseTo(EWKB_POINT_PAYSANDU.expected.lng, 6);
+    expect(got!.lat).toBeCloseTo(EWKB_POINT_PAYSANDU.expected.lat, 6);
+  });
+
+  it("F2.1: sigue soportando WKT POINT (regresión)", () => {
+    expect(parseLeadGps(POINT_TEXT_PAYSANDU.text)).toEqual(POINT_TEXT_PAYSANDU.expected);
+  });
+});
+
+describe("parseEwkbHexPoint (F2.1)", () => {
+  it("decodifica el Point EWKB LE con SRID 4326", () => {
+    const got = parseEwkbHexPoint(EWKB_POINT_PAYSANDU.hex);
+    expect(got).not.toBeNull();
+    expect(Math.abs(got!.lng - EWKB_POINT_PAYSANDU.expected.lng)).toBeLessThan(GPS_EPSILON);
+    expect(Math.abs(got!.lat - EWKB_POINT_PAYSANDU.expected.lat)).toBeLessThan(GPS_EPSILON);
+  });
+  it("rechaza hex inválido / no-Point", () => {
+    expect(parseEwkbHexPoint("zzzz")).toBeNull();
+    expect(parseEwkbHexPoint("0101")).toBeNull();
+    expect(parseEwkbHexPoint("")).toBeNull();
   });
 });
 

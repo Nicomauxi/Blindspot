@@ -153,6 +153,31 @@ export function extractAddressCity(value: string | null | undefined): string | n
   return null;
 }
 
+/**
+ * Decodifica un Point WKB/EWKB en hex (lo que devuelve la columna geometry de la DB,
+ * p.ej. "0101000020E6100000…"). Layout: byteOrder(1) + type(4, con flag SRID 0x20000000)
+ * + [SRID(4) si flag] + X double(8) + Y double(8). F2.1.
+ */
+export function parseEwkbHexPoint(hex: string): { lat: number; lng: number } | null {
+  if (typeof hex !== "string" || !/^[0-9a-fA-F]+$/.test(hex) || hex.length % 2 !== 0) return null;
+  let buf: Buffer;
+  try {
+    buf = Buffer.from(hex, "hex");
+  } catch {
+    return null;
+  }
+  if (buf.length < 21) return null; // mínimo Point sin SRID
+  const little = buf.readUInt8(0) === 1;
+  const readU32 = (o: number): number => (little ? buf.readUInt32LE(o) : buf.readUInt32BE(o));
+  const readF64 = (o: number): number => (little ? buf.readDoubleLE(o) : buf.readDoubleBE(o));
+  const type = readU32(1);
+  if ((type & 0xff) !== 1) return null; // solo Point
+  let offset = 5;
+  if ((type & 0x20000000) !== 0) offset += 4; // saltar SRID
+  if (buf.length < offset + 16) return null;
+  return { lng: readF64(offset), lat: readF64(offset + 8) };
+}
+
 export function parseLeadGps(
   gps: unknown
 ): { lat: number; lng: number } | null {
@@ -164,7 +189,8 @@ export function parseLeadGps(
       if (match) {
         return { lng: Number(match[1]), lat: Number(match[2]) };
       }
-      return null;
+      // La DB devuelve la geometría como EWKB hex; intentar decodificarla. F2.1.
+      return parseEwkbHexPoint(gps);
     }
 
     if (typeof gps === "object") {
