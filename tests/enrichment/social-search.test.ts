@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   discoverSocialSearch,
   getSocialSearchRefreshDays,
@@ -60,7 +60,12 @@ function duckResult(input: {
 }
 
 describe("social search discovery", () => {
+  // F4.2: el DDG está off por defecto en producción; estos tests ejercitan la lógica DDG real.
+  beforeEach(() => {
+    process.env["ENABLE_DDG_SOCIAL_SEARCH"] = "1";
+  });
   afterEach(() => {
+    delete process.env["ENABLE_DDG_SOCIAL_SEARCH"];
     vi.restoreAllMocks();
   });
 
@@ -285,5 +290,14 @@ describe("social search discovery", () => {
 
     expect(isSocialSearchStale({ ...fallbackBase, ran_at: new Date().toISOString() })).toBe(false);
     expect(isSocialSearchStale({ ...fallbackBase, ran_at: "2020-01-01T00:00:00.000Z" }, Date.now())).toBe(false);
+  });
+
+  it("F4.2: sin ENABLE_DDG_SOCIAL_SEARCH devuelve fallback vacío sin correr DDG", async () => {
+    delete process.env["ENABLE_DDG_SOCIAL_SEARCH"]; // forzar default off
+    const result = await discoverSocialSearch({ name: "Negocio Test", address: "Av. Italia 100, Montevideo" });
+    expect(result.source).toBe("duckduckgo-fallback");
+    expect(result.facebook.error).toBe("ddg-disabled");
+    expect(result.instagram.error).toBe("ddg-disabled");
+    expect(result.facebook.best_url).toBeNull();
   });
 });

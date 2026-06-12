@@ -317,10 +317,27 @@ async function discoverPlatform(
   }
 }
 
+// F4.2: el path social vía DuckDuckGo está muerto en producción (DDG bloquea las consultas
+// automáticas). El path vivo es ig-snippet-enrich (SearXNG), invocado por su propio comando.
+// Por defecto este discover NO hace red — se habilita explícitamente con ENABLE_DDG_SOCIAL_SEARCH.
+function ddgSocialSearchEnabled(): boolean {
+  const raw = process.env["ENABLE_DDG_SOCIAL_SEARCH"];
+  return raw === "1" || raw === "true";
+}
+
 export async function discoverSocialSearch(
   lead: Pick<Lead, "name" | "address">,
   depsOverrides: Partial<SocialSearchDeps> = {}
 ): Promise<SocialSearch> {
+  if (!ddgSocialSearchEnabled()) {
+    // Sin red: resultado vacío marcado como fallback (el enrich lo trata como "no corrió").
+    return {
+      ran_at: new Date().toISOString(),
+      source: "duckduckgo-fallback",
+      facebook: emptyPlatformResult(buildQuery("facebook", lead), "ddg-disabled"),
+      instagram: emptyPlatformResult(buildQuery("instagram", lead), "ddg-disabled"),
+    };
+  }
   const deps: SocialSearchDeps = { ...DEFAULT_DEPS, ...depsOverrides };
   const facebook = await discoverPlatform("facebook", lead, deps);
   await deps.delay(INTER_QUERY_DELAY_MS);
