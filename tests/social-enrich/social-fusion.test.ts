@@ -69,3 +69,25 @@ describe("buildSocialFusion", () => {
     expect(r.socialActivity.profiles.instagram?.followers).toBe(3200);
   });
 });
+
+describe("N50: fusión sin verificación de identidad", () => {
+  it("perfil de OTRO negocio → confidence <0.7, liveness unverified y sin ig-confirmed", async () => {
+    const ajeno = profile({
+      username: "berlin",
+      name: "Berlin Travel Blog",
+      biography: "Travel stories from Berlin",
+      website: null,
+      recent_media: [],
+    });
+    const r = await buildSocialFusion(makeLead({ name: "ARCO" }), "https://instagram.com/berlin", ajeno, CTX);
+    expect(r.socialSearch.instagram!.confidence).toBeLessThan(0.7);
+    expect(r.socialSearch.instagram!.liveness?.state).toBe("unverified");
+    expect(r.tags).not.toContain("ig-confirmed");
+  });
+
+  it("perfil que SÍ matchea el nombre mantiene confirmación", async () => {
+    const r = await buildSocialFusion(makeLead(), IG_URL, profile(), CTX);
+    expect(r.socialSearch.instagram!.confidence).toBeGreaterThanOrEqual(0.9);
+    expect(r.tags).toContain("ig-confirmed");
+  });
+});

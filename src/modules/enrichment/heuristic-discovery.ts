@@ -202,10 +202,17 @@ function withCityVariants(variants: string[], citySuffix: string | null): string
 
 function cityFromAddress(address: string | null): string | null {
   if (!address) return null;
+  // N48: el formato Google Places termina en ', Departamento de X, Uruguay' — esos
+  // segmentos NO son ciudad ('uruguay' matchea en casi cualquier sitio .uy y regalaba
+  // +0.2 al 66% del pool). Se toma el último segmento que sea una ciudad real.
   const parts = address
     .split(",")
     .map((p) => p.trim())
-    .filter(Boolean);
+    .filter(Boolean)
+    .filter((p) => {
+      const folded = p.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+      return folded !== "uruguay" && !folded.startsWith("departamento de ");
+    });
   return parts.length > 0 ? parts[parts.length - 1] ?? null : null;
 }
 
@@ -564,7 +571,9 @@ async function probeSocialCandidate(
   schemaCrossRef: boolean,
   deps: HeuristicDeps
 ): Promise<HeuristicCandidate> {
-  const slug = socialHandleFromUrl(url) ?? slugifyBusinessName(lead.name);
+  // N49: el handle ESPERADO sale del nombre del negocio. Antes se extraía de la propia
+  // URL y se comparaba contra sí mismo → slug_match era tautológico (+0.2 gratis).
+  const slug = slugifyBusinessName(lead.name);
   const fetched = await deps.fetchHtml(url);
   const signals: HeuristicSignal[] = [];
   let score = 0;
@@ -667,12 +676,29 @@ function websiteThreshold(
   return isUruguayTld(candidate.url) ? thresholds.website_single_word : thresholds.website;
 }
 
+// N47: señales que evidencian que el sitio pertenece AL negocio (no solo que existe).
+const WEBSITE_IDENTITY_SIGNALS: ReadonlySet<string> = new Set([
+  "name-match",
+  "name_in_schema",
+  "phone_in_schema",
+]);
+
+function hasWebsiteIdentitySignal(candidate: HeuristicCandidate): boolean {
+  return candidate.signals.some((signal) => WEBSITE_IDENTITY_SIGNALS.has(signal));
+}
+
 function bestWebsiteByThreshold<T extends HeuristicCandidate>(
   items: T[],
   thresholds: HeuristicDiscoveryConfig["thresholds"]
 ): T | null {
   const sorted = [...items].sort((a, b) => b.score - a.score);
-  return sorted.find((item) => item.score >= websiteThreshold(item, thresholds)) ?? null;
+  // N47: http-ok (+city-match) solo NO alcanza — un dominio genérico de un tercero que
+  // responde 200 superaba el umbral single-word y se asignaba como web del lead.
+  return (
+    sorted.find(
+      (item) => item.score >= websiteThreshold(item, thresholds) && hasWebsiteIdentitySignal(item)
+    ) ?? null
+  );
 }
 
 export async function discoverHeuristicSources(

@@ -42,6 +42,34 @@ describe("parseInstagramSnippet — robustez de formato (PoC SearXNG)", () => {
   });
 });
 
+describe("N50: atribución de identidad en snippets", () => {
+  it("pickProfileFromSnippets rechaza un snippet con métricas que NO menciona al handle", () => {
+    const ajeno = "2,066 Followers, 500 Following, 80 Posts - @arcohanna on Instagram";
+    expect(pickProfileFromSnippets([ajeno], "arco")).toBeNull();
+  });
+
+  it("searxng descarta results cuya url es OTRO perfil", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        results: [
+          {
+            url: "https://www.instagram.com/arcohanna/",
+            content: "2,066 Followers, 500 Following, 80 Posts - ARCO Hanna",
+            title: "ARCO Hanna",
+          },
+        ],
+      }),
+    } as unknown as Response);
+    const profile = await fetchInstagramSnippetViaSearxng("arco", {
+      throttleMs: 0,
+      baseUrl: "http://localhost:8080",
+      fetchImpl,
+    });
+    expect(profile).toBeNull();
+  });
+});
+
 describe("fetchInstagramSnippetViaSearxng", () => {
   it("consulta el endpoint local con site:instagram.com/<handle> y parsea results[].content", async () => {
     const fetchImpl = vi.fn().mockResolvedValue(searxngResponse([{ content: SNIPPET_DOT, title: "x" }]));

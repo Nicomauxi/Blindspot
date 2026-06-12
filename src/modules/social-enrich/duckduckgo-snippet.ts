@@ -73,11 +73,30 @@ export function parseInstagramSnippet(snippet: string, username: string): Social
   };
 }
 
+// N50: el buscador devuelve también snippets de OTROS perfiles (la query site: no es
+// exacta). Solo cuenta un snippet que mencione el handle como token completo
+// ('@arco ' sí; '@arcohanna' NO contiene el handle 'arco').
+export function snippetMentionsUsername(snippet: string, username: string): boolean {
+  const escaped = username.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  if (new RegExp(`(^|[^\\w.])@?${escaped}([^\\w.]|$)`, "i").test(snippet)) return true;
+  // Snippets que nombran el negocio sin @handle ('… - Panadería Godoy'): el nombre
+  // compactado contiene al handle. Solo para handles largos (≥6) — un handle corto
+  // sería substring accidental de otro ('arco' ⊂ 'arcohanna').
+  if (username.length < 6) return false;
+  const compacted = snippet
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+  return compacted.includes(username.toLowerCase().replace(/[^a-z0-9]/g, ""));
+}
+
 // Filtra candidatos de snippet y devuelve el primer perfil parseable. Source-agnostic:
 // lo reusan el adapter de DuckDuckGo (HTML) y el de SearXNG (JSON results[].content).
 export function pickProfileFromSnippets(snippets: string[], username: string): SocialProfileData | null {
   for (const snippet of snippets) {
     if (!/instagram/i.test(snippet) && !/Followers|seguidores/i.test(snippet)) continue;
+    if (!snippetMentionsUsername(snippet, username)) continue;
     const parsed = parseInstagramSnippet(snippet, username);
     if (parsed) return parsed;
   }

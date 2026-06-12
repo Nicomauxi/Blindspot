@@ -14,6 +14,32 @@ import {
 } from "./social-activity.js";
 
 const CONFIRMATION_CONFIDENCE = 0.9;
+// N50: sin verificación de identidad (el nombre/bio del perfil no menciona al negocio)
+// la cuenta NO se confirma: confidence degradada y liveness sin afirmar.
+const UNVERIFIED_CONFIDENCE = 0.6;
+
+function tokensOf(value: string | null): string[] {
+  return (value ?? "")
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((t) => t.length > 2);
+}
+
+// Mismo criterio que la vía playwright (instagram.ts nameMatches): ≥50% de los tokens
+// del nombre del lead presentes en name/bio/username del perfil.
+export function profileMatchesLead(profile: SocialProfileData, leadName: string): boolean {
+  const haystack = new Set([
+    ...tokensOf(profile.name),
+    ...tokensOf(profile.biography),
+    ...tokensOf(profile.username),
+  ]);
+  const expected = tokensOf(leadName);
+  if (expected.length === 0 || haystack.size === 0) return false;
+  const overlap = expected.filter((t) => haystack.has(t)).length;
+  return overlap / expected.length >= 0.5;
+}
 
 // Datos públicos de un perfil de IG provenientes de cualquier fuente (snippet, dataset).
 // recent_media puede venir vacío (p. ej. el snippet de buscador no trae timestamps).
@@ -92,6 +118,8 @@ export async function buildSocialFusion(
     getLogger().warn({ leadId: lead.id, err: String(err) }, "social fusion: description parse failed");
   }
 
+  const identityVerified = profileMatchesLead(profile, lead.name);
+
   const instagram: PlaywrightInstagramSearchResult = {
     url: igUrl,
     name: profile.name,
@@ -100,13 +128,14 @@ export async function buildSocialFusion(
     phone: parsedPhone,
     external_url: profile.website,
     has_contact_button: false,
-    confidence: CONFIRMATION_CONFIDENCE,
+    confidence: identityVerified ? CONFIRMATION_CONFIDENCE : UNVERIFIED_CONFIDENCE,
     signals: profile.biography ? ["page_loaded", "bio_extracted"] : ["page_loaded"],
-    // La fuente confirmó que la cuenta existe (indexada/registrada) → viva, sin login wall.
+    // N50: un índice de buscador NO prueba que la cuenta esté viva HOY (puede ser caché
+    // de una cuenta borrada) — solo se afirma alive con identidad verificada.
     liveness: {
-      state: "alive",
+      state: identityVerified ? "alive" : "unverified",
       reason: null,
-      http_status: 200,
+      http_status: identityVerified ? 200 : null,
       final_url: igUrl,
       checked_at: ctx.ranAt,
       detector_version: 1,
@@ -122,7 +151,7 @@ export async function buildSocialFusion(
 
   return {
     socialSearch,
-    tags: ["ig-confirmed"],
+    tags: [identityVerified ? "ig-confirmed" : "ig-snippet-unverified"],
     socialActivity: buildSocialActivitySnapshot([activityProfile], { ranAt: ctx.ranAt, hasWebsite: ctx.hasWebsite }),
     socialCanonical,
   };

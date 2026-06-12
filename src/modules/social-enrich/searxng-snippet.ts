@@ -20,6 +20,20 @@ const SEARXNG_TIMEOUT_MS = 8000; // F4.3
 interface SearxngResult {
   content?: string;
   title?: string;
+  url?: string;
+}
+
+// N50: si el resultado trae url, debe ser EL perfil pedido (path /<username>); la query
+// site:instagram.com/<handle> también devuelve perfiles parecidos (arco → arcohanna).
+function resultMatchesUsername(result: SearxngResult, username: string): boolean {
+  if (typeof result.url !== "string" || result.url.length === 0) return true; // sin url: decide el snippet
+  try {
+    const path = new URL(result.url).pathname.toLowerCase();
+    const segment = path.split("/").filter(Boolean)[0] ?? "";
+    return segment === username.toLowerCase();
+  } catch {
+    return false;
+  }
 }
 
 export interface SearxngSnippetOptions {
@@ -48,9 +62,9 @@ export async function fetchInstagramSnippetViaSearxng(
     });
     if (!res.ok) return null;
     const data = (await res.json()) as { results?: SearxngResult[] };
-    const snippets = (data.results ?? []).flatMap((r) =>
-      [r.content, r.title].filter((s): s is string => typeof s === "string" && s.length > 0)
-    );
+    const snippets = (data.results ?? [])
+      .filter((r) => resultMatchesUsername(r, username))
+      .flatMap((r) => [r.content, r.title].filter((s): s is string => typeof s === "string" && s.length > 0));
     return pickProfileFromSnippets(snippets, username);
   } catch {
     // SearXNG caído / red / JSON inválido → degradar a null (el caller sigue sin métricas).
