@@ -135,6 +135,28 @@ async function main(): Promise<void> {
   console.log(`F5.2 sin contacto accionable en pool: ${noContact.length}`);
   for (const r of noContact.slice(0, 10)) console.log(`  - ${r.id} ${r.name}`);
 
+  // F5.4: emails guardados en website → digital_footprint.contact_emails; names placeholder
+  // → fuera del pool.
+  const db0 = getSupabase();
+  const { data: emailWebs, error: ewErr } = await db0
+    .from("leads")
+    .select("id, name, website, digital_footprint")
+    .like("website", "%@%")
+    .not("website", "like", "http%");
+  if (ewErr) throw new Error(`load email-websites failed: ${ewErr.message}`);
+  const emailRe = /^[A-Za-z0-9][^\s@]*@[^\s@]+\.[^\s@]+$/;
+  const emailRows = (emailWebs ?? []).filter((r) => emailRe.test((r.website ?? "").trim()));
+  console.log(`F5.4 emails en website: ${emailRows.length}`);
+  for (const r of emailRows) console.log(`  - ${r.id} ${r.name} website='${r.website}'`);
+
+  const { data: badNames, error: bnErr } = await db0
+    .from("leads")
+    .select("id, name, rejection_reasons")
+    .in("name", ["N/A", "n/a", "NA", "-", "."]);
+  if (bnErr) throw new Error(`load placeholder names failed: ${bnErr.message}`);
+  console.log(`F5.4 names placeholder: ${(badNames ?? []).length}`);
+  for (const r of badNames ?? []) console.log(`  - ${r.id} name='${r.name}'`);
+
   const phoneRows = await loadAllPhones();
   const junk = phoneRows.filter((r) => isJunkPhone(r.phone));
   const generic = findGenericSharedPhones(phoneRows.map((r) => r.phone), SHARED_PHONE_THRESHOLD);
@@ -175,6 +197,22 @@ async function main(): Promise<void> {
     else tagged++;
   }
   console.log(`  tagueados ${SHARED_PHONE_TAG}: ${tagged}`);
+
+  let moved = 0;
+  for (const r of emailRows) {
+    const fp = (r.digital_footprint ?? {}) as Record<string, unknown>;
+    const existing = Array.isArray(fp.contact_emails) ? (fp.contact_emails as string[]) : [];
+    const emails = Array.from(new Set([...existing, (r.website as string).trim()]));
+    const { error } = await db
+      .from("leads")
+      .update({ website: null, digital_footprint: { ...fp, contact_emails: emails } })
+      .eq("id", r.id);
+    if (error) console.error(`  ! email-web ${r.id}: ${error.message}`);
+    else moved++;
+  }
+  console.log(`  emails movidos de website: ${moved}`);
+
+  await applyExclusions(badNames ?? [], "placeholder-name");
 }
 
 main().catch((err) => {

@@ -62,6 +62,39 @@ describe("normalizeCandidate", () => {
   });
 });
 
+describe("F5.4: name placeholder y emails en website", () => {
+  it("isPlaceholderName detecta N/A y variantes", async () => {
+    const { isPlaceholderName } = await import("../../src/modules/discovery/candidate-normalizer.js");
+    for (const bad of ["N/A", "n/a", "NA", "-", ".", "  ", ""]) {
+      expect(isPlaceholderName(bad), bad).toBe(true);
+    }
+    expect(isPlaceholderName("Panadería Real")).toBe(false);
+  });
+
+  it("normalizeCandidates filtra candidates con name placeholder", () => {
+    const out = normalizeCandidates([cand({ name: "N/A" }), cand({ name: "Real" })], ALIASES);
+    expect(out.map((c) => c.name)).toEqual(["Real"]);
+  });
+
+  it("un email en website se mueve al campo email", () => {
+    const c = normalizeCandidate(cand({ website: "gperalta@estudio.com.uy" }), ALIASES);
+    expect(c.website).toBeNull();
+    expect(c.email).toBe("gperalta@estudio.com.uy");
+  });
+
+  it("no pisa un email existente y una URL real no se toca", () => {
+    const keep = normalizeCandidate(
+      cand({ website: "info@x.uy", email: "ya@existe.uy" }),
+      ALIASES
+    );
+    expect(keep.email).toBe("ya@existe.uy");
+    expect(keep.website).toBeNull();
+
+    const url = normalizeCandidate(cand({ website: "https://negocio.uy" }), ALIASES);
+    expect(url.website).toBe("https://negocio.uy");
+  });
+});
+
 describe("normalizeCandidates", () => {
   it("normaliza un lote preservando source y demás campos", () => {
     const out = normalizeCandidates(

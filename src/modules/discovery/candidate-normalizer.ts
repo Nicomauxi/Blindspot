@@ -27,14 +27,33 @@ export function normalizeCandidate(
         ? providerNiche
         : "other";
 
+  // F5.4: algunos providers ponen un email (o handle) en el campo website. Un email no es
+  // una web: se mueve a `email` (si estaba vacío) y website queda null.
+  let website = candidate.website;
+  let email = candidate.email;
+  if (website && EMAIL_RE.test(website.trim())) {
+    if (!email) email = website.trim();
+    website = null;
+  }
+
   // F5.3: un phone placeholder ('0', <7 dígitos) no es un canal de contacto — anularlo
   // acá evita que cuente como contacto en qualification o como identidad en dedup.
-  return { ...candidate, niche: nicheFinal, phone: scrubJunkPhone(candidate.phone) };
+  return { ...candidate, niche: nicheFinal, phone: scrubJunkPhone(candidate.phone), website, email };
+}
+
+const EMAIL_RE = /^[A-Za-z0-9][^\s@]*@[^\s@]+\.[^\s@]+$/;
+const PLACEHOLDER_NAMES = new Set(["n/a", "na", "-", ".", ""]);
+
+// F5.4: 'N/A', '-', vacío… no identifican un negocio — el candidate no es importable.
+export function isPlaceholderName(name: string): boolean {
+  return PLACEHOLDER_NAMES.has(name.trim().toLowerCase());
 }
 
 export function normalizeCandidates(
   candidates: DiscoveryCandidate[],
   nicheAliases: AllRuntime["mappings"]["nicheAliases"]
 ): DiscoveryCandidate[] {
-  return candidates.map((c) => normalizeCandidate(c, nicheAliases));
+  return candidates
+    .filter((c) => !isPlaceholderName(c.name))
+    .map((c) => normalizeCandidate(c, nicheAliases));
 }
