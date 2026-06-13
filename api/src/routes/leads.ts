@@ -240,6 +240,11 @@ const listQuerySchema = z.object({
     .enum(["true", "false"])
     .optional()
     .transform((v) => (v === undefined ? undefined : v === "true")),
+  // Redes sociales: filtrar leads con perfil social descubierto (para análisis: followers/liveness).
+  has_social: z
+    .enum(["true", "false"])
+    .optional()
+    .transform((v) => (v === undefined ? undefined : v === "true")),
   commercial_offer_type: z.enum(["marketing", "software", "both", "unknown"]).optional(),
   q: z.string().optional(),
   location_key: z.string().trim().min(1).optional(),
@@ -1081,6 +1086,12 @@ function normalizeLeadRow(row: JsonRecord): JsonRecord {
     demand_gap_score: asNullableNumber(row["demand_gap_score"]),
     // Fase 0b: tamaño del negocio = valor de deal (eje ortogonal al score).
     deal_value_tier: asNullableString(row["deal_value_tier"]),
+    // Redes sociales para análisis (UI): presencia + métricas.
+    has_social: asBooleanOrNull(row["has_social"]),
+    social_instagram_url: asNullableString(row["social_instagram_url"]),
+    social_followers: asNullableNumber(row["social_followers"]),
+    social_audience_tier: asNullableString(row["social_audience_tier"]),
+    social_status: asNullableString(row["social_status"]),
     // C4: 2º offer + confianza (gap top1-top2) para el 61% del pool donde el offer es un volado.
     ...computeSecondaryOffer(
       isRecord(row["score_breakdown"]) && isRecord(row["score_breakdown"]["sub_scores"])
@@ -1316,6 +1327,7 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
         primary_offer,
         sellable,
         opportunity_no_web,
+        has_social,
         commercial_offer_type,
         q,
         location_key,
@@ -1383,6 +1395,9 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
       }
       if (opportunity_no_web !== undefined) {
         query = query.eq("opportunity_no_web", opportunity_no_web);
+      }
+      if (has_social !== undefined) {
+        query = query.eq("has_social", has_social);
       }
       if (q) {
         query = query.textSearch("search_vector", q, { type: "plain", config: "spanish" });

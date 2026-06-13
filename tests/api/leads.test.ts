@@ -469,6 +469,16 @@ describe("GET /api/v1/leads", () => {
     await app.close();
   });
 
+  it("has_social=true se traduce a eq sobre la columna has_social (filtro UI redes)", async () => {
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
+    const res = await app.inject({ method: "GET", url: "/api/v1/leads?has_social=true", headers: { authorization: `Bearer ${token}` } });
+    expect(res.statusCode).toBe(200);
+    expect(_eqFilterCalls).toContainEqual({ column: "has_social", value: true });
+    await app.close();
+  });
+
   it("M3: sin el parámetro sellable no se filtra por esa columna", async () => {
     const { buildServer } = await import("../../api/src/server.js");
     const app = await buildServer();
