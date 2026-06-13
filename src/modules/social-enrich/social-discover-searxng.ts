@@ -31,8 +31,9 @@ export interface SearxngSearchResult {
   content?: string;
 }
 
-// Segmentos que NO son un handle de perfil (son contenido o páginas de sistema).
-const IG_RESERVED = new Set(["p", "reel", "reels", "explore", "tv", "stories", "accounts", "directory", "about", "web", "developer", "legal", "privacy"]);
+// Segmentos que NO son un handle de perfil (contenido, páginas de sistema o handles
+// genéricos de IG que no son un negocio: "popular", "explore"...).
+const IG_RESERVED = new Set(["p", "reel", "reels", "explore", "tv", "stories", "accounts", "directory", "about", "web", "developer", "legal", "privacy", "popular", "instagram", "help", "session"]);
 const FB_RESERVED = new Set(["posts", "photos", "photo", "videos", "video", "watch", "events", "event", "groups", "marketplace", "media", "reel", "story.php", "permalink.php", "sharer", "sharer.php", "login", "help", "pages"]);
 
 // Devuelve la URL CANÓNICA del perfil (instagram.com/<handle>/) si la URL apunta a un
