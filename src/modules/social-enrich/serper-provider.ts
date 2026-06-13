@@ -3,6 +3,7 @@
 // 303 posts" + bio/teléfonos. Resuelve descubrimiento Y métricas en 1 crédito, sin el
 // rate-limit por-IP de scrapear buscadores (Serper rota IPs por nosotros). Gateado por
 // SERPER_API_KEY: sin key, el pipeline cae al path SearXNG ($0 local).
+import { getLogger } from "../../shared/logger.js";
 import { buildQuery } from "../enrichment/social-search.js";
 import { selectProfileFromResults, type SearxngSearchResult } from "./social-discover-searxng.js";
 import { parseInstagramProfileRich } from "./duckduckgo-snippet.js";
@@ -37,9 +38,13 @@ interface SerperSearchOpts {
 const RATE_LIMIT_RETRIES = 4;
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
-type RunOutcome = { organic: SerperOrganic[]; quotaExhausted: boolean };
+// FS-11: fetchError distingue "no pudimos consultar" (429 persistente / !ok / red-timeout)
+// de un resultado vacío legítimo (200 sin organic). Sin esto, un error transitorio se contaba
+// como no_match ("este negocio no tiene IG") y sobre-estimaba los digital-dark.
+type RunOutcome = { organic: SerperOrganic[]; quotaExhausted: boolean; fetchError: boolean };
+export interface SerperOrganicStatus { organic: SerperOrganic[]; fetchError: boolean }
 
-export async function serperOrganic(query: string, opts: SerperSearchOpts = {}): Promise<SerperOrganic[]> {
+export async function serperOrganicStatus(query: string, opts: SerperSearchOpts = {}): Promise<SerperOrganicStatus> {
   const doFetch = opts.fetchImpl ?? fetch;
   const budget = opts.budget;
 
@@ -55,37 +60,43 @@ export async function serperOrganic(query: string, opts: SerperSearchOpts = {}):
           body: JSON.stringify({ q: query, gl: "uy", hl: "es", num: opts.num ?? 10 }),
           signal: AbortSignal.timeout(SERPER_TIMEOUT_MS),
         });
-        if (res.status === 402 || res.status === 403) return { organic: [], quotaExhausted: true };
+        if (res.status === 402 || res.status === 403) return { organic: [], quotaExhausted: true, fetchError: false };
         if (res.status === 429) {
           if (attempt < RATE_LIMIT_RETRIES) { await sleep(300 * (attempt + 1)); continue; } // backoff
-          return { organic: [], quotaExhausted: false }; // 429 persistente → skip, NO mata la key
+          return { organic: [], quotaExhausted: false, fetchError: true }; // 429 persistente → no pudimos consultar
         }
-        if (!res.ok) return { organic: [], quotaExhausted: false };
+        if (!res.ok) return { organic: [], quotaExhausted: false, fetchError: true };
         const json = (await res.json()) as { organic?: SerperOrganic[] };
-        return { organic: json.organic ?? [], quotaExhausted: false };
-      } catch {
-        return { organic: [], quotaExhausted: false };
+        return { organic: json.organic ?? [], quotaExhausted: false, fetchError: false };
+      } catch (err) {
+        getLogger().warn({ query, err: String(err) }, "serper fetch error (transitorio)");
+        return { organic: [], quotaExhausted: false, fetchError: true };
       }
     }
-    return { organic: [], quotaExhausted: false };
+    return { organic: [], quotaExhausted: false, fetchError: true };
   };
 
   if (!budget) {
     const key = getSerperKeys()[0];
-    if (!key) return [];
-    return (await runKey(key)).organic;
+    if (!key) return { organic: [], fetchError: false };
+    const { organic, fetchError } = await runKey(key);
+    return { organic, fetchError };
   }
   for (;;) {
     const key = budget.activeKey();
-    if (!key) return []; // tope o todas las keys agotadas
+    if (!key) return { organic: [], fetchError: false }; // tope o todas las keys agotadas (no es fetch error)
     budget.recordQuery();
-    const { organic, quotaExhausted } = await runKey(key);
+    const { organic, quotaExhausted, fetchError } = await runKey(key);
     if (quotaExhausted) {
       budget.markExhausted(key); // 402/403 → esta key sin créditos → rotar
       continue;
     }
-    return organic;
+    return { organic, fetchError };
   }
+}
+
+export async function serperOrganic(query: string, opts: SerperSearchOpts = {}): Promise<SerperOrganic[]> {
+  return (await serperOrganicStatus(query, opts)).organic;
 }
 
 function toSearxngResults(organic: SerperOrganic[]): SearxngSearchResult[] {
@@ -103,11 +114,21 @@ export async function serperSearch(query: string, opts: SerperSearchOpts = {}): 
   return toSearxngResults(await serperOrganic(query, opts));
 }
 
+export async function serperSearchWithStatus(
+  query: string,
+  opts: SerperSearchOpts = {}
+): Promise<{ results: SearxngSearchResult[]; fetchError: boolean }> {
+  const { organic, fetchError } = await serperOrganicStatus(query, opts);
+  return { results: toSearxngResults(organic), fetchError };
+}
+
 export interface SerperLeadResult {
   instagram: SocialSearchPlatformResult;
   /** Métricas extraídas del MISMO set de resultados (sin query extra). null si no hay snippet con followers. */
   metrics: SocialProfileData | null;
   igUsername: string | null;
+  /** FS-11: true si la query 1 falló por error transitorio (no es "sin IG", es "no pudimos consultar"). */
+  fetchError: boolean;
 }
 
 function usernameFromProfileUrl(url: string | null): string | null {
@@ -161,7 +182,7 @@ export async function discoverEnrichViaSerper(
   opts: { fetchImpl?: typeof fetch; metricsFallback?: boolean; nowMs?: number; budget?: SerperBudget } = {}
 ): Promise<SerperLeadResult> {
   const query = buildQuery("instagram", lead);
-  const raw = await serperSearch(query, opts);
+  const { results: raw, fetchError } = await serperSearchWithStatus(query, opts);
   const instagram = selectProfileFromResults(raw, lead, "instagram", query);
   const igUsername = usernameFromProfileUrl(instagram.best_url);
 
@@ -183,6 +204,7 @@ export async function discoverEnrichViaSerper(
       instagram: { ...instagram, best_url: null, confidence: 0 },
       metrics: null,
       igUsername: null,
+      fetchError,
     };
   }
 
@@ -191,7 +213,7 @@ export async function discoverEnrichViaSerper(
     if (!profileHasUsableMetrics(metrics)) metrics = null; // solo URL → no cuenta como métricas
   }
 
-  return { instagram, metrics, igUsername };
+  return { instagram, metrics, igUsername, fetchError };
 }
 
 // ─── Fase 2: query unificada (1 crédito → website + social + reviews-meta) ──────────────

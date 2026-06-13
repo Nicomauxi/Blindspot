@@ -26,6 +26,7 @@ export interface SocialDiscoverStats {
   /** withMetrics: perfil hallado pero sin métricas públicas (cuenta privada/sin og). */
   found_url_no_metrics: number;
   no_match: number;
+  fetch_error: number;
   /** F1 budget: queries Serper consumidas + por qué se detuvo (si aplica). */
   serper_queries_used: number;
   serper_stopped: "budget" | "all_keys_exhausted" | null;
@@ -119,6 +120,7 @@ export async function runSocialDiscovery(opts: SocialDiscoverOptions): Promise<S
     found_metrics: 0,
     found_url_no_metrics: 0,
     no_match: 0,
+    fetch_error: 0,
     serper_queries_used: 0,
     serper_stopped: null,
     skipped_no_budget: 0,
@@ -146,13 +148,16 @@ export async function runSocialDiscovery(opts: SocialDiscoverOptions): Promise<S
       stats.skipped_no_budget += 1;
       return;
     }
-    const { instagram, metrics, igUsername } = await discoverEnrichViaSerper(lead, {
+    const { instagram, metrics, igUsername, fetchError } = await discoverEnrichViaSerper(lead, {
       ...serperOpts,
       metricsFallback: opts.serperFallback ?? false,
     });
     const igUrl = instagram.best_url;
     if (!igUrl) {
-      stats.no_match += 1;
+      // FS-11: un error transitorio NO es "este negocio no tiene IG" — no contar como no_match
+      // (sesga el ratio de digital-dark); el lead se reprocesa en la próxima corrida.
+      if (fetchError) stats.fetch_error += 1;
+      else stats.no_match += 1;
       return;
     }
     stats.found_instagram += 1;

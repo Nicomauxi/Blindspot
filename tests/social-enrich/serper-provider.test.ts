@@ -31,6 +31,32 @@ describe("serperConfigured", () => {
   });
 });
 
+describe("FS-11: fetchError distingue error transitorio de vacío legítimo", () => {
+  it("HTTP no-ok → fetchError true (no es 'sin IG')", async () => {
+    const res = await discoverEnrichViaSerper(
+      { name: "La Pasiva", address: "Montevideo" },
+      { fetchImpl: mockFetch({}, false) }
+    );
+    expect(res.fetchError).toBe(true);
+    expect(res.instagram.best_url).toBeNull();
+  });
+
+  it("error de red (throw) → fetchError true", async () => {
+    const fetchImpl = vi.fn(async () => { throw new Error("ECONNRESET"); }) as unknown as typeof fetch;
+    const res = await discoverEnrichViaSerper({ name: "X", address: "Y" }, { fetchImpl });
+    expect(res.fetchError).toBe(true);
+  });
+
+  it("200 con organic vacío → fetchError false (no_match legítimo)", async () => {
+    const res = await discoverEnrichViaSerper(
+      { name: "Negocio Sin IG", address: "Montevideo" },
+      { fetchImpl: mockFetch({ organic: [] }) }
+    );
+    expect(res.fetchError).toBe(false);
+    expect(res.instagram.best_url).toBeNull();
+  });
+});
+
 describe("serperSearch", () => {
   it("mapea organic → {url,title,content}", async () => {
     const res = await serperSearch("q", { fetchImpl: mockFetch(SERPER_RESPONSE) });
