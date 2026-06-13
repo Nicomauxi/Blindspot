@@ -1048,6 +1048,22 @@ export type LeadDashboard = {
   contact_reliability_score: number | null;
   contact_ready: boolean | null;
   sources_count?: number | null;
+  // Cluster C — columnas derivadas de lead_dashboard para la grilla social/comercial.
+  sources_count_real?: number | null;
+  best_contact_email?: string | null;
+  sellable?: boolean | null;
+  website_kind?: "none" | "social" | "directory" | "real" | string | null;
+  opportunity_no_web?: boolean | null;
+  demand_gap_score?: number | null;
+  deal_value_tier?: "high" | "medium" | "low" | "unknown" | string | null;
+  deal_value_monthly_uyu?: number | null;
+  has_social?: boolean | null;
+  has_social_candidate?: boolean | null;
+  social_platform?: string | null;
+  social_instagram_url?: string | null;
+  social_followers?: number | null;
+  social_audience_tier?: string | null;
+  social_status?: string | null;
   commercial_offerings?: CommercialOfferings | null;
   commercial_offers_summary?: CommercialOfferingsSummary | null;
 };

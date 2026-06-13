@@ -24,6 +24,7 @@ import {
   type OwnerGroupMember,
 } from "@/lib/api";
 import { useAuthStore } from "@/lib/auth-store";
+import { contactReadyCopy } from "@/lib/contact-ready";
 import { cn, formatRelative } from "@/lib/utils";
 import { AdminPageLayout, EmptyPanel, HelpTip, SectionCard, StatCard } from "@/components/admin-shell";
 import { CollapsibleSection } from "@/components/collapsible-section";
@@ -397,7 +398,7 @@ export default function LeadDetailPage() {
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
         <StatCard label="Prospect score" value={lead.prospect_score ?? "—"} hint="Prioridad comercial relativa" tone="good" />
         <StatCard label="Oferta sugerida" value={lead.primary_offer ?? "—"} hint={lead.pitch_hook ?? "Sin pitch hook sugerido"} tone="info" />
-        <StatCard label="Canal recomendado" value={recommendedChannelLabel} hint={lead.contact_ready ? "Listo para primer toque" : "Conviene validar antes de salir"} />
+        <StatCard label="Canal recomendado" value={recommendedChannelLabel} hint={contactReadyCopy(lead.contact_ready).hint} />
         <StatCard label="Fuentes disponibles" value={lead.sources_count ?? lead.corroborating_sources.length ?? 0} hint={lead.canonical_source ? `Fuente principal: ${lead.canonical_source}` : "Sin canonical_source"} />
         <StatCard label="Tier / Estado" value={`${lead.contact_tier ?? "—"} · ${lead.state}`} hint={lead.business_status ?? "Sin estado comercial"} />
       </div>

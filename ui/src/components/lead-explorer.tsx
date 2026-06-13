@@ -1,6 +1,7 @@
 "use client";
 
 import { HOT_LEAD_THRESHOLD } from "@/lib/hot-leads";
+import { contactReadyCopy, contactReadyState } from "@/lib/contact-ready";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
@@ -421,7 +422,17 @@ function LeadRow({ lead }: { lead: LeadDashboard }) {
           <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-600">
             {lead.niche ? <SmallPill>{lead.niche}</SmallPill> : null}
             <SmallPill>{lead.state}</SmallPill>
-            <SmallPill>{lead.contact_ready ? "Contacto listo" : "Contacto incompleto"}</SmallPill>
+            <SmallPill
+              className={
+                contactReadyState(lead.contact_ready) === "ready"
+                  ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                  : contactReadyState(lead.contact_ready) === "incomplete"
+                    ? "border-amber-200 bg-amber-50 text-amber-700"
+                    : "border-slate-200 bg-slate-50 text-slate-400"
+              }
+            >
+              {contactReadyCopy(lead.contact_ready).pill}
+            </SmallPill>
             <span className={cn("inline-flex items-center rounded-full border px-2 py-0.5 font-medium", URGENCY_STYLES[lead.urgency_signal ?? ""] ?? "border-slate-200 bg-slate-50 text-slate-500")}>
               {lead.urgency_signal ?? "Sin urgencia"}
             </span>
@@ -465,7 +476,7 @@ function LeadRow({ lead }: { lead: LeadDashboard }) {
           </div>
           <p className="mt-1 text-xs text-slate-500">{formatCommercialScores(lead)}</p>
           <p className="mt-1 text-xs text-slate-500">
-            {lead.contact_ready ? "Listo para pasar a una propuesta o contacto inicial." : "Conviene validar datos de contacto antes de salir a prospectar."}
+            {contactReadyCopy(lead.contact_ready).hint}
           </p>
         </div>
 

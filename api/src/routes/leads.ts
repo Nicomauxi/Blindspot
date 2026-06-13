@@ -240,8 +240,13 @@ const listQuerySchema = z.object({
     .enum(["true", "false"])
     .optional()
     .transform((v) => (v === undefined ? undefined : v === "true")),
-  // Redes sociales: filtrar leads con perfil social descubierto (para análisis: followers/liveness).
+  // Redes sociales: filtrar leads con perfil social REAL descubierto (FS-02: url IG, no solo tag).
   has_social: z
+    .enum(["true", "false"])
+    .optional()
+    .transform((v) => (v === undefined ? undefined : v === "true")),
+  // FS-02: candidatos de discovery (tag ig-discovered) sin perfil resuelto aún.
+  has_social_candidate: z
     .enum(["true", "false"])
     .optional()
     .transform((v) => (v === undefined ? undefined : v === "true")),
@@ -1086,8 +1091,18 @@ function normalizeLeadRow(row: JsonRecord): JsonRecord {
     demand_gap_score: asNullableNumber(row["demand_gap_score"]),
     // Fase 0b: tamaño del negocio = valor de deal (eje ortogonal al score).
     deal_value_tier: asNullableString(row["deal_value_tier"]),
+    // FS-07: ingreso mensual estimado crudo (para mostrar rango en UI).
+    deal_value_monthly_uyu: asNullableNumber(row["deal_value_monthly_uyu"]),
+    // FS-15: fuentes "reales" (sin signal-only como pedidosya) + primaria.
+    sources_count_real: asNullableNumber(row["sources_count_real"]),
+    // FS-13: email recomendado por calidad (de-prioriza rol/genérico). contact_email queda por compat.
+    best_contact_email: asNullableString(row["best_contact_email"]),
     // Redes sociales para análisis (UI): presencia + métricas.
+    // FS-02: has_social ahora exige perfil IG real; has_social_candidate = solo tag de discovery.
     has_social: asBooleanOrNull(row["has_social"]),
+    has_social_candidate: asBooleanOrNull(row["has_social_candidate"]),
+    // FS-19: plataforma con mejor presencia (instagram|facebook).
+    social_platform: asNullableString(row["social_platform"]),
     social_instagram_url: asNullableString(row["social_instagram_url"]),
     social_followers: asNullableNumber(row["social_followers"]),
     social_audience_tier: asNullableString(row["social_audience_tier"]),
@@ -1328,6 +1343,7 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
         sellable,
         opportunity_no_web,
         has_social,
+        has_social_candidate,
         commercial_offer_type,
         q,
         location_key,
@@ -1398,6 +1414,9 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
       }
       if (has_social !== undefined) {
         query = query.eq("has_social", has_social);
+      }
+      if (has_social_candidate !== undefined) {
+        query = query.eq("has_social_candidate", has_social_candidate);
       }
       if (q) {
         query = query.textSearch("search_vector", q, { type: "plain", config: "spanish" });
