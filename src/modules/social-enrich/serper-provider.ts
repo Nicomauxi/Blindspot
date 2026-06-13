@@ -76,6 +76,10 @@ function usernameFromProfileUrl(url: string | null): string | null {
 // concluimos "abandonada" (no vemos el último) → se descartan los timestamps para no derivar
 // un falso "abandoned" en el scoring. Engagement (likes/comments) se conserva.
 const ACTIVE_WINDOW_DAYS = 180;
+// Techo de followers para un negocio LOCAL uruguayo. Por encima, el match es casi seguro
+// una cuenta global homónima (nombres cortos: "Olivia"→oliviarodrigo 40M; "Soho"→sohohouse
+// 461K). Un SMB de barrio no tiene cientos de miles de seguidores → se rechaza el match.
+const MAX_LOCAL_FOLLOWERS = 150_000;
 
 function sanitizeStaleLiveness(profile: SocialProfileData, nowMs: number): SocialProfileData {
   const cutoff = nowMs - ACTIVE_WINDOW_DAYS * 24 * 60 * 60 * 1000;
@@ -118,6 +122,17 @@ export async function discoverEnrichViaSerper(
   if (!metrics && igUsername && (opts.metricsFallback ?? true)) {
     const raw2 = await serperSearch(`instagram.com/${igUsername}`, opts);
     metrics = parseInstagramProfileRich(raw2.map((r) => r.content ?? "").filter(Boolean), igUsername);
+  }
+
+  // Guard de cuenta global homónima: followers implausibles para un local UY → falso match.
+  // Se descarta TODO (URL + métricas): no es el negocio. Catch principal de los falsos
+  // positivos de nombres cortos (Olivia→oliviarodrigo, Soho→sohohouse).
+  if (metrics?.followers_count != null && metrics.followers_count > MAX_LOCAL_FOLLOWERS) {
+    return {
+      instagram: { ...instagram, best_url: null, confidence: 0 },
+      metrics: null,
+      igUsername: null,
+    };
   }
 
   if (metrics) {

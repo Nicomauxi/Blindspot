@@ -98,6 +98,16 @@ describe("discoverEnrichViaSerper (1 query → URL + métricas)", () => {
     expect(res.metrics?.recent_media).toEqual([]); // liveness vieja descartada
   });
 
+  it("GUARD: cuenta global homónima (followers > 150K) → rechaza el match completo", async () => {
+    const famous = "40.6M followers · 0 following · 200 posts · @oliviarodrigo";
+    const res = await discoverEnrichViaSerper(
+      { name: "Olivia", address: "Montevideo" },
+      { fetchImpl: mockFetch({ organic: [{ link: "https://www.instagram.com/oliviarodrigo/", title: "Olivia Rodrigo (@oliviarodrigo)", snippet: famous }] }) }
+    );
+    expect(res.instagram.best_url).toBeNull(); // descarta la URL también
+    expect(res.metrics).toBeNull();
+  });
+
   it("perfil sin snippet de followers → metrics null pero URL presente", async () => {
     const res = await discoverEnrichViaSerper(
       { name: "La Pasiva", address: "Montevideo" },
