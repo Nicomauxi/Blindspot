@@ -145,7 +145,8 @@ program
   .option("--concurrency <number>", "Workers en paralelo (×2 queries c/u)", "4")
   .option("--throttle-ms <number>", "Delay entre IG y FB por lead (0 = paralelo)", "0")
   .option("--with-metrics", "Pasada integrada: tras descubrir el perfil, extraer followers/liveness (señal de scoring)", false)
-  .action(async (opts: { run?: string; all?: boolean; limit?: string; concurrency?: string; throttleMs?: string; withMetrics?: boolean }) => {
+  .option("--serper-fallback", "Serper: 2da query dirigida si q1 no trae métricas (más créditos)", false)
+  .action(async (opts: { run?: string; all?: boolean; limit?: string; concurrency?: string; throttleMs?: string; withMetrics?: boolean; serperFallback?: boolean }) => {
     const { runSocialDiscovery } = await import("./../modules/social-enrich/social-discover-run.js");
     const stats = await runSocialDiscovery({
       ...(opts.run ? { run: opts.run } : { all: true }),
@@ -153,6 +154,7 @@ program
       concurrency: Number(opts.concurrency ?? "4"),
       throttleMs: Number(opts.throttleMs ?? "0"),
       withMetrics: opts.withMetrics ?? false,
+      serperFallback: opts.serperFallback ?? false,
     });
     console.log(`\nSocial discover: ${stats.found_any} con perfil (${stats.found_instagram} IG / ${stats.found_facebook} FB) / ${stats.no_match} sin match / ${stats.candidates} candidatos`);
     if (opts.withMetrics) {

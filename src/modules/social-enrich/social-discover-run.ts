@@ -44,6 +44,9 @@ export interface SocialDiscoverOptions {
   // rate-limit) o "searxng" ($0 local). Default: serper si hay SERPER_API_KEY, si no searxng.
   provider?: "serper" | "searxng";
   serperFetch?: typeof fetch; // inyectable para test del path Serper
+  // Serper: hacer la 2da query dirigida (instagram.com/handle) cuando q1 no trajo métricas.
+  // Off para corridas masivas (ahorra ~20% de créditos; cobertura > profundidad).
+  serperFallback?: boolean;
 }
 
 // ¿El lead ya tiene MÉTRICAS sociales reales (no solo una URL)?
@@ -122,7 +125,10 @@ export async function runSocialDiscovery(opts: SocialDiscoverOptions): Promise<S
   // Path Serper: 1 query trae URL del perfil + snippet con followers → descubre Y enriquece
   // en un solo crédito, sin rate-limit. IG only (FB se omite para no gastar el doble).
   async function processLeadSerper(lead: Lead): Promise<void> {
-    const { instagram, metrics, igUsername } = await discoverEnrichViaSerper(lead, serperOpts);
+    const { instagram, metrics, igUsername } = await discoverEnrichViaSerper(lead, {
+      ...serperOpts,
+      metricsFallback: opts.serperFallback ?? false,
+    });
     const igUrl = instagram.best_url;
     if (!igUrl) {
       stats.no_match += 1;
