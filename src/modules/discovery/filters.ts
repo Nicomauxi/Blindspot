@@ -39,9 +39,13 @@ export function normalizeNiche(raw: string, aliases?: readonly NicheAlias[]): st
   if (
     normalized.includes("concesion") ||
     normalized.includes("automovil") ||
-    normalized.includes("auto") ||
+    normalized.includes("automotora") ||
+    /\bautos?\b/.test(normalized) ||
     normalized.includes("car dealer")
   ) {
+    // BL-02: el bare `auto` con includes() matcheaba autoescuela/autoservicio/autopartes →
+    // car_dealer (vertical equivocado). Ahora `auto/autos` exige PALABRA completa (\b), así
+    // "venta de autos"/"rentadora de autos" sí, pero "autoescuela/autoservicio/autopartes" no.
     return "car_dealer";
   }
 

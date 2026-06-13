@@ -49,6 +49,13 @@ describe("high urgency — zona turística", () => {
   it("gym en Punta del Este → no high (niche no turístico)", () => {
     expect(computeUrgencySignal(lead({ niche: "gym", address: "Punta del Este" }))).not.toBe("high");
   });
+  it("FS-20: Piriapolis SIN tilde matchea igual (acentos normalizados)", () => {
+    expect(computeUrgencySignal(lead({ niche: "accommodation", address: "Rambla, Piriapolis" }))).toBe("high");
+    expect(computeUrgencySignal(lead({ niche: "accommodation", address: "Rambla, Piriápolis" }))).toBe("high");
+  });
+  it("FS-20: niche 'accommodation' (no el muerto 'hospedaje') dispara urgency turística", () => {
+    expect(computeUrgencySignal(lead({ niche: "accommodation", address: "Cabo Polonio" }))).toBe("high");
+  });
 });
 
 describe("N01: la frescura del dato NO es urgencia del negocio", () => {

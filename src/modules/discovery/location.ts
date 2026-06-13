@@ -7,7 +7,7 @@ const COUNTRY_STOP_WORDS = new Set([
   "ciudad",
 ]);
 
-function stripDiacritics(value: string): string {
+export function stripDiacritics(value: string): string {
   return value.normalize("NFD").replace(/\p{Diacritic}+/gu, "");
 }
 

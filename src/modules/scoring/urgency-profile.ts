@@ -1,14 +1,15 @@
 import type { Lead } from "../../shared/types.js";
 import type { UrgencySignal } from "./types.js";
 import { computeSocialSignal } from "./social-signal.js";
+import { stripDiacritics } from "../discovery/location.js";
 
 const OUTDATED_YEAR_THRESHOLD = 2020;
-const TOURIST_NICHES = new Set(["restaurant", "hospedaje", "accommodation"]);
+const TOURIST_NICHES = new Set(["restaurant", "accommodation"]);
 const TOURIST_ZONES = [
   "punta del este",
   "rocha",
   "cabo polonio",
-  "piriápolis",
+  "piriapolis",
   "barra de valizas",
 ];
 
@@ -23,7 +24,7 @@ export interface UrgencyProfile {
 export function computeUrgencyProfile(lead: Lead): UrgencyProfile {
   const fp = lead.digital_footprint;
   const copyrightYear = fp && !("skipped" in fp) ? fp.copyright_year ?? null : null;
-  const address = (lead.address ?? "").toLowerCase();
+  const address = stripDiacritics(lead.address ?? "").toLowerCase();
   const niche = lead.niche ?? "other";
 
   let business: UrgencySignal = "low";

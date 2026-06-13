@@ -1,17 +1,18 @@
 import type { Lead } from "../../shared/types.js";
 import type { UrgencySignal } from "./types.js";
 import { computeSocialSignal } from "./social-signal.js";
+import { stripDiacritics } from "../discovery/location.js";
 
 const OUTDATED_YEAR_THRESHOLD = 2020;
 const GROWING_REVIEW_THRESHOLD = 20;
 const GROWING_RATING_MIN = 4.0;
 // N01: unificado con urgency-profile.ts — 'hospedaje' no existe como niche (0 leads), el real es 'accommodation'.
-const TOURIST_NICHES = new Set(["restaurant", "hospedaje", "accommodation"]);
+const TOURIST_NICHES = new Set(["restaurant", "accommodation"]);
 const TOURIST_ZONES = [
   "punta del este",
   "rocha",
   "cabo polonio",
-  "piriápolis",
+  "piriapolis",
   "barra de valizas",
 ];
 
@@ -29,7 +30,7 @@ export function computeUrgencySignal(lead: Lead): UrgencySignal {
 
   // Alta urgencia: zona turística estacional
   const niche = lead.niche ?? "other";
-  const address = (lead.address ?? "").toLowerCase();
+  const address = stripDiacritics(lead.address ?? "").toLowerCase();
   if (
     TOURIST_NICHES.has(niche) &&
     TOURIST_ZONES.some((z) => address.includes(z))

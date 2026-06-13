@@ -59,6 +59,15 @@ describe("normalizeNiche", () => {
     expect(normalizeNiche("concesionaria de automóviles")).toBe("car_dealer");
   });
 
+  it("BL-02: 'auto/autos' como palabra completa sí, pero auto* compuestos NO", () => {
+    expect(normalizeNiche("venta de autos usados")).toBe("car_dealer");
+    expect(normalizeNiche("automotora del este")).toBe("car_dealer");
+    // No deben caer en car_dealer (vertical equivocado):
+    expect(normalizeNiche("autoescuela del centro")).toBe("other");
+    expect(normalizeNiche("autoservicio la esquina")).toBe("other");
+    expect(normalizeNiche("autopartes el tornillo")).toBe("other");
+  });
+
   it("maps operational systems niches accent-insensitively", () => {
     expect(normalizeNiche("restaurante parrilla")).toBe("restaurant");
     expect(normalizeNiche("gimnasio funcional")).toBe("gym");
