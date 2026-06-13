@@ -336,6 +336,15 @@ export async function usersRoutes(app: FastifyInstance): Promise<void> {
       return reply.status(500).send({ error: "Database error", error_code: "db_error" });
     }
 
+    // MA-01: un reset de password debe REVOCAR los tokens ya emitidos (válidos ~30 días).
+    // Se bumpea token_version → el middleware rechaza (401 token_revoked) los tokens viejos.
+    if (patch.password !== undefined) {
+      const { error: bumpError } = await db.rpc("bump_user_token_version", { p_user_id: id });
+      if (bumpError) {
+        request.log.error({ err: bumpError, userId: id }, "MA-01: bump_user_token_version falló tras reset de password");
+      }
+    }
+
     // Determine audit action
     const action = patch.password
       ? "user.password_reset"

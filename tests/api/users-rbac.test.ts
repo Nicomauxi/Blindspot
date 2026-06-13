@@ -25,8 +25,14 @@ let _historyBlockers: Record<string, boolean> = {
   llm_usage_log: false,
 };
 
+let _rpcCalls: Array<{ fn: string; args: unknown }> = [];
+
 vi.mock("../../api/src/db/client.js", () => ({
   getDb: () => ({
+    rpc: async (fn: string, args: unknown) => {
+      _rpcCalls.push({ fn, args });
+      return { data: 1, error: null };
+    },
     from: (table: string) => {
       if (table === "users") {
         return {
@@ -169,6 +175,44 @@ describe("users route RBAC and validation", () => {
       discovery_jobs: false,
       llm_usage_log: false,
     };
+    _rpcCalls = [];
+  });
+
+  it("MA-01: PATCH password resetea token_version (revoca sesiones vigentes)", async () => {
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
+
+    const res = await app.inject({
+      method: "PATCH",
+      url: "/api/v1/users/target-user-id",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ password: "a-brand-new-password-123" }),
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(_rpcCalls).toContainEqual({
+      fn: "bump_user_token_version",
+      args: { p_user_id: "target-user-id" },
+    });
+    await app.close();
+  });
+
+  it("MA-01: un PATCH sin password NO bumpea token_version", async () => {
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
+
+    const res = await app.inject({
+      method: "PATCH",
+      url: "/api/v1/users/target-user-id",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ role: "admin" }),
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(_rpcCalls.some((c) => c.fn === "bump_user_token_version")).toBe(false);
+    await app.close();
   });
 
   it("POST /users rejects passwords shorter than 12 chars", async () => {
