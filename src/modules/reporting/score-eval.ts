@@ -11,7 +11,7 @@ export interface GeneratedScoreEvalArtifacts {
   summaryJson: string;
   leadDeltasCsv: string;
   topV1Csv: string;
-  topV2Csv: string;
+  topV3Csv: string;
   topComparisonCsv: string;
   bySourceCsv: string;
   byNicheCsv: string;
@@ -25,13 +25,13 @@ function renderStatus(status: "pass" | "warn"): string {
 
 function renderDistributionTable(rows: DistributionRow[]): string {
   const lines = [
-    "| Bucket | Count | Avg v1 | Avg v2 | Avg delta | Hot v1 | Hot v2 | Pitch v1 | Pitch v2 |",
+    "| Bucket | Count | Avg v1 | Avg v3 | Avg delta | Hot v1 | Hot v3 | Pitch v1 | Pitch v3 |",
     "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
   ];
 
   for (const row of rows) {
     lines.push(
-      `| ${row.bucket} | ${row.count} | ${row.avgV1.toFixed(1)} | ${row.avgV2.toFixed(1)} | ${row.avgDelta.toFixed(1)} | ${row.hotV1} | ${row.hotV2} | ${row.pitcheableV1} | ${row.pitcheableV2} |`
+      `| ${row.bucket} | ${row.count} | ${row.avgV1.toFixed(1)} | ${row.avgV3.toFixed(1)} | ${row.avgDelta.toFixed(1)} | ${row.hotV1} | ${row.hotV3} | ${row.pitcheableV1} | ${row.pitcheableV3} |`
     );
   }
 
@@ -44,13 +44,13 @@ function trimRows(rows: LeadScoreComparison[], limit: number): LeadScoreComparis
 
 function renderTopTable(rows: LeadScoreComparison[]): string {
   const lines = [
-    "| Name | Source | Niche | v1 | v2 | Delta | v1 rank | v2 rank | Tier | Offer | Reason |",
+    "| Name | Source | Niche | v1 | v3 | Delta | v1 rank | v3 rank | Tier | Offer | Reason |",
     "|---|---|---|---:|---:|---:|---:|---:|---|---|---|",
   ];
 
   for (const row of rows) {
     lines.push(
-      `| ${row.name} | ${row.source} | ${row.niche} | ${row.v1Score} | ${row.v2Score} | ${row.delta} | ${row.v1Rank} | ${row.v2Rank} | ${row.v2ContactTier} | ${row.v2PrimaryOffer} | ${row.reasonSummary} |`
+      `| ${row.name} | ${row.source} | ${row.niche} | ${row.v1Score} | ${row.v3Score} | ${row.delta} | ${row.v1Rank} | ${row.v3Rank} | ${row.v3ContactTier} | ${row.v3PrimaryOffer} | ${row.reasonSummary} |`
     );
   }
 
@@ -59,13 +59,13 @@ function renderTopTable(rows: LeadScoreComparison[]): string {
 
 function renderGoldSetTable(rows: GoldSetSeedRow[]): string {
   const lines = [
-    "| Name | Source | Niche | v1 | v2 | Delta | Expected direction | Contactability | Franchise | Offer | Bucket | Review |",
+    "| Name | Source | Niche | v1 | v3 | Delta | Expected direction | Contactability | Franchise | Offer | Bucket | Review |",
     "|---|---|---|---:|---:|---:|---|---|---|---|---|---|",
   ];
 
   for (const row of rows) {
     lines.push(
-      `| ${row.name} | ${row.source} | ${row.niche} | ${row.v1Score} | ${row.v2Score} | ${row.delta} | ${row.expectedDirection} | ${row.expectedContactability} | ${row.expectedFranchise ? "yes" : "no"} | ${row.expectedPrimaryOffer} | ${row.selectionBucket} | ${row.reviewStatus} |`
+      `| ${row.name} | ${row.source} | ${row.niche} | ${row.v1Score} | ${row.v3Score} | ${row.delta} | ${row.expectedDirection} | ${row.expectedContactability} | ${row.expectedFranchise ? "yes" : "no"} | ${row.expectedPrimaryOffer} | ${row.selectionBucket} | ${row.reviewStatus} |`
     );
   }
 
@@ -82,7 +82,7 @@ function buildSummaryJson(report: ScoreEvalReport): string {
       byNiche: report.byNiche,
       byContactTier: report.byContactTier,
       topV1: report.topV1,
-      topV2: report.topV2,
+      topV3: report.topV3,
       topComparison: report.topComparison,
       biggestRisers: report.biggestRisers,
       biggestFallers: report.biggestFallers,
@@ -105,16 +105,16 @@ function buildSummaryMd(report: ScoreEvalReport): string {
     "",
     "## Gate checks",
     "",
-    `- Tier X with v2 score >= 55: ${report.criteria.tierXHot.count} (${renderStatus(report.criteria.tierXHot.status)}; target ${report.criteria.tierXHot.threshold})`,
-    `- Leads with v2 score = 100: ${report.criteria.cappedAt100.count} / ${report.meta.poolSize} = ${report.criteria.cappedAt100.percent?.toFixed(1)}% (${renderStatus(report.criteria.cappedAt100.status)}; target ${report.criteria.cappedAt100.threshold})`,
-    `- Franchise average v2: ${report.criteria.franchiseAverage.avgV2?.toFixed(1)} (${renderStatus(report.criteria.franchiseAverage.status)}; target ${report.criteria.franchiseAverage.threshold})`,
-    `- Contactable car_dealer average v2: ${report.criteria.carDealerContactableAverage.avgV2?.toFixed(1)} (${renderStatus(report.criteria.carDealerContactableAverage.status)}; target ${report.criteria.carDealerContactableAverage.threshold})`,
+    `- Tier X hot (see threshold): ${report.criteria.tierXHot.count} (${renderStatus(report.criteria.tierXHot.status)}; target ${report.criteria.tierXHot.threshold})`,
+    `- Leads saturated at ceiling: ${report.criteria.cappedAt100.count} / ${report.meta.poolSize} = ${report.criteria.cappedAt100.percent?.toFixed(1)}% (${renderStatus(report.criteria.cappedAt100.status)}; target ${report.criteria.cappedAt100.threshold})`,
+    `- Franchise average v3: ${report.criteria.franchiseAverage.avgV3?.toFixed(1)} (${renderStatus(report.criteria.franchiseAverage.status)}; target ${report.criteria.franchiseAverage.threshold})`,
+    `- Contactable car_dealer average v3: ${report.criteria.carDealerContactableAverage.avgV3?.toFixed(1)} (${renderStatus(report.criteria.carDealerContactableAverage.status)}; target ${report.criteria.carDealerContactableAverage.threshold})`,
     "",
     "## Distribution by source",
     "",
     renderDistributionTable(report.bySource),
     "",
-    "## Distribution by contact tier (v2)",
+    "## Distribution by contact tier (v3)",
     "",
     renderDistributionTable(report.byContactTier),
     "",
@@ -161,7 +161,7 @@ export function generateScoreEvalArtifacts(report: ScoreEvalReport): GeneratedSc
     summaryJson: buildSummaryJson(report),
     leadDeltasCsv: csvForComparisons(report.comparisons),
     topV1Csv: csvForComparisons(report.topV1),
-    topV2Csv: csvForComparisons(report.topV2),
+    topV3Csv: csvForComparisons(report.topV3),
     topComparisonCsv: csvForComparisons(report.topComparison),
     bySourceCsv: csvForDistribution(report.bySource),
     byNicheCsv: csvForDistribution(report.byNiche),
