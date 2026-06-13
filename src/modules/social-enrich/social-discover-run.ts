@@ -11,6 +11,7 @@ import {
 } from "./social-discover-searxng.js";
 import { buildSocialFusion, extractUsernameFromUrl } from "./social-fusion.js";
 import { defaultIgLookupChain, type IgLookup } from "./ig-lookup-chain.js";
+import { serperConfigured, discoverEnrichViaSerper } from "./serper-provider.js";
 
 export interface SocialDiscoverStats {
   loaded: number;
@@ -39,6 +40,10 @@ export interface SocialDiscoverOptions {
   // misma pasada → social_activity que consume el scoring. Sin esto solo se guarda la URL.
   withMetrics?: boolean;
   lookup?: IgLookup; // inyectable para test
+  // provider de búsqueda: "serper" (Google SERP API, 1 query trae URL+métricas, sin
+  // rate-limit) o "searxng" ($0 local). Default: serper si hay SERPER_API_KEY, si no searxng.
+  provider?: "serper" | "searxng";
+  serperFetch?: typeof fetch; // inyectable para test del path Serper
 }
 
 // ¿El lead ya tiene MÉTRICAS sociales reales (no solo una URL)?
@@ -63,7 +68,8 @@ function hasRealWebsite(lead: Lead): boolean {
 }
 
 function alreadyDiscovered(lead: Lead): boolean {
-  return lead.digital_footprint?.social_search?.source === "searxng";
+  const source = lead.digital_footprint?.social_search?.source;
+  return source === "searxng" || source === "serper";
 }
 
 // Candidato F1: lead del pool digital-dark (sin web real ni IG seleccionada).
@@ -110,7 +116,46 @@ export async function runSocialDiscovery(opts: SocialDiscoverOptions): Promise<S
   const limit = pLimit(concurrency);
   const startedAt = Date.now();
 
-  async function processLead(lead: Lead): Promise<void> {
+  const provider = opts.provider ?? (serperConfigured() ? "serper" : "searxng");
+  const serperOpts = opts.serperFetch ? { fetchImpl: opts.serperFetch } : {};
+
+  // Path Serper: 1 query trae URL del perfil + snippet con followers → descubre Y enriquece
+  // en un solo crédito, sin rate-limit. IG only (FB se omite para no gastar el doble).
+  async function processLeadSerper(lead: Lead): Promise<void> {
+    const { instagram, metrics, igUsername } = await discoverEnrichViaSerper(lead, serperOpts);
+    const igUrl = instagram.best_url;
+    if (!igUrl) {
+      stats.no_match += 1;
+      return;
+    }
+    stats.found_instagram += 1;
+    stats.found_any += 1;
+    const social: import("../../shared/types.js").DuckDuckGoSocialSearch = {
+      ran_at: nowIso,
+      source: "serper",
+      instagram,
+      facebook: { query: "", results: [], best_url: null, additional_phones: [], confidence: 0 },
+    };
+    const tags = new Set<string>(["ig-discovered"]);
+
+    if (metrics && igUsername) {
+      const hasWebsite =
+        Boolean(lead.website) || Boolean(lead.digital_footprint?.heuristic_discovery?.selected.website?.url);
+      const fusion = await buildSocialFusion(lead, igUrl, metrics, { ranAt: nowIso, nowIso, hasWebsite, allowLlm: false });
+      for (const t of fusion.tags) tags.add(t);
+      stats.found_metrics += 1;
+      await updateLeadSocialSearch(lead.id, social, [...tags], null, fusion.socialActivity, fusion.socialCanonical).catch((err) =>
+        log.warn({ leadId: lead.id, err: String(err) }, "serper enrich no persistido")
+      );
+      return;
+    }
+    stats.found_url_no_metrics += 1;
+    await updateLeadSocialSearch(lead.id, social, [...tags], null).catch((err) =>
+      log.warn({ leadId: lead.id, err: String(err) }, "serper discover no persistido")
+    );
+  }
+
+  async function processLeadSearxng(lead: Lead): Promise<void> {
     const discovery = await discoverSocialViaSearxng(lead, deps, throttleMs);
     const igUrl = discovery.instagram.best_url;
     const fbUrl = discovery.facebook.best_url;
@@ -153,12 +198,13 @@ export async function runSocialDiscovery(opts: SocialDiscoverOptions): Promise<S
     );
   }
 
+  const processLead = provider === "serper" ? processLeadSerper : processLeadSearxng;
   await Promise.all(candidates.map((lead) => limit(() => processLead(lead))));
 
   stats.elapsed_ms = Date.now() - startedAt;
   stats.leads_per_sec =
     stats.elapsed_ms > 0 ? Number((candidates.length / (stats.elapsed_ms / 1000)).toFixed(2)) : 0;
 
-  log.info(stats, "Social discovery (SearXNG) complete");
+  log.info({ ...stats, provider }, "Social discovery complete");
   return stats;
 }

@@ -73,6 +73,57 @@ export function parseInstagramSnippet(snippet: string, username: string): Social
   };
 }
 
+// Extrae actividad reciente de snippets de POSTS ("30 likes, 4 comments - handle on
+// September 25, 2025: caption"). Da LIVENESS (fecha) + engagement, que para cuentas chicas
+// uruguayas Google SÍ muestra aunque NO muestre el follower count del perfil.
+const POST_SNIPPET_RE = /([\d.,]+)\s+likes?,\s+([\d.,]+)\s+comments?\s+-\s+([\w.]+)\s+on\s+([A-Z][a-z]+\.?\s+\d{1,2},\s*\d{4})/i;
+
+export function extractRecentMedia(
+  snippets: string[],
+  username: string
+): SocialProfileData["recent_media"] {
+  const media: SocialProfileData["recent_media"] = [];
+  for (const snippet of snippets) {
+    const m = snippet.match(POST_SNIPPET_RE);
+    if (!m) continue;
+    if (m[3]!.toLowerCase().replace(/[^a-z0-9]/g, "") !== username.toLowerCase().replace(/[^a-z0-9]/g, "")) continue;
+    const parsedDate = new Date(m[4]!.replace(/\./g, ""));
+    const timestamp = Number.isNaN(parsedDate.getTime()) ? null : parsedDate.toISOString();
+    const captionIdx = snippet.indexOf(":");
+    media.push({
+      caption: captionIdx >= 0 ? snippet.slice(captionIdx + 1).trim().slice(0, 280) : null,
+      timestamp,
+      like_count: parseSocialCount(m[1]!),
+      comments_count: parseSocialCount(m[2]!),
+    });
+  }
+  return media;
+}
+
+// Parser RICO: combina followers (cuando Google los muestra) + recent_media (liveness +
+// engagement, presente para la mayoría de las cuentas). Devuelve null solo si NO hay nada
+// útil. Maximiza la data por query (objetivo del path Serper).
+export function parseInstagramProfileRich(
+  snippets: string[],
+  username: string
+): SocialProfileData | null {
+  const base = pickProfileFromSnippets(snippets, username); // followers/following/posts + bio
+  const recent = extractRecentMedia(snippets, username);
+  if (!base && recent.length === 0) return null;
+  if (base) return recent.length > 0 ? { ...base, recent_media: recent } : base;
+  // Sin followers pero con actividad: perfil "vivo" sin audience_tier.
+  return {
+    username,
+    name: null,
+    biography: null,
+    followers_count: null,
+    follows_count: null,
+    media_count: null,
+    website: null,
+    recent_media: recent,
+  };
+}
+
 // N50: el buscador devuelve también snippets de OTROS perfiles (la query site: no es
 // exacta). Solo cuenta un snippet que mencione el handle como token completo
 // ('@arco ' sí; '@arcohanna' NO contiene el handle 'arco').

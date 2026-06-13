@@ -145,13 +145,14 @@ export function handleMatchesName(profileUrl: string, name: string): boolean {
 
 const DISCOVERY_THRESHOLD = 0.4;
 
-async function discoverPlatform(
-  platform: SocialSearchPlatform,
+// Selección pura (sin red): de los resultados crudos de un buscador, elige el mejor perfil.
+// Reusada por SearXNG y Serper. `query` es solo etiqueta para trazabilidad.
+export function selectProfileFromResults(
+  raw: SearxngSearchResult[],
   lead: Pick<Lead, "name" | "address">,
-  deps: SocialDiscoverDeps
-): Promise<SocialSearchPlatformResult> {
-  const query = buildQuery(platform, lead);
-  const raw = await deps.search(query);
+  platform: SocialSearchPlatform,
+  query = ""
+): SocialSearchPlatformResult {
   const scored = raw
     .filter((r) => typeof r.url === "string" && r.url.length > 0)
     // Normalizar a URL de PERFIL y descartar contenido (/p/, /reel/, /explore/). Sin esto
@@ -181,6 +182,16 @@ async function discoverPlatform(
     additional_phones: best?.result.phones_found ?? [],
     confidence: best?.result.score ?? 0,
   };
+}
+
+async function discoverPlatform(
+  platform: SocialSearchPlatform,
+  lead: Pick<Lead, "name" | "address">,
+  deps: SocialDiscoverDeps
+): Promise<SocialSearchPlatformResult> {
+  const query = buildQuery(platform, lead);
+  const raw = await deps.search(query);
+  return selectProfileFromResults(raw, lead, platform, query);
 }
 
 // Descubre IG + FB de un lead vía SearXNG. throttleMs se aplica entre las dos queries
