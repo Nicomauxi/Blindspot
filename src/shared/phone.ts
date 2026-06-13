@@ -28,6 +28,17 @@ function normalizeUruguayNationalDigits(raw: string): string | null {
   return null;
 }
 
+/**
+ * Canonical dedup key for a Uruguayan phone: the 8-digit national form, collapsing
+ * +598 / 0-prefixed / bare and mobile/landline (incl. interior 3/4). Returns null for
+ * anything not recognizable as a UY phone. IT-01/IT-06: single source of truth so the
+ * same number in three spellings produces ONE key and duplicate leads can fuse.
+ */
+export function canonicalUruguayPhoneKey(phone: string | null | undefined): string | null {
+  if (!phone) return null;
+  return normalizeUruguayNationalDigits(phone);
+}
+
 function toNormalizedPhone(nationalDigits: string): string {
   if (nationalDigits.startsWith("9")) return `+598${nationalDigits}`;
   return `+598${nationalDigits}`;

@@ -1,4 +1,5 @@
 import type { Lead } from "../../shared/types.js";
+import { canonicalUruguayPhoneKey } from "../../shared/phone.js";
 
 // Dominios de plataformas/agregadores: NO identifican un negocio puntual, así que no
 // sirven como clave de unión (cientos de leads comparten instagram.com, etc.).
@@ -26,9 +27,8 @@ const PLATFORM_DOMAINS = new Set([
 ]);
 
 export function normalizePhone(value: string | null | undefined): string | null {
-  const digits = (value ?? "").replace(/\D/g, "");
-  // Uruguay: descartar fragmentos demasiado cortos para identificar (< 7 dígitos).
-  return digits.length >= 7 ? digits : null;
+  // IT-01: única clave canónica (shared/phone) para que +598../09../bare colapsen.
+  return canonicalUruguayPhoneKey(value);
 }
 
 export function normalizeEmail(value: string | null | undefined): string | null {

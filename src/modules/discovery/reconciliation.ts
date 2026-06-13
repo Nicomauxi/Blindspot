@@ -2,6 +2,7 @@ import { findCrossSourceMatch, nameSimilarity, normalizeName } from "./deduplica
 import { extractAddressCity, haversineMeters, normalizeAddress, parseLeadGps } from "./geo-text.js";
 import { parseStreetAddress, streetAddressesMatch } from "./street-address.js";
 import type { CorroboratingSource, DiscoveryCandidate, Lead } from "../../shared/types.js";
+import { canonicalUruguayPhoneKey } from "../../shared/phone.js";
 
 export interface RetroactiveMatch {
   primary: Lead;
@@ -44,8 +45,8 @@ function canonicalFieldValue(canonicalFields: Lead["canonical_fields"], field: "
 }
 
 function normalizePhone(value: string | null): string | null {
-  const digits = (value ?? "").replace(/\D/g, "");
-  return digits.length > 0 ? digits : null;
+  // IT-01: misma clave canónica que el resto del pipeline (shared/phone).
+  return canonicalUruguayPhoneKey(value);
 }
 
 function normalizeEmail(value: string | null): string | null {

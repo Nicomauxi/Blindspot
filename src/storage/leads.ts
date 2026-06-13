@@ -13,7 +13,7 @@ import {
 } from "../modules/enrichment/change-detection.js";
 import { isFranchise, normalizeName } from "../modules/discovery/deduplication.js";
 import { computeChainWebsitePropagations } from "../modules/discovery/chain-website-propagation.js";
-import { classifyUruguayPhone } from "../shared/phone.js";
+import { canonicalUruguayPhoneKey, classifyUruguayPhone } from "../shared/phone.js";
 import { scoreLead } from "../modules/scoring/index.js";
 import { computeAllBuyerScores } from "../modules/scoring/buyer-types.js";
 import { getAdminServicePricing } from "./service-pricing.js";
@@ -97,14 +97,11 @@ function normalizeStoredWhatsapp(value: string | null): string | null {
 }
 
 function normalizeIdentityPhone(value: string | null): string | null {
-  const mobile = normalizeStoredWhatsapp(value);
-  if (mobile) return mobile;
-  const digits = (value ?? "").replace(/\D/g, "");
-  if (digits.length === 0) return null;
-  if (digits.startsWith("598")) return `+${digits}`;
-  if (digits.length === 8 && /^[29]/.test(digits)) return `+598${digits}`;
-  if (digits.length === 9 && digits.startsWith("0")) return `+598${digits.slice(1)}`;
-  return digits;
+  // IT-06: la lógica manual descartaba fijos del interior (prefijo 3/4: `/^[29]/`),
+  // sesgando el dedup justo donde hay menos cobertura. Delegamos en la clave canónica
+  // (shared/phone), que cubre móvil + fijo Montevideo + fijo interior, y devolvemos E.164.
+  const national = canonicalUruguayPhoneKey(value);
+  return national ? `+598${national}` : null;
 }
 
 function normalizeIdentityUrl(value: string | null | undefined): string | null {

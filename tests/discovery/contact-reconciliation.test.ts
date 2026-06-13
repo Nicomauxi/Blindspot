@@ -38,8 +38,9 @@ function lead(overrides: Partial<Lead> & { id: string; source: Lead["source"]; n
 }
 
 describe("contact-match helpers", () => {
-  it("normalizePhone exige >=7 dígitos", () => {
-    expect(normalizePhone("099 123 456")).toBe("099123456");
+  it("normalizePhone canoniza a la clave nacional (IT-01: colapsa grafías)", () => {
+    expect(normalizePhone("099 123 456")).toBe("99123456");
+    expect(normalizePhone("+598 99 123 456")).toBe("99123456");
     expect(normalizePhone("2-44")).toBeNull();
   });
   it("businessDomain excluye plataformas/redes", () => {
@@ -50,7 +51,7 @@ describe("contact-match helpers", () => {
   });
   it("contactKeys junta directos y canonical", () => {
     const l = lead({ id: "1", source: "mintur", name: "X", phone: "099111222", canonical_fields: { email: { value: "a@b.com" } } });
-    expect(contactKeys(l)).toEqual({ phones: ["099111222"], domains: [], emails: ["a@b.com"] });
+    expect(contactKeys(l)).toEqual({ phones: ["99111222"], domains: [], emails: ["a@b.com"] });
   });
 });
 
