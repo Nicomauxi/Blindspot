@@ -176,6 +176,15 @@ export interface ScoreCalibrationScenario {
   catalogo_by_niche?: Record<string, VerticalOfferAdjustment>;
   preview_thresholds?: ScoreBandThresholds;
   dedupe?: DedupeCalibrationConfig;
+  social?: SocialScoringConfig;
+}
+
+// Bonus por señal social (F1): audiencia (followers) + actividad (liveness) + el combo
+// "audiencia alta sin web" (prospecto ideal de web_nuevo/marketing). Conservador por diseño.
+export interface SocialScoringConfig {
+  audience_bonus: { low: number; medium: number; high: number };
+  active_bonus: number;
+  high_audience_no_web_bonus: number;
 }
 
 export interface ScoreCalibrationConfig {
@@ -296,6 +305,7 @@ export interface ScoreBreakdown {
   freshness_signal?: "fresh" | "stale" | "neutral";
   accessibility_bonus?: number;
   timing_bonus?: number;
+  social_bonus?: number;
   dedupe_penalty?: number;
 }
 

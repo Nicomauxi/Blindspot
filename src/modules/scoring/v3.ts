@@ -3,6 +3,7 @@ import { CONTACTABLE_TIERS } from "./contact.js";
 import { getScoringConfig } from "./config.js";
 import type { LeadScoringContext } from "./context.js";
 import { computeLeadScoringContext, computePitchHookForContext, resolveTierPoints } from "./context.js";
+import { computeSocialBonus, computeSocialSignal } from "./social-signal.js";
 import type { PrimaryOffer, ScoreBandThresholds, ScoreCalibrationScenario, ScoreModelFamily, ScoreResult, SubScores, UrgencySignal } from "./types.js";
 
 export interface CommercialScoreV3Snapshot {
@@ -21,6 +22,7 @@ export interface CommercialScoreV3Snapshot {
   source_quality_bonus: number;
   accessibility_bonus: number;
   timing_bonus: number;
+  social_bonus: number;
   dedupe_penalty: number;
   score_band: "normal" | "bueno" | "muy_bueno" | "excepcional";
   score_model: ScoreModelFamily;
@@ -165,7 +167,10 @@ export function simulateCommercialScoreV3(
   const timingBonus = computeTimingBonus(context, scenario);
   const sourceQualityBonus = computeScenarioSourceQualityBonus(lead, scenario);
   const dedupePenalty = computeDedupePenalty(lead, scenario);
-  const base = gapDepth + commercialBreadth + businessQualityPts + sourceQualityBonus;
+  // F1: bonus por señal social (audiencia/actividad/audiencia-sin-web). Entra al base como
+  // un término aditivo más, igual que source_quality_bonus.
+  const socialBonus = computeSocialBonus(computeSocialSignal(lead), scenario.social);
+  const base = gapDepth + commercialBreadth + businessQualityPts + sourceQualityBonus + socialBonus;
 
   let score = 0;
   if (scenario.family === "additive_pure") {
@@ -200,6 +205,7 @@ export function simulateCommercialScoreV3(
     source_quality_bonus: sourceQualityBonus,
     accessibility_bonus: accessibilityBonus,
     timing_bonus: timingBonus,
+    social_bonus: socialBonus,
     dedupe_penalty: dedupePenalty,
     score_band: scoreBand,
     score_model: scenario.family,
@@ -249,6 +255,7 @@ export function buildScoreResultV3(lead: Lead, scenario: ScoreCalibrationScenari
       freshness_signal: snapshot.freshness_signal,
       accessibility_bonus: snapshot.accessibility_bonus,
       timing_bonus: snapshot.timing_bonus,
+      social_bonus: snapshot.social_bonus,
       dedupe_penalty: snapshot.dedupe_penalty,
       accessibility_factor: 0,
       timing_factor: 0,

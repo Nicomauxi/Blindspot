@@ -71,6 +71,12 @@ const ScenarioSchema = z.object({
     exceptional_min: z.number().int().min(0).max(99),
   }).optional(),
   dedupe: DedupeSchema.optional(),
+  // F1: bonus por señal social. Default conservador; cada escenario puede override.
+  social: z.object({
+    audience_bonus: z.object({ low: z.number(), medium: z.number(), high: z.number() }),
+    active_bonus: z.number(),
+    high_audience_no_web_bonus: z.number(),
+  }).default({ audience_bonus: { low: 1, medium: 3, high: 6 }, active_bonus: 2, high_audience_no_web_bonus: 4 }),
 });
 
 const CalibrationConfigSchema = z.object({
