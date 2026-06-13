@@ -51,6 +51,11 @@ export function computeUrgencyProfile(lead: Lead): UrgencyProfile {
     business = "medium";
   }
 
+  // FS-16: `freshness_signal` mide NOVEDAD EN EL POOL (días desde `created_at`, es decir desde
+  // la ingesta al sistema), NO la antigüedad real del negocio. "fresh" = recién ingestado, no
+  // "negocio nuevo"; "stale" = lleva mucho en el pool sin tocarse, no "negocio viejo". Es señal
+  // interna de timing (no se persiste en score_breakdown ni se muestra en UI). La antigüedad real
+  // del negocio requiere una fuente externa (IMM `FHASTA_HAB`, Bloque 3) y se cableará entonces.
   const daysInPool = Math.max(0, Math.floor((Date.now() - new Date(lead.created_at).getTime()) / 86_400_000));
   let freshness: FreshnessSignal = "neutral";
   if (daysInPool < 7) freshness = "fresh";
