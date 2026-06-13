@@ -181,10 +181,30 @@ export async function discoverEnrichViaSerper(
 
 // ─── Fase 2: query unificada (1 crédito → website + social + reviews-meta) ──────────────
 
-// Dominios que NO son el sitio propio del negocio: redes, agregadores/directorios, reseñas.
-const NON_OWN_SITE_RE = /(facebook|instagram|linktr\.ee|beacons\.ai|wa\.me|whatsapp|tiktok|twitter|x\.com|linktree|youtube|youtu\.be|tripadvisor|yelp|booking\.com|foursquare|google\.|goo\.gl|mercadolibre|paginasamarillas|guialocal|cylex|opentable|booksy|pedidosya|rappi|wikipedia|maps\.app)/i;
+// Dominios que NO son el sitio propio del negocio: redes, agregadores/directorios, mapas,
+// reseñas. Backstop; el filtro principal es la afinidad dominio↔nombre (abajo).
+const NON_OWN_SITE_RE = /(facebook|instagram|linktr\.ee|beacons\.ai|wa\.me|whatsapp|tiktok|twitter|x\.com|linktree|youtube|youtu\.be|tripadvisor|yelp|booking\.com|foursquare|google\.|goo\.gl|waze|maptons|saliracomer|alacarta|guiaost|mercadolibre|paginasamarillas|guialocal|cylex|opentable|booksy|pedidosya|rappi|wikipedia|maps\.app|gps\.|gpsmycity)/i;
 
-export function pickRealWebsite(organic: SerperOrganic[]): string | null {
+function normalizeAlnumLocal(s: string): string {
+  return s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+// El dominio "se parece" al nombre del negocio (floreal.com.uy ⊃ "Floreal Restaurante").
+// Mismo principio que handleMatchesName (IG): evita que un directorio que rankea por el
+// nombre se confunda con el sitio propio. Token-overlap o substring del label raíz.
+function domainMatchesName(host: string, name: string): boolean {
+  const root = host.replace(/^www\./, "").split(".")[0] ?? ""; // "floreal" de floreal.com.uy
+  const d = normalizeAlnumLocal(root);
+  const n = normalizeAlnumLocal(name);
+  if (d.length < 4 || n.length < 4) return false;
+  // SOLO substring (dominio⊃nombre o nombre⊃dominio). El token-overlap por palabra suelta
+  // daba falsos positivos en términos genéricos ("cafe"/"bar" → cultocafe ≠ Rio Cafe).
+  return d.includes(n) || n.includes(d);
+}
+
+// Sitio PROPIO del negocio: primer orgánico no-social/no-directorio cuyo dominio se parece
+// al nombre. Si ninguno matchea → null (mejor sin web que un directorio falso).
+export function pickRealWebsite(organic: SerperOrganic[], name: string): string | null {
   for (const o of organic) {
     if (!o.link) continue;
     let host: string;
@@ -194,13 +214,8 @@ export function pickRealWebsite(organic: SerperOrganic[]): string | null {
       continue;
     }
     if (NON_OWN_SITE_RE.test(host)) continue;
-    // Normalizar a la raíz del dominio (sin path) — es el sitio del negocio.
-    try {
-      const u = new URL(o.link);
-      return `https://${u.hostname.replace(/^www\./, "")}/`;
-    } catch {
-      continue;
-    }
+    if (!domainMatchesName(host, name)) continue;
+    return `https://${host.replace(/^www\./, "")}/`;
   }
   return null;
 }
@@ -236,7 +251,7 @@ export async function unifiedLeadLookup(
   const query = `${lead.name} ${city} uruguay`.trim();
   const organic = await serperOrganic(query, opts);
 
-  const website = pickRealWebsite(organic);
+  const website = pickRealWebsite(organic, lead.name);
   const review_meta = pickReviewMeta(organic);
   const asSearxng = toSearxngResults(organic);
 

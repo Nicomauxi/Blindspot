@@ -23,13 +23,16 @@ function mockFetch(body: unknown): typeof fetch {
 }
 
 describe("pickRealWebsite", () => {
-  it("elige el dominio propio, salteando social y agregadores", () => {
-    expect(pickRealWebsite(FLOREAL.organic)).toBe("https://floreal.com.uy/");
+  it("elige el dominio propio que se parece al nombre, salteando social/agregadores", () => {
+    expect(pickRealWebsite(FLOREAL.organic, "Floreal Restaurante")).toBe("https://floreal.com.uy/");
   });
-  it("null si solo hay social/agregadores", () => {
+  it("RECHAZA directorios que rankean por el nombre (waze, saliracomer)", () => {
     expect(pickRealWebsite([
-      { link: "https://instagram.com/x" }, { link: "https://www.tripadvisor.com/y" }, { link: "https://facebook.com/z" },
-    ])).toBeNull();
+      { link: "https://waze.com/x" }, { link: "https://saliracomer.com/rio-cafe" },
+    ], "RIO CAFE RESTAURANT")).toBeNull();
+  });
+  it("null si ningún dominio se parece al nombre", () => {
+    expect(pickRealWebsite([{ link: "https://otracosa.com/y" }], "Floreal Restaurante")).toBeNull();
   });
 });
 
