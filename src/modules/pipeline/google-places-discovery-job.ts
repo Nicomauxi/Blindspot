@@ -5,7 +5,7 @@ import { enrichWithDetails } from "../discovery/google-data-enricher.js";
 import { applyProfileFilter, normalizeNiche, tagCandidate } from "../discovery/filters.js";
 import { getDiscoveryConfig, getProfileConfig } from "../discovery/config.js";
 import { createRun, completeRun, failRun } from "../../storage/runs.js";
-import { incrementGooglePlacesBudgetSpent, getGooglePlacesBudgetStatus } from "../../storage/pipeline-config.js";
+import { reserveGooglePlacesBudget, adjustGooglePlacesBudgetSpent } from "../../storage/pipeline-config.js";
 import { upsertLeads, loadLeadsByNiche } from "../../storage/leads.js";
 import { rebuildVocabularyForNiche } from "../../storage/vocabulary.js";
 import { loadAllRuntime } from "../../storage/system-lists.js";
@@ -104,15 +104,11 @@ export async function executeGooglePlacesDiscoveryJob(opts: {
   const profileKey = (opts.profile ?? "B").toLowerCase() as "a" | "b" | "c" | "d";
   const concurrency = Math.max(1, Math.min(opts.concurrency ?? 5, 10));
   const conservativeEstimate = estimateGooglePlacesCostUsd(maxResults);
-  const budget = await getGooglePlacesBudgetStatus();
-  const runtimeCap = Math.min(opts.costCapUsd, budget?.budget_remaining ?? opts.costCapUsd);
 
-  if (!(runtimeCap > 0)) {
-    throw new Error("Google Places budget exhausted for current month");
-  }
-
-  if (conservativeEstimate > runtimeCap) {
-    throw new Error(`Google Places estimated cost USD ${conservativeEstimate.toFixed(2)} exceeds allowed cap USD ${runtimeCap.toFixed(2)}`);
+  // Pre-checks que NO necesitan presupuesto van ANTES de la reserva (para no reservar en
+  // jobs que se abortan por cobertura o por estimación > cap del propio job).
+  if (conservativeEstimate > opts.costCapUsd) {
+    throw new Error(`Google Places estimated cost USD ${conservativeEstimate.toFixed(2)} exceeds allowed cap USD ${opts.costCapUsd.toFixed(2)}`);
   }
 
   if (!opts.skipCoverageCheck) {
@@ -126,32 +122,54 @@ export async function executeGooglePlacesDiscoveryJob(opts: {
     }
   }
 
-  const runtime = await loadAllRuntime();
-  const normalizedNiche = normalizeNiche(requestedNiche, runtime.mappings.nicheAliases);
-  const discoveryConfig = getDiscoveryConfig();
-  const profileConfig = getProfileConfig(profileKey, {});
+  // FD-03: RESERVA ATÓMICA del presupuesto antes de gastar (cierra el TOCTOU entre el
+  // poll-timer y la fase discovery; sin esto dos jobs leían el mismo remaining y gastaban
+  // ambos). runtimeCap = lo efectivamente reservado.
+  const reservation = await reserveGooglePlacesBudget(opts.costCapUsd);
+  const runtimeCap = reservation.reserved;
+
+  if (!(runtimeCap > 0)) {
+    throw new Error("Google Places budget exhausted for current month");
+  }
+
+  if (conservativeEstimate > runtimeCap) {
+    // Refund de lo reservado: no alcanza para el estimado, abortamos sin gastar.
+    await adjustGooglePlacesBudgetSpent(-runtimeCap).catch((err) =>
+      logger.error({ err }, "FD-03: refund de reserva (estimado > remaining) falló")
+    );
+    throw new Error(`Google Places estimated cost USD ${conservativeEstimate.toFixed(2)} exceeds remaining budget USD ${runtimeCap.toFixed(2)}`);
+  }
+
   const startedAt = Date.now();
   // N75: contadores fuera del try — si el run falla a mitad, el costo ya gastado
-  // se registra igual (stats del failRun + incremento de presupuesto).
+  // se registra igual (stats del failRun + reconciliación de presupuesto).
   let textSearchRequestsSoFar = 0;
   let detailsRequestsSoFar = 0;
-
-  const run = await createRun({
-    niche: requestedNiche,
-    location: opts.location,
-    profile: profileKey,
-    maxResults,
-    config: {
-      command: "discovery_job_google_places",
-      max_results: maxResults,
-      profile_thresholds: profileConfig,
-      concurrency,
-      cost_cap_usd: opts.costCapUsd,
-      budget_remaining_usd: budget?.budget_remaining ?? null,
-    },
-  });
+  // FD-03: run nullable + loadAllRuntime/createRun DENTRO del try, así un fallo entre la
+  // reserva y el run igual entra al catch y reconcilia el presupuesto (no deja reserva colgada).
+  let run: Awaited<ReturnType<typeof createRun>> | null = null;
 
   try {
+    const runtime = await loadAllRuntime();
+    const normalizedNiche = normalizeNiche(requestedNiche, runtime.mappings.nicheAliases);
+    const discoveryConfig = getDiscoveryConfig();
+    const profileConfig = getProfileConfig(profileKey, {});
+
+    run = await createRun({
+      niche: requestedNiche,
+      location: opts.location,
+      profile: profileKey,
+      maxResults,
+      config: {
+        command: "discovery_job_google_places",
+        max_results: maxResults,
+        profile_thresholds: profileConfig,
+        concurrency,
+        cost_cap_usd: opts.costCapUsd,
+        budget_reserved_usd: runtimeCap,
+      },
+    });
+
     const { candidates, textSearchRequestCount } = await fetchPlaceCandidates(
       requestedNiche,
       opts.location,
@@ -231,7 +249,8 @@ export async function executeGooglePlacesDiscoveryJob(opts: {
       ...(budgetAborted ? { budget_aborted: true } : {}),
     });
     try {
-      const budgetResult = await incrementGooglePlacesBudgetSpent(actualCostUsd);
+      // FD-03: reconciliar contra lo reservado (delta negativo = refund de lo no gastado).
+      const budgetResult = await adjustGooglePlacesBudgetSpent(actualCostUsd - runtimeCap);
       if (budgetResult?.over_budget) {
         logger.warn({ budget_spent: budgetResult.budget_spent, budget_total: budgetResult.budget_total }, "GP budget exceeded after job completion");
         createAlert({
@@ -279,15 +298,17 @@ export async function executeGooglePlacesDiscoveryJob(opts: {
     const costSoFar =
       textSearchRequestsSoFar * TEXT_SEARCH_COST_PER_REQUEST +
       detailsRequestsSoFar * DETAILS_COST_PER_REQUEST;
-    if (costSoFar > 0) {
-      await incrementGooglePlacesBudgetSpent(costSoFar).catch((err) =>
-        logger.error({ err, run_id: run.id, cost_usd: costSoFar }, "Failed to record GP spend of failed run")
-      );
+    // FD-03: reconciliar SIEMPRE contra la reserva (aunque costSoFar=0 → refund total),
+    // así un job que falla no deja el presupuesto reservado “colgado”.
+    await adjustGooglePlacesBudgetSpent(costSoFar - runtimeCap).catch((err) =>
+      logger.error({ err, run_id: run?.id ?? null, cost_usd: costSoFar }, "FD-03: reconciliacion de presupuesto de run fallido")
+    );
+    if (run) {
+      await failRun(run.id, message, Date.now() - startedAt, {
+        places_requests: textSearchRequestsSoFar + detailsRequestsSoFar,
+        estimated_cost_usd: costSoFar,
+      });
     }
-    await failRun(run.id, message, Date.now() - startedAt, {
-      places_requests: textSearchRequestsSoFar + detailsRequestsSoFar,
-      estimated_cost_usd: costSoFar,
-    });
     throw error;
   }
 }

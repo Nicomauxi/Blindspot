@@ -28,6 +28,41 @@ export async function incrementGooglePlacesBudgetSpent(costUsd: number): Promise
   };
 }
 
+export interface BudgetReservation {
+  reserved: number;
+  budget_spent: number;
+  budget_total: number;
+}
+
+/**
+ * FD-03: reserva atómica de presupuesto GP ANTES de gastar. Devuelve cuánto se pudo reservar
+ * (min(requested, remaining)); dos llamadas concurrentes se serializan en DB (FOR UPDATE) y
+ * la suma de reservas nunca excede el remaining → no hay sobre-gasto en USD.
+ */
+export async function reserveGooglePlacesBudget(requestedUsd: number): Promise<BudgetReservation> {
+  if (!(requestedUsd > 0)) return { reserved: 0, budget_spent: 0, budget_total: 0 };
+  const db = getSupabase();
+  const { data, error } = await db.rpc("reserve_gp_budget", { requested: requestedUsd });
+  if (error) throw new Error(`reserveGooglePlacesBudget: ${error.message}`);
+  if (!data || !Array.isArray(data) || data.length === 0) return { reserved: 0, budget_spent: 0, budget_total: 0 };
+  const row = data[0] as { reserved: number; google_places_budget_spent: number; google_places_budget_total: number };
+  return { reserved: Number(row.reserved), budget_spent: Number(row.google_places_budget_spent), budget_total: Number(row.google_places_budget_total) };
+}
+
+/**
+ * FD-03: reconcilia el gasto real contra lo reservado. delta = gasto_real − reservado
+ * (negativo = refund de lo no usado). Reemplaza al increment post-gasto en el flujo con reserva.
+ */
+export async function adjustGooglePlacesBudgetSpent(deltaUsd: number): Promise<BudgetIncrementResult | null> {
+  if (deltaUsd === 0) return null;
+  const db = getSupabase();
+  const { data, error } = await db.rpc("adjust_gp_budget_spent", { delta: deltaUsd });
+  if (error) throw new Error(`adjustGooglePlacesBudgetSpent: ${error.message}`);
+  if (!data || !Array.isArray(data) || data.length === 0) return null;
+  const row = data[0] as { google_places_budget_spent: number; google_places_budget_total: number; over_budget: boolean };
+  return { budget_spent: Number(row.google_places_budget_spent), budget_total: Number(row.google_places_budget_total), over_budget: row.over_budget };
+}
+
 export async function getGooglePlacesBudgetStatus(): Promise<BudgetStatus | null> {
   const db = getSupabase();
   const { data, error } = await db

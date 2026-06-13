@@ -9,7 +9,64 @@ vi.mock("../../src/shared/supabase.js", () => ({
   getSupabase: vi.fn(() => ({ rpc: mockRpc, from: mockFrom })),
 }));
 
-import { incrementGooglePlacesBudgetSpent, backfillGooglePlacesBudget } from "../../src/storage/pipeline-config.js";
+import {
+  incrementGooglePlacesBudgetSpent,
+  backfillGooglePlacesBudget,
+  reserveGooglePlacesBudget,
+  adjustGooglePlacesBudgetSpent,
+} from "../../src/storage/pipeline-config.js";
+
+describe("reserveGooglePlacesBudget (FD-03)", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("no llama al RPC y reserva 0 si el monto pedido no es positivo", async () => {
+    expect(await reserveGooglePlacesBudget(0)).toEqual({ reserved: 0, budget_spent: 0, budget_total: 0 });
+    expect(mockRpc).not.toHaveBeenCalled();
+  });
+
+  it("llama al RPC atómico y devuelve lo reservado", async () => {
+    mockRpc.mockResolvedValue({
+      data: [{ reserved: 10, google_places_budget_spent: 60, google_places_budget_total: 200 }],
+      error: null,
+    });
+    const result = await reserveGooglePlacesBudget(10);
+    expect(mockRpc).toHaveBeenCalledWith("reserve_gp_budget", { requested: 10 });
+    expect(result).toEqual({ reserved: 10, budget_spent: 60, budget_total: 200 });
+  });
+
+  it("reserva parcial cuando el remaining es menor que lo pedido", async () => {
+    mockRpc.mockResolvedValue({
+      data: [{ reserved: 3.5, google_places_budget_spent: 200, google_places_budget_total: 200 }],
+      error: null,
+    });
+    const result = await reserveGooglePlacesBudget(50);
+    expect(result.reserved).toBe(3.5);
+  });
+
+  it("throws cuando el RPC falla", async () => {
+    mockRpc.mockResolvedValue({ data: null, error: { message: "boom" } });
+    await expect(reserveGooglePlacesBudget(1)).rejects.toThrow("reserveGooglePlacesBudget: boom");
+  });
+});
+
+describe("adjustGooglePlacesBudgetSpent (FD-03)", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("no llama al RPC con delta 0", async () => {
+    expect(await adjustGooglePlacesBudgetSpent(0)).toBeNull();
+    expect(mockRpc).not.toHaveBeenCalled();
+  });
+
+  it("permite delta negativo (refund de lo no gastado)", async () => {
+    mockRpc.mockResolvedValue({
+      data: [{ google_places_budget_spent: 92, google_places_budget_total: 200, over_budget: false }],
+      error: null,
+    });
+    const result = await adjustGooglePlacesBudgetSpent(-8);
+    expect(mockRpc).toHaveBeenCalledWith("adjust_gp_budget_spent", { delta: -8 });
+    expect(result).toEqual({ budget_spent: 92, budget_total: 200, over_budget: false });
+  });
+});
 
 describe("incrementGooglePlacesBudgetSpent", () => {
   beforeEach(() => {
