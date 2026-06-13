@@ -135,4 +135,29 @@ describe("runSocialDiscovery (concurrente + instrumentado)", () => {
     expect(stats.found_any).toBe(0);
     expect(updateLeadSocialSearch).not.toHaveBeenCalled();
   });
+
+  it("withMetrics: descubre el perfil Y extrae followers en la misma pasada", async () => {
+    vi.mocked(loadAllLeads).mockResolvedValue([lead("clearbarberia")]);
+    const deps: SocialDiscoverDeps = {
+      search: vi.fn(async (q: string) =>
+        q.includes("instagram")
+          ? [{ url: "https://www.instagram.com/clearbarberia/", title: "clearbarberia Montevideo", content: "Montevideo" }]
+          : []
+      ),
+      delay: async () => {},
+    };
+    // lookup de métricas (lo que normalmente hace SearXNG-snippet): perfil con followers.
+    const lookup = vi.fn(async () => ({
+      username: "clearbarberia", name: "CLEAR barberia", biography: "Barbería 098755004",
+      followers_count: 5200, follows_count: 300, media_count: 410, website: null,
+      recent_media: [{ caption: "corte", timestamp: "2026-06-01T00:00:00Z", like_count: 30, comments_count: 2 }],
+    }));
+    const stats = await runSocialDiscovery({ all: true, withMetrics: true, lookup, deps });
+    expect(stats.found_instagram).toBe(1);
+    expect(stats.found_metrics).toBe(1);
+    expect(lookup).toHaveBeenCalledTimes(1);
+    // updateLeadSocialSearch recibió social_activity (6º arg) con las métricas.
+    const call = vi.mocked(updateLeadSocialSearch).mock.calls[0]!;
+    expect(call[4]).toBeDefined(); // socialActivity
+  });
 });
