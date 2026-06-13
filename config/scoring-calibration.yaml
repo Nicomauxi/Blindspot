@@ -1,5 +1,5 @@
 version: 1
-default_scenario: hybrid_bounded_v31_candidate
+default_scenario: hybrid_bounded_v32_candidate
 
 scenarios:
   multiplicative_attenuated_probe:
@@ -246,6 +246,76 @@ scenarios:
       good_min: 35
       very_good_min: 50
       exceptional_min: 63
+    dedupe:
+      possible_duplicate_penalty: 6
+      duplicate_secondary_penalty: 18
+      block_duplicate_secondary_exceptional: true
+
+  # v32: recalibración (M1/B6). Premia más los componentes infrautilizados que el vendedor
+  # prioriza: calidad de negocio (establecido) y contactabilidad. Candidato — simular antes
+  # de promover a default. Clon de v31 con business_quality y accessibility reforzados.
+  hybrid_bounded_v32_candidate:
+    family: hybrid_bounded
+    gap_depth_cap: 52
+    source_quality_bonus:
+      google_places: 0
+      osm: 2
+      yelu: 3
+      pedidosya: 4
+      mintur: 10
+      miem_dei: 10
+    commercial_breadth:
+      secondary_threshold: 30
+      secondary_bonus: 3
+      tertiary_threshold: 40
+      tertiary_bonus: 1
+    business_quality:
+      rating_tiers:
+        - { min: 4.0, max: 4.3, points: 2 }
+        - { min: 4.3, max: 4.6, points: 4 }
+        - { min: 4.6, max: null, points: 6 }
+      review_tiers:
+        - { min: 20, max: 50, points: 2 }
+        - { min: 50, max: 150, points: 4 }
+        - { min: 150, max: null, points: 6 }
+      data_confidence_multiplier: 2
+      contact_reliability_multiplier: 1
+      corroboration_bonus: 1
+      cap: 16
+    accessibility:
+      bounded_bonus_by_tier: { A: 9, B: 6, C: 2, D: -3, X: -8 }
+      score_tiers:
+        - { min: 50, points: 1 }
+        - { min: 70, points: 2 }
+        - { min: 85, points: 2 }
+      multiplicative_multiplier_by_tier: { A: 1.0, B: 1.0, C: 1.0, D: 1.0, X: 1.0 }
+      score_multiplier_weight: 0
+      reliability_multiplier_weight: 0
+    timing:
+      high_urgency_bonus: 2
+      medium_urgency_bonus: 1
+      low_urgency_bonus: 0
+      franchise_penalty: -8
+      freshness_bonus: 0
+      stale_penalty: -1
+    offer_adjustments:
+      web_nuevo: { multiplier: 1.0 }
+      rediseno: { multiplier: 1.0 }
+      marketing: { multiplier: 0.95 }
+      software: { multiplier: 1.0 }
+      catalogo: { multiplier: 0.88, cap: 45 }
+      contacto_directo: { multiplier: 0.92 }
+    catalogo_by_niche:
+      other: { multiplier: 0.68, cap: 30 }
+      restaurant: { multiplier: 0.82, cap: 40 }
+      car_dealer: { multiplier: 0.9, cap: 42 }
+      accommodation: { multiplier: 0.88, cap: 42 }
+      gym: { multiplier: 0.94, cap: 44 }
+    preview_thresholds:
+      normal_max: 39
+      good_min: 40
+      very_good_min: 58
+      exceptional_min: 72
     dedupe:
       possible_duplicate_penalty: 6
       duplicate_secondary_penalty: 18

@@ -29,11 +29,11 @@ afterEach(() => {
 });
 
 describe("scoreLead", () => {
-  it("profile A full enrichment → tier X, prospect=30 (v3)", () => {
+  it("profile A full enrichment → tier X, prospect=34 (v3, recalibrado v32)", () => {
     const result = scoreLead(profileA_full);
     expect(result.business_quality_score).toBe(50);
     expect(result.digital_gap_score).toBe(55);
-    expect(result.prospect_score).toBe(30);
+    expect(result.prospect_score).toBe(34);
     expect(result.score_breakdown.contact_tier).toBe("X");
     expect(result.score_breakdown.sub_scores.web_nuevo).toBe(35);
     expect(result.score_breakdown.sub_scores.primary_offer).toBe("web_nuevo");
@@ -111,7 +111,7 @@ describe("scoreLead", () => {
     expect(result.score_breakdown.sub_scores_raw?.marketing).toBe(28);
     expect(result.score_breakdown.contact_score).toBe(30); // F3.4: email 45→30
     expect(result.score_breakdown.contact_tier).toBe("C"); // 30 → tier C, no B
-    expect(result.prospect_score).toBe(27);
+    expect(result.prospect_score).toBe(28);
   });
 
   it("breakdown.rules contains ONLY post-exclusion rules (no excluded rules)", () => {
@@ -145,7 +145,7 @@ describe("scoreLead", () => {
   it("floor not round: el score compuesto sigue usando floor", () => {
     const lead = { ...empty_lead, tags: ["web-only-no-social"], canonical_fields: { email: "owner@example.com" } };
     const result = scoreLead(lead);
-    expect(result.prospect_score).toBe(27);
+    expect(result.prospect_score).toBe(28);
     expect(Number.isInteger(result.prospect_score)).toBe(true);
   });
 
@@ -160,11 +160,11 @@ describe("scoreLead", () => {
     expect(bqRuleNames).not.toContain("has_recent_reviews");
   });
 
-  it("profile A no_enrichment → tier X, prospect=30 (v3)", () => {
+  it("profile A no_enrichment → tier X, prospect=32 (v3, recalibrado v32)", () => {
     const result = scoreLead(profileA_no_enrichment);
     expect(result.business_quality_score).toBe(43);
     expect(result.digital_gap_score).toBe(35);
-    expect(result.prospect_score).toBe(30);
+    expect(result.prospect_score).toBe(32);
   });
 
   it("clamps digital_gap to 0 after summing negative weights", () => {
