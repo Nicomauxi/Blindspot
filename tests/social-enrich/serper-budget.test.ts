@@ -26,11 +26,19 @@ describe("SerperBudget", () => {
   it("rota a la siguiente key al agotarse una", () => {
     const b = new SerperBudget(["k1", "k2"]);
     expect(b.activeKey()).toBe("k1");
-    b.markActiveExhausted();
+    b.markExhausted(b.activeKey()!);
     expect(b.activeKey()).toBe("k2");
-    b.markActiveExhausted();
+    b.markExhausted(b.activeKey()!);
     expect(b.activeKey()).toBeNull();
     expect(b.state().stoppedReason).toBe("all_keys_exhausted");
+  });
+
+  it("CONCURRENCIA: múltiples markActiveExhausted sobre la MISMA key no saltean la siguiente", () => {
+    const b = new SerperBudget(["k1", "k2", "k3"]);
+    // 8 workers concurrentes ven k1 agotada y la marcan a la vez → NO debe saltar a k3.
+    for (let i = 0; i < 8; i++) b.markExhausted("k1");
+    expect(b.activeKey()).toBe("k2"); // rota solo UNA posición pese a 8 marcas
+    expect(b.state().exhaustedKeys).toBe(1);
   });
 });
 

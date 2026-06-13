@@ -66,7 +66,7 @@ export async function serperOrganic(query: string, opts: SerperSearchOpts = {}):
     budget.recordQuery();
     const { organic, quotaExhausted } = await runOnce(key);
     if (quotaExhausted) {
-      budget.markActiveExhausted();
+      budget.markExhausted(key); // marca ESTA key (la que recibió 429), no "la activa"
       continue;
     }
     return organic;

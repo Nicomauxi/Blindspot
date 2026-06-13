@@ -27,7 +27,6 @@ export interface SerperBudgetState {
 
 // Estado mutable de presupuesto para UN run. Una instancia por corrida.
 export class SerperBudget {
-  private idx = 0;
   private used = 0;
   private readonly exhausted = new Set<number>();
 
@@ -44,33 +43,42 @@ export class SerperBudget {
     return this.keys.length > 0;
   }
 
+  // Índice de la primera key NO agotada (derivado del set, no un cursor mutable — así
+  // múltiples workers concurrentes marcando agotada NO saltean keys por un idx++ en carrera).
+  private currentIndex(): number {
+    let i = 0;
+    while (i < this.keys.length && this.exhausted.has(i)) i++;
+    return i;
+  }
+
   // Key a usar ahora, o null si no quedan créditos (tope alcanzado o todas agotadas).
   activeKey(): string | null {
     if (this.maxQueries != null && this.used >= this.maxQueries) return null;
-    while (this.idx < this.keys.length && this.exhausted.has(this.idx)) this.idx++;
-    return this.idx < this.keys.length ? this.keys[this.idx]! : null;
+    const i = this.currentIndex();
+    return i < this.keys.length ? this.keys[i]! : null;
   }
 
   recordQuery(): void {
     this.used++;
   }
 
-  // Marca la key actual como agotada (429/402) → la próxima activeKey() rota a la siguiente.
-  markActiveExhausted(): void {
-    this.exhausted.add(this.idx);
-    this.idx++;
+  // Marca como agotada LA key que recibió el 429/402 (no "la activa") — bajo concurrencia
+  // varios workers usan la misma key; cada uno marca ESA, no la siguiente. Idempotente.
+  markExhausted(key: string): void {
+    const i = this.keys.indexOf(key);
+    if (i >= 0) this.exhausted.add(i);
   }
 
   stoppedReason(): SerperBudgetState["stoppedReason"] {
     if (this.maxQueries != null && this.used >= this.maxQueries) return "budget";
-    if (this.exhausted.size >= this.keys.length || this.idx >= this.keys.length) return "all_keys_exhausted";
+    if (this.exhausted.size >= this.keys.length) return "all_keys_exhausted";
     return null;
   }
 
   state(): SerperBudgetState {
     return {
       queriesUsed: this.used,
-      activeKeyIndex: this.idx,
+      activeKeyIndex: this.currentIndex(),
       exhaustedKeys: this.exhausted.size,
       totalKeys: this.keys.length,
       stoppedReason: this.stoppedReason(),
