@@ -21,6 +21,8 @@ interface SerperOrganic {
   link?: string;
   title?: string;
   snippet?: string;
+  rating?: number;
+  ratingCount?: number;
 }
 
 interface SerperSearchOpts {
@@ -29,15 +31,14 @@ interface SerperSearchOpts {
   budget?: SerperBudget; // si se provee, gestiona key activa + rotación + contador
 }
 
-// Una query a Serper → resultados orgánicos {url,title,content}. Cuenta 1 crédito. Con budget,
-// usa la key activa, cuenta la query y rota a la siguiente ante 429/402 (cuota agotada),
-// reintentando una vez por key. Sin budget, usa SERPER_API_KEY directo (compat/tests).
-// Degrada a [] ante error de red/parse (el caller lo trata como "sin resultados").
-export async function serperSearch(query: string, opts: SerperSearchOpts = {}): Promise<SearxngSearchResult[]> {
+// Core: 1 query a Serper → organic crudo. Cuenta 1 crédito. Con budget, usa la key activa,
+// cuenta la query y rota ante 429/402/403 (cuota agotada), reintentando por key. Sin budget,
+// usa la primera key del entorno (compat/tests). Degrada a [] ante error de red/parse.
+export async function serperOrganic(query: string, opts: SerperSearchOpts = {}): Promise<SerperOrganic[]> {
   const doFetch = opts.fetchImpl ?? fetch;
   const budget = opts.budget;
 
-  const runOnce = async (key: string): Promise<{ results: SearxngSearchResult[]; quotaExhausted: boolean }> => {
+  const runOnce = async (key: string): Promise<{ organic: SerperOrganic[]; quotaExhausted: boolean }> => {
     try {
       const res = await doFetch(SERPER_ENDPOINT, {
         method: "POST",
@@ -45,42 +46,46 @@ export async function serperSearch(query: string, opts: SerperSearchOpts = {}): 
         body: JSON.stringify({ q: query, gl: "uy", hl: "es", num: opts.num ?? 10 }),
         signal: AbortSignal.timeout(SERPER_TIMEOUT_MS),
       });
-      if (res.status === 429 || res.status === 402 || res.status === 403) {
-        return { results: [], quotaExhausted: true };
-      }
-      if (!res.ok) return { results: [], quotaExhausted: false };
+      if (res.status === 429 || res.status === 402 || res.status === 403) return { organic: [], quotaExhausted: true };
+      if (!res.ok) return { organic: [], quotaExhausted: false };
       const json = (await res.json()) as { organic?: SerperOrganic[] };
-      const results = (json.organic ?? []).map((o) => {
-        const r: SearxngSearchResult = {};
-        if (o.link) r.url = o.link;
-        if (o.title) r.title = o.title;
-        if (o.snippet) r.content = o.snippet;
-        return r;
-      });
-      return { results, quotaExhausted: false };
+      return { organic: json.organic ?? [], quotaExhausted: false };
     } catch {
-      return { results: [], quotaExhausted: false };
+      return { organic: [], quotaExhausted: false };
     }
   };
 
   if (!budget) {
     const key = getSerperKeys()[0];
     if (!key) return [];
-    return (await runOnce(key)).results;
+    return (await runOnce(key)).organic;
   }
-
-  // Con budget: intentar con la key activa; ante cuota agotada, rotar y reintentar.
   for (;;) {
     const key = budget.activeKey();
-    if (!key) return []; // tope alcanzado o todas las keys agotadas
+    if (!key) return []; // tope o todas las keys agotadas
     budget.recordQuery();
-    const { results, quotaExhausted } = await runOnce(key);
+    const { organic, quotaExhausted } = await runOnce(key);
     if (quotaExhausted) {
       budget.markActiveExhausted();
-      continue; // reintentar con la siguiente key
+      continue;
     }
-    return results;
+    return organic;
   }
+}
+
+function toSearxngResults(organic: SerperOrganic[]): SearxngSearchResult[] {
+  return organic.map((o) => {
+    const r: SearxngSearchResult = {};
+    if (o.link) r.url = o.link;
+    if (o.title) r.title = o.title;
+    if (o.snippet) r.content = o.snippet;
+    return r;
+  });
+}
+
+// Forma SearXNG {url,title,content} para el path de discovery social existente.
+export async function serperSearch(query: string, opts: SerperSearchOpts = {}): Promise<SearxngSearchResult[]> {
+  return toSearxngResults(await serperOrganic(query, opts));
 }
 
 export interface SerperLeadResult {
@@ -172,4 +177,91 @@ export async function discoverEnrichViaSerper(
   }
 
   return { instagram, metrics, igUsername };
+}
+
+// ─── Fase 2: query unificada (1 crédito → website + social + reviews-meta) ──────────────
+
+// Dominios que NO son el sitio propio del negocio: redes, agregadores/directorios, reseñas.
+const NON_OWN_SITE_RE = /(facebook|instagram|linktr\.ee|beacons\.ai|wa\.me|whatsapp|tiktok|twitter|x\.com|linktree|youtube|youtu\.be|tripadvisor|yelp|booking\.com|foursquare|google\.|goo\.gl|mercadolibre|paginasamarillas|guialocal|cylex|opentable|booksy|pedidosya|rappi|wikipedia|maps\.app)/i;
+
+export function pickRealWebsite(organic: SerperOrganic[]): string | null {
+  for (const o of organic) {
+    if (!o.link) continue;
+    let host: string;
+    try {
+      host = new URL(o.link).hostname.toLowerCase();
+    } catch {
+      continue;
+    }
+    if (NON_OWN_SITE_RE.test(host)) continue;
+    // Normalizar a la raíz del dominio (sin path) — es el sitio del negocio.
+    try {
+      const u = new URL(o.link);
+      return `https://${u.hostname.replace(/^www\./, "")}/`;
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
+// Reviews-meta: del organic, tomar el resultado con MÁS ratingCount (el más representativo).
+// Es rating de agregadores (TripAdvisor, etc.), señal SUPLEMENTARIA — no pisa el de Google.
+export function pickReviewMeta(organic: SerperOrganic[]): { rating: number; review_count: number } | null {
+  let best: { rating: number; review_count: number } | null = null;
+  for (const o of organic) {
+    if (typeof o.rating === "number" && typeof o.ratingCount === "number" && o.ratingCount > 0) {
+      if (!best || o.ratingCount > best.review_count) best = { rating: o.rating, review_count: o.ratingCount };
+    }
+  }
+  return best;
+}
+
+export interface UnifiedLeadResult {
+  website: string | null;
+  instagram: SocialSearchPlatformResult;
+  facebook_url: string | null;
+  metrics: SocialProfileData | null;
+  igUsername: string | null;
+  review_meta: { rating: number; review_count: number } | null;
+}
+
+// 1 query `<nombre> <ciudad> uruguay` → website propio + perfil IG (+métricas del snippet) +
+// FB + reviews-meta. Máxima data por crédito. Reusa los guards de discoverEnrichViaSerper.
+export async function unifiedLeadLookup(
+  lead: Pick<Lead, "name" | "address">,
+  opts: { fetchImpl?: typeof fetch; budget?: SerperBudget; nowMs?: number } = {}
+): Promise<UnifiedLeadResult> {
+  const city = (lead.address ?? "").split(",")[0]?.trim() ?? "";
+  const query = `${lead.name} ${city} uruguay`.trim();
+  const organic = await serperOrganic(query, opts);
+
+  const website = pickRealWebsite(organic);
+  const review_meta = pickReviewMeta(organic);
+  const asSearxng = toSearxngResults(organic);
+
+  const instagram = selectProfileFromResults(asSearxng, lead, "instagram", query);
+  const facebook = selectProfileFromResults(asSearxng, lead, "facebook", query);
+  const igUsername = usernameFromProfileUrl(instagram.best_url);
+
+  let metrics = igUsername
+    ? parseInstagramProfileRich(asSearxng.map((r) => r.content ?? "").filter(Boolean), igUsername)
+    : null;
+  if (metrics?.followers_count != null && metrics.followers_count > MAX_LOCAL_FOLLOWERS) {
+    // cuenta global homónima → descartar IG (no el website/reviews, que vienen de otra señal)
+    return {
+      website,
+      instagram: { ...instagram, best_url: null, confidence: 0 },
+      facebook_url: facebook.best_url,
+      metrics: null,
+      igUsername: null,
+      review_meta,
+    };
+  }
+  if (metrics) {
+    metrics = sanitizeStaleLiveness(metrics, opts.nowMs ?? Date.now());
+    if (!profileHasUsableMetrics(metrics)) metrics = null;
+  }
+
+  return { website, instagram, facebook_url: facebook.best_url, metrics, igUsername, review_meta };
 }

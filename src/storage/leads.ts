@@ -1377,6 +1377,13 @@ export interface GooglePlacesRefreshResult {
   fields_updated: string[];
 }
 
+// Fase 2: setear el website de un lead descubierto vía Serper (query unificada). Update
+// puntual; la vista lead_dashboard recalcula website_kind/sellable/opportunity_no_web sola.
+export async function updateLeadWebsite(leadId: string, website: string): Promise<void> {
+  const { error } = await getSupabase().from("leads").update({ website }).eq("id", leadId);
+  if (error) throw new Error(`updateLeadWebsite failed: ${error.message}`);
+}
+
 export async function applyGooglePlacesRefresh(
   leadId: string,
   summary: GooglePlacesRefreshInput

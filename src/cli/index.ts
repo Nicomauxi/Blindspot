@@ -135,6 +135,26 @@ program
   });
 
 program
+  .command("enrich-unified")
+  .description("Fase 2: 1 query Serper por lead → website propio + IG/FB + reviews-meta. Budget-gated + multi-key.")
+  .option("--run <uuid>", "Solo leads de este run")
+  .option("--all", "Pool sin website real", false)
+  .option("--limit <number>", "Máx leads (mejor prospect_score primero)")
+  .option("--concurrency <number>", "Workers en paralelo", "4")
+  .option("--max-queries <number>", "Tope de queries Serper para este run")
+  .action(async (opts: { run?: string; all?: boolean; limit?: string; concurrency?: string; maxQueries?: string }) => {
+    const { runUnifiedEnrich } = await import("./../modules/social-enrich/unified-enrich-run.js");
+    const stats = await runUnifiedEnrich({
+      ...(opts.run ? { run: opts.run } : { all: true }),
+      ...(opts.limit ? { limit: Number(opts.limit) } : {}),
+      concurrency: Number(opts.concurrency ?? "4"),
+      ...(opts.maxQueries ? { maxQueries: Number(opts.maxQueries) } : {}),
+    });
+    console.log(`\nEnrich unificado: ${stats.found_website} websites / ${stats.found_instagram} IG (${stats.found_metrics} c/métricas) / ${stats.found_review_meta} reviews-meta / ${stats.no_match} sin match · ${stats.candidates} candidatos`);
+    console.log(`💳 Serper: ${stats.serper_queries_used} queries${stats.serper_stopped ? ` — DETENIDO (${stats.serper_stopped})` : ""}${stats.skipped_no_budget > 0 ? ` · ${stats.skipped_no_budget} salteados sin budget` : ""} · ${(stats.elapsed_ms / 1000).toFixed(1)}s`);
+  });
+
+program
   .command("social-discover")
   .description("F1: descubre IG/FB de leads digital-dark vía SearXNG (gratis). Concurrente + instrumentado.")
   .option("--run <uuid>", "Solo leads de este run")
