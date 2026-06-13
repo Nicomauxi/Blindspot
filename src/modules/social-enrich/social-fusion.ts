@@ -93,12 +93,18 @@ export async function buildSocialFusion(
   profile: SocialProfileData,
   ctx: { ranAt: string; nowIso: string; hasWebsite: boolean; allowLlm?: boolean }
 ): Promise<SocialFusionResult> {
+  // FS-03: only adopt audience/liveness metrics when the profile's identity matches
+  // the business. Otherwise followers/tier could belong to a homonymous account and
+  // would inflate the ranking (audience_bonus) and mislead the vendor.
+  const identityVerified = profileMatchesLead(profile, lead.name);
   const lastActivityAt = profile.recent_media.find((m) => m.timestamp)?.timestamp ?? null;
   const activityProfile = instagramProfileFromCounts(igUrl, {
-    followers: profile.followers_count,
-    following: profile.follows_count,
+    followers: identityVerified ? profile.followers_count : null,
+    following: identityVerified ? profile.follows_count : null,
     posts: profile.media_count,
-    lastActivityAt,
+    // Without verified identity, do not claim the account is "alive": no dated
+    // activity → activity_status stays "unknown" (no red_activa, no active_bonus).
+    ...(identityVerified && lastActivityAt != null ? { lastActivityAt } : {}),
     nowIso: ctx.nowIso,
   });
 
@@ -117,8 +123,6 @@ export async function buildSocialFusion(
   } catch (err) {
     getLogger().warn({ leadId: lead.id, err: String(err) }, "social fusion: description parse failed");
   }
-
-  const identityVerified = profileMatchesLead(profile, lead.name);
 
   const instagram: PlaywrightInstagramSearchResult = {
     url: igUrl,

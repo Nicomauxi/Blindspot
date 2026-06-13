@@ -119,6 +119,11 @@ export function classifyActivity(opts: {
   lastActivityAt?: string | null;
   nowIso?: string | null;
 }): ActivityStatus {
+  // FS-05/FS-06: "active" requires DATED evidence of recent activity. Marking
+  // active off `talking_about` alone (FB og:description, no date) let a months-old
+  // snapshot count as "red activa" forever; and the IG snippet path has no date
+  // either. So without a real lastActivityAt the status is "unknown" — consistent
+  // across IG and FB, and red_activa only fires on dated proof of life.
   if (opts.lastActivityAt) {
     const last = Date.parse(opts.lastActivityAt);
     const now = opts.nowIso ? Date.parse(opts.nowIso) : Number.NaN;
@@ -127,7 +132,6 @@ export function classifyActivity(opts: {
       return days <= ABANDONED_DAYS ? "active" : "abandoned";
     }
   }
-  if (opts.talkingAbout != null && opts.talkingAbout > 0) return "active";
   return "unknown";
 }
 

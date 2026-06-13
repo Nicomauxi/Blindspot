@@ -65,8 +65,8 @@ describe("classifyActivity", () => {
   it("abandonado si > 90d", () => {
     expect(classifyActivity({ lastActivityAt: "2026-01-01", nowIso: "2026-06-06" })).toBe("abandoned");
   });
-  it("activo si hay talking_about > 0 (FB)", () => {
-    expect(classifyActivity({ talkingAbout: 45 })).toBe("active");
+  it("FS-06: talking_about sin fecha NO marca active (snapshot pudo quedar viejo)", () => {
+    expect(classifyActivity({ talkingAbout: 45 })).toBe("unknown");
   });
   it("unknown sin señales", () => {
     expect(classifyActivity({})).toBe("unknown");
@@ -78,9 +78,9 @@ describe("instagramProfile / facebookProfile", () => {
     const p = instagramProfile("https://instagram.com/resto", "12,000 Followers, 300 Following, 450 Posts - ...");
     expect(p).toMatchObject({ platform: "instagram", followers: 12000, posts: 450, audience_tier: "high" });
   });
-  it("facebookProfile clasifica actividad por talking_about", () => {
+  it("facebookProfile: talking_about sin fecha NO afirma active (FS-06)", () => {
     const p = facebookProfile("https://facebook.com/resto", "Resto. 2,500 likes · 45 talking about this");
-    expect(p).toMatchObject({ platform: "facebook", likes: 2500, audience_tier: "medium", activity_status: "active" });
+    expect(p).toMatchObject({ platform: "facebook", likes: 2500, audience_tier: "medium", activity_status: "unknown" });
   });
 
   it("instagramProfileFromCounts: counts estructurados + actividad por último post (Graph API)", () => {

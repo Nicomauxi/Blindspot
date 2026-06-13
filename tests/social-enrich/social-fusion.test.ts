@@ -83,6 +83,27 @@ describe("N50: fusión sin verificación de identidad", () => {
     expect(r.socialSearch.instagram!.confidence).toBeLessThan(0.7);
     expect(r.socialSearch.instagram!.liveness?.state).toBe("unverified");
     expect(r.tags).not.toContain("ig-confirmed");
+    // FS-03: métricas de un perfil ajeno NO se adoptan (no inflan ranking ni vista).
+    expect(r.socialActivity.profiles.instagram?.followers).toBeNull();
+    expect(r.socialActivity.profiles.instagram?.audience_tier).toBeNull();
+    expect(r.socialActivity.summary.audience_tier).toBeNull();
+    expect(r.socialActivity.profiles.instagram?.activity_status).toBe("unknown");
+  });
+
+  it("perfil ajeno con followers altos + actividad reciente NO marca alta_audiencia ni red_activa (FS-03)", async () => {
+    const ajeno = profile({
+      username: "berlin",
+      name: "Berlin Travel Blog",
+      biography: "Travel stories from Berlin",
+      followers_count: 50000,
+      website: null,
+      recent_media: [{ caption: "x", timestamp: "2026-06-08T00:00:00Z", like_count: 10, comments_count: 1 }],
+    });
+    const r = await buildSocialFusion(makeLead({ name: "ARCO" }), "https://instagram.com/berlin", ajeno, CTX);
+    expect(r.socialActivity.summary.audience_tier).toBeNull();
+    expect(r.socialActivity.summary.commercial_signals).not.toContain("alta_audiencia");
+    expect(r.socialActivity.summary.commercial_signals).not.toContain("red_activa");
+    expect(r.socialActivity.summary.active_platforms).toEqual([]);
   });
 
   it("perfil que SÍ matchea el nombre mantiene confirmación", async () => {
