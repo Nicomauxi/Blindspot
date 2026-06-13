@@ -146,7 +146,8 @@ program
   .option("--throttle-ms <number>", "Delay entre IG y FB por lead (0 = paralelo)", "0")
   .option("--with-metrics", "Pasada integrada: tras descubrir el perfil, extraer followers/liveness (señal de scoring)", false)
   .option("--serper-fallback", "Serper: 2da query dirigida si q1 no trae métricas (más créditos)", false)
-  .action(async (opts: { run?: string; all?: boolean; limit?: string; concurrency?: string; throttleMs?: string; withMetrics?: boolean; serperFallback?: boolean }) => {
+  .option("--max-queries <number>", "Tope de queries Serper para este run (corta al alcanzarlo)")
+  .action(async (opts: { run?: string; all?: boolean; limit?: string; concurrency?: string; throttleMs?: string; withMetrics?: boolean; serperFallback?: boolean; maxQueries?: string }) => {
     const { runSocialDiscovery } = await import("./../modules/social-enrich/social-discover-run.js");
     const stats = await runSocialDiscovery({
       ...(opts.run ? { run: opts.run } : { all: true }),
@@ -155,11 +156,13 @@ program
       throttleMs: Number(opts.throttleMs ?? "0"),
       withMetrics: opts.withMetrics ?? false,
       serperFallback: opts.serperFallback ?? false,
+      ...(opts.maxQueries ? { maxQueries: Number(opts.maxQueries) } : {}),
     });
     console.log(`\nSocial discover: ${stats.found_any} con perfil (${stats.found_instagram} IG / ${stats.found_facebook} FB) / ${stats.no_match} sin match / ${stats.candidates} candidatos`);
     if (opts.withMetrics) {
       console.log(`   métricas: ${stats.found_metrics} con followers/liveness / ${stats.found_url_no_metrics} perfil sin métricas públicas`);
     }
+    console.log(`💳 Serper: ${stats.serper_queries_used} queries usadas${stats.serper_stopped ? ` — DETENIDO (${stats.serper_stopped})` : ""}${stats.skipped_no_budget > 0 ? ` · ${stats.skipped_no_budget} salteados sin budget` : ""}`);
     console.log(`⏱  throughput: ${stats.leads_per_sec} leads/seg · ${(stats.elapsed_ms / 1000).toFixed(1)}s · concurrency=${opts.concurrency ?? "4"}`);
   });
 

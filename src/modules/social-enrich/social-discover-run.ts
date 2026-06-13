@@ -12,6 +12,7 @@ import {
 import { buildSocialFusion, extractUsernameFromUrl } from "./social-fusion.js";
 import { defaultIgLookupChain, type IgLookup } from "./ig-lookup-chain.js";
 import { serperConfigured, discoverEnrichViaSerper } from "./serper-provider.js";
+import { SerperBudget } from "./serper-budget.js";
 
 export interface SocialDiscoverStats {
   loaded: number;
@@ -24,6 +25,10 @@ export interface SocialDiscoverStats {
   /** withMetrics: perfil hallado pero sin métricas públicas (cuenta privada/sin og). */
   found_url_no_metrics: number;
   no_match: number;
+  /** F1 budget: queries Serper consumidas + por qué se detuvo (si aplica). */
+  serper_queries_used: number;
+  serper_stopped: "budget" | "all_keys_exhausted" | null;
+  skipped_no_budget: number;
   elapsed_ms: number;
   leads_per_sec: number;
 }
@@ -47,6 +52,9 @@ export interface SocialDiscoverOptions {
   // Serper: hacer la 2da query dirigida (instagram.com/handle) cuando q1 no trajo métricas.
   // Off para corridas masivas (ahorra ~20% de créditos; cobertura > profundidad).
   serperFallback?: boolean;
+  // F1: tope de queries Serper para este run (corta al alcanzarlo). null = sin tope (solo
+  // limita el agotamiento de keys). Para no pasarse del free tier.
+  maxQueries?: number | null;
 }
 
 // ¿El lead ya tiene MÉTRICAS sociales reales (no solo una URL)?
@@ -111,6 +119,9 @@ export async function runSocialDiscovery(opts: SocialDiscoverOptions): Promise<S
     found_metrics: 0,
     found_url_no_metrics: 0,
     no_match: 0,
+    serper_queries_used: 0,
+    serper_stopped: null,
+    skipped_no_budget: 0,
     elapsed_ms: 0,
     leads_per_sec: 0,
   };
@@ -120,11 +131,21 @@ export async function runSocialDiscovery(opts: SocialDiscoverOptions): Promise<S
   const startedAt = Date.now();
 
   const provider = opts.provider ?? (serperConfigured() ? "serper" : "searxng");
-  const serperOpts = opts.serperFetch ? { fetchImpl: opts.serperFetch } : {};
+  // F1: presupuesto + rotación multi-key para el path Serper (uno por run).
+  const budget = SerperBudget.fromEnv(opts.maxQueries ?? null);
+  const serperOpts: { fetchImpl?: typeof fetch; metricsFallback?: boolean; budget?: SerperBudget } = {
+    ...(opts.serperFetch ? { fetchImpl: opts.serperFetch } : {}),
+    budget,
+  };
 
   // Path Serper: 1 query trae URL del perfil + snippet con followers → descubre Y enriquece
   // en un solo crédito, sin rate-limit. IG only (FB se omite para no gastar el doble).
   async function processLeadSerper(lead: Lead): Promise<void> {
+    // Budget gate: si no quedan créditos/keys, no consultar (cuenta como salteado).
+    if (budget.activeKey() === null) {
+      stats.skipped_no_budget += 1;
+      return;
+    }
     const { instagram, metrics, igUsername } = await discoverEnrichViaSerper(lead, {
       ...serperOpts,
       metricsFallback: opts.serperFallback ?? false,
@@ -207,6 +228,9 @@ export async function runSocialDiscovery(opts: SocialDiscoverOptions): Promise<S
   const processLead = provider === "serper" ? processLeadSerper : processLeadSearxng;
   await Promise.all(candidates.map((lead) => limit(() => processLead(lead))));
 
+  const budgetState = budget.state();
+  stats.serper_queries_used = budgetState.queriesUsed;
+  stats.serper_stopped = provider === "serper" ? budgetState.stoppedReason : null;
   stats.elapsed_ms = Date.now() - startedAt;
   stats.leads_per_sec =
     stats.elapsed_ms > 0 ? Number((candidates.length / (stats.elapsed_ms / 1000)).toFixed(2)) : 0;

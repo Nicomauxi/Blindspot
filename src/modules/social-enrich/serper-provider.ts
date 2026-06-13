@@ -6,6 +6,7 @@
 import { buildQuery } from "../enrichment/social-search.js";
 import { selectProfileFromResults, type SearxngSearchResult } from "./social-discover-searxng.js";
 import { parseInstagramProfileRich } from "./duckduckgo-snippet.js";
+import { getSerperKeys, type SerperBudget } from "./serper-budget.js";
 import type { Lead, SocialSearchPlatformResult } from "../../shared/types.js";
 import type { SocialProfileData } from "./social-fusion.js";
 
@@ -13,7 +14,7 @@ const SERPER_ENDPOINT = "https://google.serper.dev/search";
 const SERPER_TIMEOUT_MS = 12_000;
 
 export function serperConfigured(): boolean {
-  return Boolean(process.env["SERPER_API_KEY"]?.trim());
+  return getSerperKeys().length > 0;
 }
 
 interface SerperOrganic {
@@ -22,33 +23,63 @@ interface SerperOrganic {
   snippet?: string;
 }
 
-// Una query a Serper → resultados orgánicos normalizados a la forma {url,title,content}.
-// Cuenta 1 crédito. Degrada a [] ante error (el caller lo trata como "sin resultados").
-export async function serperSearch(
-  query: string,
-  opts: { fetchImpl?: typeof fetch; num?: number } = {}
-): Promise<SearxngSearchResult[]> {
-  const key = process.env["SERPER_API_KEY"]?.trim();
-  if (!key) return [];
+interface SerperSearchOpts {
+  fetchImpl?: typeof fetch;
+  num?: number;
+  budget?: SerperBudget; // si se provee, gestiona key activa + rotación + contador
+}
+
+// Una query a Serper → resultados orgánicos {url,title,content}. Cuenta 1 crédito. Con budget,
+// usa la key activa, cuenta la query y rota a la siguiente ante 429/402 (cuota agotada),
+// reintentando una vez por key. Sin budget, usa SERPER_API_KEY directo (compat/tests).
+// Degrada a [] ante error de red/parse (el caller lo trata como "sin resultados").
+export async function serperSearch(query: string, opts: SerperSearchOpts = {}): Promise<SearxngSearchResult[]> {
   const doFetch = opts.fetchImpl ?? fetch;
-  try {
-    const res = await doFetch(SERPER_ENDPOINT, {
-      method: "POST",
-      headers: { "X-API-KEY": key, "Content-Type": "application/json" },
-      body: JSON.stringify({ q: query, gl: "uy", hl: "es", num: opts.num ?? 10 }),
-      signal: AbortSignal.timeout(SERPER_TIMEOUT_MS),
-    });
-    if (!res.ok) return [];
-    const json = (await res.json()) as { organic?: SerperOrganic[] };
-    return (json.organic ?? []).map((o) => {
-      const r: SearxngSearchResult = {};
-      if (o.link) r.url = o.link;
-      if (o.title) r.title = o.title;
-      if (o.snippet) r.content = o.snippet;
-      return r;
-    });
-  } catch {
-    return [];
+  const budget = opts.budget;
+
+  const runOnce = async (key: string): Promise<{ results: SearxngSearchResult[]; quotaExhausted: boolean }> => {
+    try {
+      const res = await doFetch(SERPER_ENDPOINT, {
+        method: "POST",
+        headers: { "X-API-KEY": key, "Content-Type": "application/json" },
+        body: JSON.stringify({ q: query, gl: "uy", hl: "es", num: opts.num ?? 10 }),
+        signal: AbortSignal.timeout(SERPER_TIMEOUT_MS),
+      });
+      if (res.status === 429 || res.status === 402 || res.status === 403) {
+        return { results: [], quotaExhausted: true };
+      }
+      if (!res.ok) return { results: [], quotaExhausted: false };
+      const json = (await res.json()) as { organic?: SerperOrganic[] };
+      const results = (json.organic ?? []).map((o) => {
+        const r: SearxngSearchResult = {};
+        if (o.link) r.url = o.link;
+        if (o.title) r.title = o.title;
+        if (o.snippet) r.content = o.snippet;
+        return r;
+      });
+      return { results, quotaExhausted: false };
+    } catch {
+      return { results: [], quotaExhausted: false };
+    }
+  };
+
+  if (!budget) {
+    const key = getSerperKeys()[0];
+    if (!key) return [];
+    return (await runOnce(key)).results;
+  }
+
+  // Con budget: intentar con la key activa; ante cuota agotada, rotar y reintentar.
+  for (;;) {
+    const key = budget.activeKey();
+    if (!key) return []; // tope alcanzado o todas las keys agotadas
+    budget.recordQuery();
+    const { results, quotaExhausted } = await runOnce(key);
+    if (quotaExhausted) {
+      budget.markActiveExhausted();
+      continue; // reintentar con la siguiente key
+    }
+    return results;
   }
 }
 
@@ -107,7 +138,7 @@ function profileHasUsableMetrics(profile: SocialProfileData): boolean {
 //   captura de métricas. Cuesta 1 crédito extra solo en ese subconjunto.
 export async function discoverEnrichViaSerper(
   lead: Pick<Lead, "name" | "address">,
-  opts: { fetchImpl?: typeof fetch; metricsFallback?: boolean; nowMs?: number } = {}
+  opts: { fetchImpl?: typeof fetch; metricsFallback?: boolean; nowMs?: number; budget?: SerperBudget } = {}
 ): Promise<SerperLeadResult> {
   const query = buildQuery("instagram", lead);
   const raw = await serperSearch(query, opts);
