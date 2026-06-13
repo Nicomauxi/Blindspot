@@ -198,7 +198,7 @@ export async function discoverEnrichViaSerper(
 
 // Dominios que NO son el sitio propio del negocio: redes, agregadores/directorios, mapas,
 // reseñas. Backstop; el filtro principal es la afinidad dominio↔nombre (abajo).
-const NON_OWN_SITE_RE = /(facebook|instagram|linktr\.ee|beacons\.ai|wa\.me|whatsapp|tiktok|twitter|x\.com|linktree|youtube|youtu\.be|tripadvisor|yelp|booking\.com|foursquare|google\.|goo\.gl|waze|maptons|saliracomer|alacarta|guiaost|mercadolibre|paginasamarillas|guialocal|cylex|opentable|booksy|pedidosya|rappi|wikipedia|maps\.app|gps\.|gpsmycity)/i;
+const NON_OWN_SITE_RE = /(facebook|instagram|linktr\.ee|beacons\.ai|wa\.me|whatsapp|tiktok|twitter|x\.com|linktree|youtube|youtu\.be|tripadvisor|yelp|booking\.com|foursquare|google\.|goo\.gl|waze|maptons|saliracomer|alacarta|guiaost|mercadolibre|paginasamarillas|guialocal|cylex|opentable|booksy|pedidosya|rappi|wikipedia|maps\.app|gps\.|gpsmycity|restaurants-us|restaurantes-uy|restaurantguru)/i;
 
 function normalizeAlnumLocal(s: string): string {
   return s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9]/g, "");
