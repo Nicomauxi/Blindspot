@@ -151,7 +151,7 @@ program
       ...(opts.maxQueries ? { maxQueries: Number(opts.maxQueries) } : {}),
     });
     console.log(`\nEnrich unificado: ${stats.found_website} websites / ${stats.found_instagram} IG (${stats.found_metrics} c/métricas) / ${stats.found_review_meta} reviews-meta / ${stats.no_match} sin match · ${stats.candidates} candidatos`);
-    console.log(`💳 Serper: ${stats.serper_queries_used} queries${stats.serper_stopped ? ` — DETENIDO (${stats.serper_stopped})` : ""}${stats.skipped_no_budget > 0 ? ` · ${stats.skipped_no_budget} salteados sin budget` : ""} · ${(stats.elapsed_ms / 1000).toFixed(1)}s`);
+    console.log(`💳 Serper: ${stats.serper_queries_used} queries${stats.serper_stopped ? ` — agotado (${stats.serper_stopped})` : ""}${stats.fallback_searxng > 0 ? ` · fallback SearXNG: ${stats.fallback_found}/${stats.fallback_searxng}` : ""} · ${(stats.elapsed_ms / 1000).toFixed(1)}s`);
   });
 
 program

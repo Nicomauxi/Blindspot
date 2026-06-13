@@ -3,18 +3,22 @@
 // la siguiente cuando una se agota (429/402). Un contador por-run + un tope opcional
 // (--max-queries) evitan pasarnos. Farmear keys = agregar SERPER_API_KEY3=… (sin tocar código).
 
-// Descubre todas las keys presentes en el entorno, en orden: SERPER_API_KEY, luego
-// SERPER_API_KEY2, SERPER_API_KEY3, … (corta en el primer hueco salvo que haya más numeradas).
+// Descubre dinámicamente TODAS las keys del entorno cuyo nombre matchea SERPER_API_KEY con
+// un sufijo numérico opcional: SERPER_API_KEY, SERPER_API_KEY_1, SERPER_API_KEY_2,
+// SERPER_API_KEY2, … (con o sin guion bajo). Solo cuenta las no-vacías. Ordena por el número
+// (la base sin número va primero). Farmear keys = agregar SERPER_API_KEY_3=… sin tocar código.
+const SERPER_KEY_RE = /^SERPER_API_KEY(?:_?(\d+))?$/;
+
 export function getSerperKeys(env: NodeJS.ProcessEnv = process.env): string[] {
-  const keys: string[] = [];
-  const base = env["SERPER_API_KEY"]?.trim();
-  if (base) keys.push(base);
-  // Buscar SERPER_API_KEY2..N (hasta un tope sano de 50 para no iterar infinito).
-  for (let i = 2; i <= 50; i++) {
-    const k = env[`SERPER_API_KEY${i}`]?.trim();
-    if (k) keys.push(k);
+  const found: Array<{ n: number; key: string }> = [];
+  for (const [name, value] of Object.entries(env)) {
+    const m = SERPER_KEY_RE.exec(name);
+    const key = value?.trim();
+    if (!m || !key) continue;
+    found.push({ n: m[1] ? Number(m[1]) : 0, key }); // base (sin número) = 0 → primero
   }
-  return Array.from(new Set(keys)); // dedup defensivo
+  found.sort((a, b) => a.n - b.n);
+  return Array.from(new Set(found.map((f) => f.key))); // dedup defensivo, conserva orden
 }
 
 export interface SerperBudgetState {

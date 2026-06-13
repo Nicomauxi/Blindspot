@@ -3,12 +3,17 @@ import { getSerperKeys, SerperBudget } from "../../src/modules/social-enrich/ser
 import { serperSearch } from "../../src/modules/social-enrich/serper-provider.js";
 
 describe("getSerperKeys", () => {
-  it("descubre SERPER_API_KEY + sufijos numerados en orden", () => {
-    expect(getSerperKeys({ SERPER_API_KEY: "k1", SERPER_API_KEY2: "k2", SERPER_API_KEY3: "k3" } as NodeJS.ProcessEnv))
-      .toEqual(["k1", "k2", "k3"]);
+  it("descubre base + sufijos con guion bajo (SERPER_API_KEY_N) en orden numérico", () => {
+    expect(getSerperKeys({ SERPER_API_KEY: "k0", SERPER_API_KEY_1: "k1", SERPER_API_KEY_2: "k2" } as NodeJS.ProcessEnv))
+      .toEqual(["k0", "k1", "k2"]);
   });
-  it("soporta numeradas sin la base", () => {
-    expect(getSerperKeys({ SERPER_API_KEY2: "k2" } as NodeJS.ProcessEnv)).toEqual(["k2"]);
+  it("también soporta sin guion bajo (SERPER_API_KEY2) y ordena por número", () => {
+    expect(getSerperKeys({ SERPER_API_KEY_10: "k10", SERPER_API_KEY2: "k2", SERPER_API_KEY: "k0" } as NodeJS.ProcessEnv))
+      .toEqual(["k0", "k2", "k10"]);
+  });
+  it("ignora vacías/nulas y deduplica", () => {
+    expect(getSerperKeys({ SERPER_API_KEY: "k1", SERPER_API_KEY_2: "  ", SERPER_API_KEY_3: "k1" } as NodeJS.ProcessEnv))
+      .toEqual(["k1"]);
   });
   it("sin keys → []", () => {
     expect(getSerperKeys({} as NodeJS.ProcessEnv)).toEqual([]);

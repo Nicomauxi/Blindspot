@@ -10,6 +10,7 @@ import { getSupabase } from "../../shared/supabase.js";
 import { serperConfigured, unifiedLeadLookup } from "./serper-provider.js";
 import { SerperBudget } from "./serper-budget.js";
 import { buildSocialFusion } from "./social-fusion.js";
+import { discoverSocialViaSearxng, makeSearxngDeps } from "./social-discover-searxng.js";
 
 const SOCIAL_HOST_RE = /(facebook|instagram|linktr|beacons|wa\.me|whatsapp|tiktok|twitter|x\.com)/i;
 
@@ -27,7 +28,9 @@ export interface UnifiedEnrichStats {
   no_match: number;
   serper_queries_used: number;
   serper_stopped: "budget" | "all_keys_exhausted" | null;
-  skipped_no_budget: number;
+  /** Leads resueltos por el motor lento (SearXNG) cuando Serper se quedó sin créditos. */
+  fallback_searxng: number;
+  fallback_found: number;
   elapsed_ms: number;
 }
 
@@ -39,6 +42,9 @@ export interface UnifiedEnrichOptions {
   maxQueries?: number | null;
   serperFetch?: typeof fetch;
   nowIso?: string;
+  // Fallback al motor lento (SearXNG, $0) para descubrir social cuando Serper se quedó sin
+  // créditos. Default ON. SearXNG no trae website/reviews → en fallback solo se recupera social.
+  searxngFallback?: boolean;
 }
 
 // Candidato: lead del pool al que le falta website real (el hueco grande). Si ya tiene web
@@ -76,7 +82,8 @@ export async function runUnifiedEnrich(opts: UnifiedEnrichOptions): Promise<Unif
     no_match: 0,
     serper_queries_used: 0,
     serper_stopped: null,
-    skipped_no_budget: 0,
+    fallback_searxng: 0,
+    fallback_found: 0,
     elapsed_ms: 0,
   };
 
@@ -87,12 +94,31 @@ export async function runUnifiedEnrich(opts: UnifiedEnrichOptions): Promise<Unif
 
   const budget = SerperBudget.fromEnv(opts.maxQueries ?? null);
   const serperOpts = { budget, ...(opts.serperFetch ? { fetchImpl: opts.serperFetch } : {}), nowMs: Date.parse(nowIso) };
+  const useFallback = opts.searxngFallback ?? true;
+  const searxngDeps = makeSearxngDeps({});
   const limit = pLimit(Math.max(1, opts.concurrency ?? 4));
   const startedAt = Date.now();
 
+  // Fallback motor lento (SearXNG): Serper sin créditos → descubrir social (sin website/reviews).
+  async function processLeadFallback(lead: Lead): Promise<void> {
+    stats.fallback_searxng += 1;
+    const discovery = await discoverSocialViaSearxng(lead, searxngDeps, 0);
+    const igUrl = discovery.instagram.best_url;
+    if (!igUrl) { stats.no_match += 1; return; }
+    stats.fallback_found += 1;
+    stats.found_instagram += 1;
+    const tags = new Set<string>(["ig-discovered"]);
+    if (discovery.facebook.best_url) tags.add("fb-discovered");
+    await updateLeadSocialSearch(lead.id, discovery, [...tags], null).catch((err) =>
+      log.warn({ leadId: lead.id, err: String(err) }, "fallback social no persistido")
+    );
+  }
+
   async function processLead(lead: Lead): Promise<void> {
     if (budget.activeKey() === null) {
-      stats.skipped_no_budget += 1;
+      // Serper sin créditos → motor lento (si está habilitado), en vez de saltear.
+      if (useFallback) await processLeadFallback(lead);
+      else stats.no_match += 1;
       return;
     }
     const r = await unifiedLeadLookup(lead, serperOpts);
