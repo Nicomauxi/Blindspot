@@ -42,24 +42,39 @@ describe("SerperBudget", () => {
   });
 });
 
-describe("serperSearch con budget (rotación ante 429)", () => {
+describe("serperSearch con budget (rotación / rate-limit)", () => {
   afterEach(() => vi.restoreAllMocks());
 
-  it("rota a la 2da key cuando la 1ra devuelve 429, y cuenta las queries", async () => {
-    const calls: string[] = [];
+  it("429 TRANSITORIO: reintenta la MISMA key (no rota, no la marca muerta)", async () => {
+    let n = 0;
     const fetchImpl = vi.fn(async (_url: string, init: RequestInit) => {
       const key = (init.headers as Record<string, string>)["X-API-KEY"];
-      calls.push(key);
-      if (key === "k1") return { status: 429, ok: false, json: async () => ({}) } as unknown as Response;
+      expect(key).toBe("k1"); // nunca rota a k2 por un 429
+      n++;
+      if (n === 1) return { status: 429, ok: false, json: async () => ({}) } as unknown as Response;
       return { status: 200, ok: true, json: async () => ({ organic: [{ link: "https://x.com", title: "t", snippet: "s" }] }) } as unknown as Response;
     }) as unknown as typeof fetch;
 
     const budget = new SerperBudget(["k1", "k2"]);
     const res = await serperSearch("q", { fetchImpl, budget });
-    expect(calls).toEqual(["k1", "k2"]); // probó k1 (429) → rotó a k2
+    expect(res).toHaveLength(1); // el reintento (200) tras el 429 transitorio
+    expect(budget.state().exhaustedKeys).toBe(0); // k1 NO marcada muerta
+  });
+
+  it("403 (cuota/credenciales): rota a la siguiente key", async () => {
+    const calls: string[] = [];
+    const fetchImpl = vi.fn(async (_url: string, init: RequestInit) => {
+      const key = (init.headers as Record<string, string>)["X-API-KEY"];
+      calls.push(key);
+      if (key === "k1") return { status: 403, ok: false, json: async () => ({}) } as unknown as Response;
+      return { status: 200, ok: true, json: async () => ({ organic: [{ link: "https://x.com", title: "t", snippet: "s" }] }) } as unknown as Response;
+    }) as unknown as typeof fetch;
+
+    const budget = new SerperBudget(["k1", "k2"]);
+    const res = await serperSearch("q", { fetchImpl, budget });
+    expect(calls).toEqual(["k1", "k2"]);
     expect(res).toHaveLength(1);
-    expect(budget.state().queriesUsed).toBe(2);
-    expect(budget.state().exhaustedKeys).toBe(1);
+    expect(budget.state().exhaustedKeys).toBe(1); // k1 agotada (403)
   });
 
   it("devuelve [] sin gastar cuando no quedan créditos (tope)", async () => {

@@ -34,39 +34,54 @@ interface SerperSearchOpts {
 // Core: 1 query a Serper → organic crudo. Cuenta 1 crédito. Con budget, usa la key activa,
 // cuenta la query y rota ante 429/402/403 (cuota agotada), reintentando por key. Sin budget,
 // usa la primera key del entorno (compat/tests). Degrada a [] ante error de red/parse.
+const RATE_LIMIT_RETRIES = 4;
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+type RunOutcome = { organic: SerperOrganic[]; quotaExhausted: boolean };
+
 export async function serperOrganic(query: string, opts: SerperSearchOpts = {}): Promise<SerperOrganic[]> {
   const doFetch = opts.fetchImpl ?? fetch;
   const budget = opts.budget;
 
-  const runOnce = async (key: string): Promise<{ organic: SerperOrganic[]; quotaExhausted: boolean }> => {
-    try {
-      const res = await doFetch(SERPER_ENDPOINT, {
-        method: "POST",
-        headers: { "X-API-KEY": key, "Content-Type": "application/json" },
-        body: JSON.stringify({ q: query, gl: "uy", hl: "es", num: opts.num ?? 10 }),
-        signal: AbortSignal.timeout(SERPER_TIMEOUT_MS),
-      });
-      if (res.status === 429 || res.status === 402 || res.status === 403) return { organic: [], quotaExhausted: true };
-      if (!res.ok) return { organic: [], quotaExhausted: false };
-      const json = (await res.json()) as { organic?: SerperOrganic[] };
-      return { organic: json.organic ?? [], quotaExhausted: false };
-    } catch {
-      return { organic: [], quotaExhausted: false };
+  // Una key: maneja el 429 TRANSITORIO (rate-limit por burst de concurrencia) con backoff +
+  // reintento de la MISMA key. Solo 402/403 = cuota/credenciales agotadas (rotar). Un 429
+  // persistente tras los reintentos → falla la query (no marca la key muerta).
+  const runKey = async (key: string): Promise<RunOutcome> => {
+    for (let attempt = 0; attempt <= RATE_LIMIT_RETRIES; attempt++) {
+      try {
+        const res = await doFetch(SERPER_ENDPOINT, {
+          method: "POST",
+          headers: { "X-API-KEY": key, "Content-Type": "application/json" },
+          body: JSON.stringify({ q: query, gl: "uy", hl: "es", num: opts.num ?? 10 }),
+          signal: AbortSignal.timeout(SERPER_TIMEOUT_MS),
+        });
+        if (res.status === 402 || res.status === 403) return { organic: [], quotaExhausted: true };
+        if (res.status === 429) {
+          if (attempt < RATE_LIMIT_RETRIES) { await sleep(300 * (attempt + 1)); continue; } // backoff
+          return { organic: [], quotaExhausted: false }; // 429 persistente → skip, NO mata la key
+        }
+        if (!res.ok) return { organic: [], quotaExhausted: false };
+        const json = (await res.json()) as { organic?: SerperOrganic[] };
+        return { organic: json.organic ?? [], quotaExhausted: false };
+      } catch {
+        return { organic: [], quotaExhausted: false };
+      }
     }
+    return { organic: [], quotaExhausted: false };
   };
 
   if (!budget) {
     const key = getSerperKeys()[0];
     if (!key) return [];
-    return (await runOnce(key)).organic;
+    return (await runKey(key)).organic;
   }
   for (;;) {
     const key = budget.activeKey();
     if (!key) return []; // tope o todas las keys agotadas
     budget.recordQuery();
-    const { organic, quotaExhausted } = await runOnce(key);
+    const { organic, quotaExhausted } = await runKey(key);
     if (quotaExhausted) {
-      budget.markExhausted(key); // marca ESTA key (la que recibió 429), no "la activa"
+      budget.markExhausted(key); // 402/403 → esta key sin créditos → rotar
       continue;
     }
     return organic;
