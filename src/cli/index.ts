@@ -142,13 +142,15 @@ program
   .option("--limit <number>", "Máx leads (mejor prospect_score primero)")
   .option("--concurrency <number>", "Workers en paralelo", "4")
   .option("--max-queries <number>", "Tope de queries Serper para este run")
-  .action(async (opts: { run?: string; all?: boolean; limit?: string; concurrency?: string; maxQueries?: string }) => {
+  .option("--no-searxng-fallback", "Desactivar el fallback al motor lento (SearXNG) cuando Serper se agota")
+  .action(async (opts: { run?: string; all?: boolean; limit?: string; concurrency?: string; maxQueries?: string; searxngFallback?: boolean }) => {
     const { runUnifiedEnrich } = await import("./../modules/social-enrich/unified-enrich-run.js");
     const stats = await runUnifiedEnrich({
       ...(opts.run ? { run: opts.run } : { all: true }),
       ...(opts.limit ? { limit: Number(opts.limit) } : {}),
       concurrency: Number(opts.concurrency ?? "4"),
       ...(opts.maxQueries ? { maxQueries: Number(opts.maxQueries) } : {}),
+      searxngFallback: opts.searxngFallback ?? true, // commander setea false con --no-searxng-fallback
     });
     console.log(`\nEnrich unificado: ${stats.found_website} websites / ${stats.found_instagram} IG (${stats.found_metrics} c/métricas) / ${stats.found_review_meta} reviews-meta / ${stats.no_match} sin match · ${stats.candidates} candidatos`);
     console.log(`💳 Serper: ${stats.serper_queries_used} queries${stats.serper_stopped ? ` — agotado (${stats.serper_stopped})` : ""}${stats.fallback_searxng > 0 ? ` · fallback SearXNG: ${stats.fallback_found}/${stats.fallback_searxng}` : ""} · ${(stats.elapsed_ms / 1000).toFixed(1)}s`);
