@@ -50,7 +50,8 @@ async function countRows(table: string, filters: Array<[string, unknown]> = []):
 
 export async function executeRefreshPhase(
   config: PipelineConfig["phases"]["refresh"],
-  isDryRun: boolean
+  isDryRun: boolean,
+  shouldStop?: () => boolean | Promise<boolean>
 ): Promise<PhaseExecutionSummary> {
   const plan = await buildRefreshPlan(config);
   const itemsProcessed = plan.staleRunIds.length + plan.staleExternalSources.length;
@@ -63,22 +64,27 @@ export async function executeRefreshPhase(
   }
 
   for (const runId of plan.staleRunIds) {
+    // FD-01: refresh dispara N enriches secuenciales; cortar entre cada uno ante abort.
+    if (shouldStop && (await shouldStop())) return { itemsProcessed, note: "aborted" };
     await enrichCommand({
       run: runId,
       forceRefresh: false,
       withHeuristic: true,
       concurrency: "5",
       all: false,
+      ...(shouldStop ? { shouldStop } : {}),
     });
   }
 
   for (const source of plan.staleExternalSources) {
+    if (shouldStop && (await shouldStop())) return { itemsProcessed, note: "aborted" };
     await enrichCommand({
       source,
       forceRefresh: false,
       withHeuristic: false,
       concurrency: "5",
       all: false,
+      ...(shouldStop ? { shouldStop } : {}),
     });
   }
 
@@ -106,7 +112,8 @@ export async function executeDiscoveryPhase(
 
 export async function executeEnrichPhase(
   config: PipelineConfig["phases"]["enrich"],
-  isDryRun: boolean
+  isDryRun: boolean,
+  shouldStop?: () => boolean | Promise<boolean>
 ): Promise<PhaseExecutionSummary> {
   const itemsProcessed = await countRows("leads", [["passed_filter", true]]);
 
@@ -119,6 +126,7 @@ export async function executeEnrichPhase(
     forceRefresh: false,
     withHeuristic: config.with_heuristic,
     concurrency: String(config.concurrency),
+    ...(shouldStop ? { shouldStop } : {}),
   });
 
   // N43: items_processed = trabajo real (no el pre-count del pool).

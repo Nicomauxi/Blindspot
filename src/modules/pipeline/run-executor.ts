@@ -188,12 +188,16 @@ async function runPhase(
       throw new Error("Missing config_snapshot");
     }
 
+    // FD-01: predicado de abort throttled (una lectura DB cada ~3s, cacheada) para que
+    // las fases largas (enrich/refresh de ~3200 leads) dejen de tomar trabajo a mitad.
+    const shouldStop = makeAbortPredicate(runId);
+
     const summary = phase === "refresh"
-      ? await executeRefreshPhase(configSnapshot.phases.refresh, isDryRun)
+      ? await executeRefreshPhase(configSnapshot.phases.refresh, isDryRun, shouldStop)
       : phase === "discovery"
       ? await executeDiscoveryPhase(configSnapshot.phases.discovery, isDryRun)
       : phase === "enrich"
-      ? await executeEnrichPhase(configSnapshot.phases.enrich, isDryRun)
+      ? await executeEnrichPhase(configSnapshot.phases.enrich, isDryRun, shouldStop)
       : await executeScorePhase(configSnapshot.phases.score, isDryRun);
 
     if (summary.note) {
@@ -307,6 +311,24 @@ async function isAbortRequested(runId: string): Promise<boolean> {
   }
 
   return (data as { abort_requested?: boolean } | null)?.abort_requested === true;
+}
+
+/**
+ * FD-01: predicado de abort para pasar a los pools de fase. Throttlea la lectura DB
+ * (una vez cada `minIntervalMs`) y, una vez detectado el abort, lo recuerda (sticky) para
+ * que el corte sea inmediato y barato en el resto del lote.
+ */
+function makeAbortPredicate(runId: string, minIntervalMs = 3000): () => Promise<boolean> {
+  let lastCheck = 0;
+  let aborted = false;
+  return async () => {
+    if (aborted) return true;
+    const now = Date.now();
+    if (now - lastCheck < minIntervalMs) return false;
+    lastCheck = now;
+    aborted = await isAbortRequested(runId);
+    return aborted;
+  };
 }
 
 export async function transitionToPending(

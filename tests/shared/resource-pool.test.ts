@@ -96,3 +96,37 @@ describe("runAdaptivePool", () => {
     expect(peakConcurrency).toBeGreaterThan(1);
   });
 });
+
+describe("runAdaptivePool — abort cooperativo (FD-01)", () => {
+  it("deja de tomar ítems cuando shouldStop pasa a true y retorna control", async () => {
+    const processed: number[] = [];
+    let done = 0;
+    const out = await runAdaptivePool(
+      Array.from({ length: 20 }, (_, i) => i),
+      async (item) => {
+        processed.push(item);
+        done += 1;
+        return item;
+      },
+      {
+        probe: () => HOLGADO,
+        maxConcurrency: 1,
+        backoffMs: 1,
+        shouldStop: () => done >= 3,
+      }
+    );
+    // Procesó algunos pero NO los 20; el resto quedó en null.
+    expect(processed.length).toBeGreaterThanOrEqual(1);
+    expect(processed.length).toBeLessThan(20);
+    expect(out.results.filter((r) => r === null).length).toBeGreaterThan(0);
+  });
+
+  it("procesa todo si shouldStop nunca dispara", async () => {
+    const out = await runAdaptivePool(
+      [1, 2, 3, 4, 5],
+      async (item) => item * 2,
+      { probe: () => HOLGADO, maxConcurrency: 2, backoffMs: 1, shouldStop: () => false }
+    );
+    expect(out.results).toEqual([2, 4, 6, 8, 10]);
+  });
+});

@@ -24,6 +24,10 @@ export interface AdaptivePoolOptions {
   maxConcurrency?: number; // default cores - 2 (mín 1)
   backoffMs?: number; // espera cuando no hay headroom y nada activo (default 1000)
   probe?: () => Headroom; // inyectable para tests
+  // FD-01: abort cooperativo. Se consulta una vez por iteración del loop (por lote): si
+  // devuelve true, el pool deja de tomar nuevos ítems, drena lo en vuelo y retorna control
+  // (los ítems no procesados quedan en null). Sin esto, un run de ~3200 leads era inabortable.
+  shouldStop?: () => boolean | Promise<boolean>;
 }
 
 export interface AdaptivePoolResult<R> {
@@ -67,6 +71,10 @@ export async function runAdaptivePool<T, R>(
   };
 
   while (next < items.length || active.size > 0) {
+    // FD-01: si pidieron abort, dejar de tomar nuevos ítems; se drena lo en vuelo y se sale.
+    if (next < items.length && opts.shouldStop && (await opts.shouldStop())) {
+      next = items.length;
+    }
     let slots = next < items.length ? launchable() : 0;
     while (slots > 0 && next < items.length) {
       const i = next++;

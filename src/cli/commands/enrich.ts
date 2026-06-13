@@ -76,6 +76,8 @@ interface RawEnrichArgs {
   withHeuristic: boolean | string;
   concurrency: string | number;
   all?: boolean | string;
+  // FD-01: abort cooperativo desde el scheduler (no pasa por el parse Zod, es un callback).
+  shouldStop?: () => boolean | Promise<boolean>;
 }
 
 interface EnrichExecutionOptions {
@@ -92,6 +94,8 @@ interface EnrichExecutionOptions {
   filterLimit?: number;
   // Al completar el enrich, re-score encadenado sobre los mismos leads (run dependiente).
   rescoreOnComplete?: boolean;
+  // FD-01: abort cooperativo — el pool deja de tomar leads cuando esto devuelve true.
+  shouldStop?: () => boolean | Promise<boolean>;
 }
 
 const FILTER_MODE_DEFAULT_LIMIT = 250;
@@ -390,7 +394,12 @@ async function executeEnrichmentRun(
             }
           }
       },
-      { maxConcurrency: effectiveConcurrency, minFreeRamGB: 5, minFreeCpuPct: 30 }
+      {
+        maxConcurrency: effectiveConcurrency,
+        minFreeRamGB: 5,
+        minFreeCpuPct: 30,
+        ...(options.shouldStop ? { shouldStop: options.shouldStop } : {}),
+      }
     );
 
     const duration_ms = Date.now() - startedAt;
@@ -567,6 +576,9 @@ export async function enrichCommand(rawArgs: RawEnrichArgs): Promise<EnrichComma
               withHeuristic: opts.withHeuristic,
               concurrency: opts.concurrency,
             };
+
+  // FD-01: el callback de abort no pasa por Zod; lo adjuntamos tras construir las opciones.
+  if (rawArgs.shouldStop) executionOptions.shouldStop = rawArgs.shouldStop;
 
   const enrichRun = await createEnrichmentRun(executionOptions);
   log.info({ runId: enrichRun.id }, "Enrichment run created");

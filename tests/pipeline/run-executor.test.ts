@@ -176,7 +176,8 @@ describe("executeRun", () => {
     expect(result.status).toBe("completed");
     expect(mockExecuteRefreshPhase).toHaveBeenCalledWith(
       makeRun().config_snapshot!.phases.refresh,
-      true
+      true,
+      expect.any(Function) // FD-01: predicado de abort
     );
     expect(mockExecuteDiscoveryPhase).toHaveBeenCalledWith(
       makeRun().config_snapshot!.phases.discovery,
@@ -184,7 +185,8 @@ describe("executeRun", () => {
     );
     expect(mockExecuteEnrichPhase).toHaveBeenCalledWith(
       makeRun().config_snapshot!.phases.enrich,
-      true
+      true,
+      expect.any(Function) // FD-01: predicado de abort
     );
     expect(mockExecuteScorePhase).toHaveBeenCalledWith(
       makeRun().config_snapshot!.phases.score,
