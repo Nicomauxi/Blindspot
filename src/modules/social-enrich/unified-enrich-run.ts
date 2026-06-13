@@ -8,7 +8,7 @@ import type { Lead, DuckDuckGoSocialSearch } from "../../shared/types.js";
 import { loadAllPassedLeads, loadLeadsByRunId, updateLeadSocialSearch, updateLeadWebsite } from "../../storage/leads.js";
 import { getSupabase } from "../../shared/supabase.js";
 import { serperConfigured, unifiedLeadLookup } from "./serper-provider.js";
-import { SerperBudget } from "./serper-budget.js";
+import { SerperBudget, type SerperBudgetState } from "./serper-budget.js";
 import { buildSocialFusion } from "./social-fusion.js";
 import { discoverSocialViaSearxng, makeSearxngDeps } from "./social-discover-searxng.js";
 import { isRealWebsiteUrl } from "../../shared/website.js";
@@ -47,6 +47,20 @@ export interface UnifiedEnrichOptions {
 
 // Candidato: lead del pool al que le falta website real (el hueco grande). Si ya tiene web
 // real, no gastamos query (el discovery social puro lo cubre el otro comando).
+/**
+ * FD-05: cuando Serper se queda sin `activeKey`, distinguir POR QUÉ. Si fue por tope de
+ * costo (`--max-queries`), NO enrutar el resto del pool (~90%) al motor lento SearXNG
+ * (lento, rate-limited por IP) — eso convierte un control de costo en bomba de latencia.
+ * Solo el agotamiento real de keys justifica el fallback.
+ */
+export function resolveExhaustedAction(
+  stoppedReason: SerperBudgetState["stoppedReason"],
+  useFallback: boolean
+): "fallback" | "no_match" {
+  if (useFallback && stoppedReason === "all_keys_exhausted") return "fallback";
+  return "no_match";
+}
+
 export function isUnifiedCandidate(lead: Lead): boolean {
   return lead.passed_filter === true && !hasRealWebsite(lead);
 }
@@ -114,9 +128,13 @@ export async function runUnifiedEnrich(opts: UnifiedEnrichOptions): Promise<Unif
 
   async function processLead(lead: Lead): Promise<void> {
     if (budget.activeKey() === null) {
-      // Serper sin créditos → motor lento (si está habilitado), en vez de saltear.
-      if (useFallback) await processLeadFallback(lead);
-      else stats.no_match += 1;
+      // FD-05: fallback al motor lento SOLO si las keys se agotaron de verdad; si paramos
+      // por tope --max-queries, diferir (no_match) y NO martillar SearXNG con el resto.
+      if (resolveExhaustedAction(budget.stoppedReason(), useFallback) === "fallback") {
+        await processLeadFallback(lead);
+      } else {
+        stats.no_match += 1;
+      }
       return;
     }
     const r = await unifiedLeadLookup(lead, serperOpts);
