@@ -28,7 +28,7 @@ CREATE OR REPLACE VIEW lead_dashboard AS
         END, (l.digital_footprint -> 'contact_emails'::text) ->> 0) AS contact_email,
     COALESCE((l.canonical_fields -> 'phone'::text) ->> 'value'::text, l.phone) AS phone,
     l.whatsapp,
-    COALESCE((l.canonical_fields -> 'website'::text) ->> 'value'::text, l.website) AS website,
+    wv.w AS website,
     l.rating,
     l.review_count,
     l.tags,
@@ -62,38 +62,21 @@ CREATE OR REPLACE VIEW lead_dashboard AS
     l.search_vector,
     l.gps,
     (l.score_breakdown ->> 'primary_offer'::text) IS NOT NULL AND (l.score_breakdown ->> 'primary_offer'::text) <> 'none'::text AS sellable,
-    -- FS-14: clasificación de website. 'directory' = listing de terceros (ni web propia ni red social).
-        CASE
-            WHEN COALESCE((l.canonical_fields -> 'website'::text) ->> 'value'::text, l.website) IS NULL OR COALESCE((l.canonical_fields -> 'website'::text) ->> 'value'::text, l.website) = ''::text THEN 'none'::text
-            WHEN COALESCE((l.canonical_fields -> 'website'::text) ->> 'value'::text, l.website) ~* '(facebook|instagram|linktr\.ee|beacons\.ai|wa\.me|whatsapp|tiktok|twitter|x\.com|linktree)'::text THEN 'social'::text
-            WHEN COALESCE((l.canonical_fields -> 'website'::text) ->> 'value'::text, l.website) ~* '(tripadvisor|yelp|booking\.com|foursquare|google\.|goo\.gl|waze|maptons|saliracomer|alacarta|guiaost|mercadolibre|paginasamarillas|guialocal|guiaclarin|cylex|opentable|booksy|pedidosya|rappi|ubereats|justeat|glovo|wikipedia|maps\.app|gps\.|gpsmycity|restaurants-us|restaurantes-uy|restaurantguru|youtube|youtu\.be|calengoo|frontdeskmaster)'::text THEN 'directory'::text
-            ELSE 'real'::text
-        END AS website_kind,
+    -- FS-14: clasificación de website (computada UNA vez en el LATERAL `wk`; ver más abajo).
+    wk.kind AS website_kind,
     -- FS-14: oportunidad sin web propia = tracción (reviews≥50) pero website_kind != 'real'.
-    COALESCE(l.review_count, 0) >= 50 AND
-        (COALESCE((l.canonical_fields -> 'website'::text) ->> 'value'::text, l.website) IS NULL
-         OR COALESCE((l.canonical_fields -> 'website'::text) ->> 'value'::text, l.website) = ''::text
-         OR COALESCE((l.canonical_fields -> 'website'::text) ->> 'value'::text, l.website) ~* '(facebook|instagram|linktr\.ee|beacons\.ai|wa\.me|whatsapp|tiktok|twitter|x\.com|linktree)'::text
-         OR COALESCE((l.canonical_fields -> 'website'::text) ->> 'value'::text, l.website) ~* '(tripadvisor|yelp|booking\.com|foursquare|google\.|goo\.gl|waze|maptons|saliracomer|alacarta|guiaost|mercadolibre|paginasamarillas|guialocal|guiaclarin|cylex|opentable|booksy|pedidosya|rappi|ubereats|justeat|glovo|wikipedia|maps\.app|gps\.|gpsmycity|restaurants-us|restaurantes-uy|restaurantguru|youtube|youtu\.be|calengoo|frontdeskmaster)'::text
-        ) AS opportunity_no_web,
+    COALESCE(l.review_count, 0) >= 50 AND wk.kind <> 'real'::text AS opportunity_no_web,
     LEAST(100, GREATEST(0, LEAST(60, COALESCE(l.review_count, 0) / 3) +
         CASE
             WHEN COALESCE(l.rating, 0::numeric) >= 4.3 THEN 15
             WHEN COALESCE(l.rating, 0::numeric) >= 4.0 THEN 8
             ELSE 0
         END +
-        CASE
-            WHEN COALESCE((l.canonical_fields -> 'website'::text) ->> 'value'::text, l.website) IS NULL
-              OR COALESCE((l.canonical_fields -> 'website'::text) ->> 'value'::text, l.website) = ''::text
-              OR COALESCE((l.canonical_fields -> 'website'::text) ->> 'value'::text, l.website) ~* '(facebook|instagram|linktr\.ee|beacons\.ai|wa\.me|whatsapp|tiktok|twitter|x\.com|linktree)'::text
-              OR COALESCE((l.canonical_fields -> 'website'::text) ->> 'value'::text, l.website) ~* '(tripadvisor|yelp|booking\.com|foursquare|google\.|goo\.gl|waze|maptons|saliracomer|alacarta|guiaost|mercadolibre|paginasamarillas|guialocal|guiaclarin|cylex|opentable|booksy|pedidosya|rappi|ubereats|justeat|glovo|wikipedia|maps\.app|gps\.|gpsmycity|restaurants-us|restaurantes-uy|restaurantguru|youtube|youtu\.be|calengoo|frontdeskmaster)'::text
-            THEN 25
-            ELSE 0
-        END))::smallint AS demand_gap_score,
+        CASE WHEN wk.kind <> 'real'::text THEN 25 ELSE 0 END))::smallint AS demand_gap_score,
         CASE
             WHEN COALESCE(l.review_count, 0) <= 0 THEN 'unknown'::text
             ELSE ( WITH dv AS (
-                     SELECT l.review_count * 2 *
+                     SELECT l.review_count::bigint * 2 *
                             CASE l.niche
                                 WHEN 'restaurant'::text THEN 350
                                 WHEN 'cafe'::text THEN 250
@@ -156,7 +139,8 @@ CREATE OR REPLACE VIEW lead_dashboard AS
     -- FS-07: ingreso mensual estimado crudo (review_count × 2 órdenes × ticket de nicho), para rango en UI.
     CASE
         WHEN COALESCE(l.review_count, 0) <= 0 THEN NULL::integer
-        ELSE (l.review_count * 2 *
+        -- bigint intermedio + clamp para que un review_count patológico no desborde el integer.
+        ELSE LEAST(2147483647::bigint, l.review_count::bigint * 2 *
             CASE l.niche
                 WHEN 'restaurant'::text THEN 350
                 WHEN 'cafe'::text THEN 250
@@ -177,4 +161,13 @@ CREATE OR REPLACE VIEW lead_dashboard AS
           WHERE lead_buyer_scores.lead_id = l.id
           ORDER BY lead_buyer_scores.score DESC
          LIMIT 1) lbs_top ON true
+     -- Website resuelto y clasificado UNA sola vez (evita triplicar la denylist NON_OWN_SITE_RE).
+     LEFT JOIN LATERAL ( SELECT COALESCE((l.canonical_fields -> 'website'::text) ->> 'value'::text, l.website) AS w ) wv ON true
+     LEFT JOIN LATERAL ( SELECT
+            CASE
+                WHEN wv.w IS NULL OR wv.w = ''::text THEN 'none'::text
+                WHEN wv.w ~* '(facebook|instagram|linktr\.ee|beacons\.ai|wa\.me|whatsapp|tiktok|twitter|x\.com|linktree)'::text THEN 'social'::text
+                WHEN wv.w ~* '(tripadvisor|yelp|booking\.com|foursquare|google\.|goo\.gl|waze|maptons|saliracomer|alacarta|guiaost|mercadolibre|paginasamarillas|guialocal|guiaclarin|cylex|opentable|booksy|pedidosya|rappi|ubereats|justeat|glovo|wikipedia|maps\.app|gps\.|gpsmycity|restaurants-us|restaurantes-uy|restaurantguru|youtube|youtu\.be|calengoo|frontdeskmaster)'::text THEN 'directory'::text
+                ELSE 'real'::text
+            END AS kind ) wk ON true
   WHERE l.passed_filter = true;

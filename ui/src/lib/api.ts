@@ -1052,7 +1052,7 @@ export type LeadDashboard = {
   sources_count_real?: number | null;
   best_contact_email?: string | null;
   sellable?: boolean | null;
-  website_kind?: "none" | "social" | "directory" | "real" | string | null;
+  website_kind?: "none" | "social" | "directory" | "real" | null;
   opportunity_no_web?: boolean | null;
   demand_gap_score?: number | null;
   deal_value_tier?: "high" | "medium" | "low" | "unknown" | string | null;

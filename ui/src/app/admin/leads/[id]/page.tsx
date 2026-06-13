@@ -507,7 +507,7 @@ export default function LeadDetailPage() {
                 <span className={cn("rounded-full px-2.5 py-1 font-semibold", lead.contact_tier ? TIER_COLORS[lead.contact_tier] ?? "bg-slate-700 text-white" : "bg-slate-800 text-slate-200")}>Tier {lead.contact_tier ?? "—"}</span>
                 <span className="rounded-full bg-white/10 px-2.5 py-1">{lead.state}</span>
                 {lead.business_status ? <span className="rounded-full bg-white/10 px-2.5 py-1">{lead.business_status}</span> : null}
-                {lead.contact_ready != null ? <span className="rounded-full bg-white/10 px-2.5 py-1">{lead.contact_ready ? "Contacto listo" : "Validar contacto"}</span> : null}
+                <span className="rounded-full bg-white/10 px-2.5 py-1">{contactReadyCopy(lead.contact_ready).pill}</span>
               </div>
               {lead.tags.length > 0 ? (
                 <div className="mt-3 flex flex-wrap gap-2">
