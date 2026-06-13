@@ -14,12 +14,24 @@
 //   - Nunca propaga si hay >1 dominio real distinto (ambigüedad) o si el único dominio
 //     aparece en 1 sola ficha (puede ser un dato suelto, no la web de la empresa).
 
+import { buildLocationKey, deriveLocationLabelFromAddress } from "./location.js";
+
 const SOCIAL_RE = /(facebook|instagram|linktr\.ee|beacons\.ai|wa\.me|whatsapp|tiktok|twitter|x\.com|linktree)/i;
 
 export interface PropagationLead {
   id: string;
   name: string;
   website: string | null;
+  /** BL-01: address is used to derive a city/department key so the dominant
+   * domain never propagates to an independent homonym in another city. */
+  address?: string | null;
+}
+
+/** City/department key from the lead address. Leads without a parseable address
+ * share a single "unknown" bucket (preserves chains lacking address; same-name
+ * homonyms WITH addresses in different cities get distinct keys and never co-group). */
+function geoKey(lead: PropagationLead): string {
+  return buildLocationKey(deriveLocationLabelFromAddress(lead.address));
 }
 
 export interface WebsitePropagation {
@@ -47,8 +59,10 @@ export function extractRealDomain(website: string | null | undefined): string | 
 export function computeChainWebsitePropagations(leads: PropagationLead[]): WebsitePropagation[] {
   const groups = new Map<string, PropagationLead[]>();
   for (const lead of leads) {
-    const key = normalizeNameKey(lead.name);
-    if (key.length <= 5) continue;
+    const nameKey = normalizeNameKey(lead.name);
+    if (nameKey.length <= 5) continue;
+    // BL-01: include city/department so a chain only propagates within a city.
+    const key = `${nameKey}|${geoKey(lead)}`;
     const group = groups.get(key) ?? [];
     group.push(lead);
     groups.set(key, group);

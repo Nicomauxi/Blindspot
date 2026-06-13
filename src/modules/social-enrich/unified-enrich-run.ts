@@ -11,12 +11,10 @@ import { serperConfigured, unifiedLeadLookup } from "./serper-provider.js";
 import { SerperBudget } from "./serper-budget.js";
 import { buildSocialFusion } from "./social-fusion.js";
 import { discoverSocialViaSearxng, makeSearxngDeps } from "./social-discover-searxng.js";
-
-const SOCIAL_HOST_RE = /(facebook|instagram|linktr|beacons|wa\.me|whatsapp|tiktok|twitter|x\.com)/i;
+import { isRealWebsiteUrl } from "../../shared/website.js";
 
 function hasRealWebsite(lead: Lead): boolean {
-  const w = lead.website;
-  return !!w && w.trim().length > 0 && !SOCIAL_HOST_RE.test(w);
+  return isRealWebsiteUrl(lead.website);
 }
 
 export interface UnifiedEnrichStats {

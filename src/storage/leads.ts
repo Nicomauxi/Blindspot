@@ -321,7 +321,7 @@ export async function tagDuplicates(leads: Lead[]): Promise<void> {
 // scoring --all, así el caso "Tienda Inglesa" (ficha sin web del mismo negocio) no recurre.
 export async function propagateChainWebsites(leads: Lead[]): Promise<number> {
   const propagations = computeChainWebsitePropagations(
-    leads.map((l) => ({ id: l.id, name: l.name, website: l.website }))
+    leads.map((l) => ({ id: l.id, name: l.name, website: l.website, address: l.address }))
   );
   if (propagations.length === 0) return 0;
 

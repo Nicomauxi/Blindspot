@@ -46,6 +46,43 @@ describe("createEnrichmentDiff", () => {
     });
   });
 
+  it("does NOT emit has_website when only a social URL was attempted and fetch failed (FS-01)", () => {
+    const previous: DigitalFootprint = {
+      skipped: true,
+      reason: "no-website",
+      fetched_at: "2026-05-01T00:00:00Z",
+      contact_emails: [],
+    };
+    // Fetch was attempted against a social URL but produced no real final_url.
+    const next: DigitalFootprint = {
+      fetched_at: "2026-05-18T16:00:00Z",
+      attempted_url: "https://instagram.com/negocio",
+      contact_emails: [],
+    };
+
+    expect(createEnrichmentDiff("lead-1", previous, next)).toBeNull();
+  });
+
+  it("does NOT count a social heuristic-selected URL as a website (FS-01)", () => {
+    const previous: DigitalFootprint = {
+      skipped: true,
+      reason: "no-website",
+      fetched_at: "2026-05-01T00:00:00Z",
+      contact_emails: [],
+    };
+    const next: DigitalFootprint = {
+      skipped: true,
+      reason: "social-only",
+      fetched_at: "2026-05-18T16:00:00Z",
+      contact_emails: [],
+      heuristic_discovery: {
+        selected: { website: { url: "https://facebook.com/negocio", score: 0.5 } },
+      },
+    } as unknown as DigitalFootprint;
+
+    expect(createEnrichmentDiff("lead-1", previous, next)).toBeNull();
+  });
+
   it("returns null when no critical enrichment field changes", () => {
     const previous: DigitalFootprint = {
       fetched_at: "2026-05-01T00:00:00Z",

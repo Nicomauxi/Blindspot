@@ -13,6 +13,7 @@ import { buildSocialFusion, extractUsernameFromUrl } from "./social-fusion.js";
 import { defaultIgLookupChain, type IgLookup } from "./ig-lookup-chain.js";
 import { serperConfigured, discoverEnrichViaSerper } from "./serper-provider.js";
 import { SerperBudget } from "./serper-budget.js";
+import { isRealWebsiteUrl } from "../../shared/website.js";
 
 export interface SocialDiscoverStats {
   loaded: number;
@@ -74,8 +75,7 @@ function hasSelectedInstagram(lead: Lead): boolean {
 }
 
 function hasRealWebsite(lead: Lead): boolean {
-  const w = lead.website;
-  return !!w && w.trim().length > 0 && !/(facebook|instagram|linktr\.ee|beacons\.ai|wa\.me|whatsapp|tiktok|twitter|x\.com)/i.test(w);
+  return isRealWebsiteUrl(lead.website);
 }
 
 function alreadyDiscovered(lead: Lead): boolean {
@@ -166,8 +166,10 @@ export async function runSocialDiscovery(opts: SocialDiscoverOptions): Promise<S
     const tags = new Set<string>(["ig-discovered"]);
 
     if (metrics && igUsername) {
+      // FS-01: an Instagram-as-website must NOT count as "has web", or the
+      // alta_audiencia_sin_web signal never fires for the most sellable leads.
       const hasWebsite =
-        Boolean(lead.website) || Boolean(lead.digital_footprint?.heuristic_discovery?.selected.website?.url);
+        hasRealWebsite(lead) || isRealWebsiteUrl(lead.digital_footprint?.heuristic_discovery?.selected.website?.url);
       const fusion = await buildSocialFusion(lead, igUrl, metrics, { ranAt: nowIso, nowIso, hasWebsite, allowLlm: false });
       for (const t of fusion.tags) tags.add(t);
       stats.found_metrics += 1;

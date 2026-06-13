@@ -58,6 +58,27 @@ describe("computeChainWebsitePropagations", () => {
     expect(computeChainWebsitePropagations(leads)).toEqual([]);
   });
 
+  it("NO propaga a un homónimo en otra ciudad (BL-01)", () => {
+    const leads: PropagationLead[] = [
+      { id: "1", name: "Panaderia La Espiga", website: "https://laespiga-mvd.com.uy", address: "Av 18 de Julio 1234, Montevideo, Uruguay" },
+      { id: "2", name: "Panaderia La Espiga", website: "https://laespiga-mvd.com.uy", address: "Bvar Artigas 500, Montevideo, Uruguay" },
+      // Negocio independiente homónimo en Maldonado: NO debe recibir el dominio ajeno.
+      { id: "3", name: "Panaderia La Espiga", website: null, address: "Calle 20 esq 30, Maldonado, Uruguay" },
+    ];
+    const out = computeChainWebsitePropagations(leads);
+    expect(out.map((p) => p.id)).toEqual([]);
+  });
+
+  it("propaga dentro de la misma ciudad (cadena real multi-sucursal, BL-01)", () => {
+    const leads: PropagationLead[] = [
+      { id: "1", name: "La Pasiva", website: "https://lapasiva.com.uy", address: "Av Italia 100, Montevideo, Uruguay" },
+      { id: "2", name: "La Pasiva", website: "https://lapasiva.com.uy", address: "Rivera 2000, Montevideo, Uruguay" },
+      { id: "3", name: "La Pasiva", website: null, address: "8 de Octubre 500, Montevideo, Uruguay" },
+    ];
+    const out = computeChainWebsitePropagations(leads);
+    expect(out.map((p) => p.id)).toEqual(["3"]);
+  });
+
   it("ignora nombres genéricos cortos (<=5 chars normalizados)", () => {
     const leads: PropagationLead[] = [
       { id: "1", name: "Bar", website: "https://bar.com" },
