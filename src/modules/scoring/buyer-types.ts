@@ -5,7 +5,7 @@ import type { BuyerTypeConfig, BuyerTypeScore, CommissionEstimate } from "./type
 
 const PEDIDOSYA_COMMISSION_RATE = 0.30;
 
-const NICHE_AVG_TICKET_UYU: Record<string, number> = {
+export const NICHE_AVG_TICKET_UYU: Record<string, number> = {
   restaurant: 350,
   cafe: 250,
   bakery: 200,
@@ -16,7 +16,7 @@ const NICHE_AVG_TICKET_UYU: Record<string, number> = {
   burger: 320,
 };
 
-const DEFAULT_AVG_TICKET_UYU = 300;
+export const DEFAULT_AVG_TICKET_UYU = 300;
 
 function isPedidosYaLead(lead: Lead): boolean {
   if (lead.source === "pedidosya") return true;

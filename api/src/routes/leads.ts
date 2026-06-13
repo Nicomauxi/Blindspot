@@ -1079,6 +1079,8 @@ function normalizeLeadRow(row: JsonRecord): JsonRecord {
     // C1/B1: segmento "demanda sin web" + score demand-gap.
     opportunity_no_web: asBooleanOrNull(row["opportunity_no_web"]),
     demand_gap_score: asNullableNumber(row["demand_gap_score"]),
+    // Fase 0b: tamaño del negocio = valor de deal (eje ortogonal al score).
+    deal_value_tier: asNullableString(row["deal_value_tier"]),
     // C4: 2º offer + confianza (gap top1-top2) para el 61% del pool donde el offer es un volado.
     ...computeSecondaryOffer(
       isRecord(row["score_breakdown"]) && isRecord(row["score_breakdown"]["sub_scores"])
