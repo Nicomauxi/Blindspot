@@ -94,8 +94,21 @@ describe("parseOperationalSystems", () => {
     `;
     const result = parseOperationalSystems(html);
     expect(result.class_booking_platforms).toEqual(["mindbody.io"]);
-    expect(result.catalog_keywords).toEqual(expect.arrayContaining(["catálogo", "0km", "usados", "kilometraje"]));
+    // FS-10: solo la palabra "catálogo" cuenta; stock/0km/usados/kilometraje NO.
+    expect(result.catalog_keywords).toEqual(["catálogo"]);
     expect(result.contact_form).toBe(true);
+  });
+
+  it("FS-10: términos genéricos (stock/0km/usados/kilometraje) SIN catálogo navegable NO cuentan", () => {
+    const html = `<html><body>
+      <p>Tenemos amplio stock de usados 0km con kilometraje certificado.</p>
+    </body></html>`;
+    expect(parseOperationalSystems(html).catalog_keywords).toEqual([]);
+  });
+
+  it("FS-10: una ruta /catalogo cuenta como catálogo navegable real", () => {
+    const html = `<html><body><a href="/catalogo/autos?pagina=2">Ver vehículos</a></body></html>`;
+    expect(parseOperationalSystems(html).catalog_keywords.length).toBeGreaterThan(0);
   });
 
   it("returns empty signals for plain HTML", () => {

@@ -28,7 +28,7 @@ rules:
   car_dealer:
     - name: online_catalog_missing
       weight: 20
-      keywords: [catálogo, catalogo, stock, "0km", usados, kilometraje]
+      keywords: [catálogo, catalogo]  # FS-10: solo señal fuerte; genericos removidos
     - name: contact_form_missing
       weight: 15
       html_patterns: ["<form", "contact-form", cotizar]

@@ -14,7 +14,10 @@ const DELIVERY_PLATFORMS = ["pedidosya.com", "rappi.com", "ifood.com", "ifood.co
 const CLASS_BOOKING_PLATFORMS = ["mindbody.io", "wodify.com", "classpass.com", "booksy.com"];
 const APP_STORE_PLATFORMS = ["play.google.com/store/apps", "apps.apple.com"];
 const MENU_KEYWORDS = ["pedidosya", "ifood", "menupiu", "ver carta", "ver menu", "escanear qr"];
-const CATALOG_KEYWORDS = ["catálogo", "catalogo", "stock", "0km", "usados", "kilometraje"];
+// FS-10: solo señales FUERTES de catálogo navegable. "stock/0km/usados/kilometraje" salen:
+// son genéricos de cualquier página de concesionaria y daban falso "ya tiene catálogo",
+// borrando el gap (peso 20) + el sub-score (+15) en el ICP central (car_dealer).
+const CATALOG_KEYWORDS = ["catálogo", "catalogo"];
 const CHAT_WIDGET_PATTERNS = [
   "tawk.to",
   "intercom.io",
@@ -118,7 +121,14 @@ export function parseOperationalSystems(
     const chatWidgetPatterns = ctx?.chatWidgetPatterns ?? CHAT_WIDGET_PATTERNS;
 
     const menu_keywords = menuKeywords.filter((keyword) => textLower.includes(keyword));
-    const catalog_keywords = catalogKeywords.filter((keyword) => textLower.includes(keyword));
+    // FS-10: además de la palabra "catálogo", una ruta /catalogo es evidencia de catálogo navegable.
+    const hasCatalogRoute = hrefs.some((href) => (href.split("?")[0] ?? href).includes("catalogo"));
+    const catalog_keywords = [
+      ...new Set([
+        ...catalogKeywords.filter((keyword) => textLower.includes(keyword)),
+        ...(hasCatalogRoute ? ["catalogo"] : []),
+      ]),
+    ];
     const contact_form =
       $("form").length > 0 ||
       htmlLower.includes("contact-form") ||
