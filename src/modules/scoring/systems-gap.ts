@@ -25,12 +25,24 @@ function hasGenericBookingSignal(ops: OperationalSystemsSignal): boolean {
   );
 }
 
-function hasEvidence(ruleName: string, ops: OperationalSystemsSignal): boolean {
+const WHATSAPP_PRESENT_TAGS = ["whatsapp-confirmed", "whatsapp-derived"];
+
+function hasWhatsappEvidence(ops: OperationalSystemsSignal, lead: Lead): boolean {
+  // FS-08: el gap es "le falta WhatsApp Business", así que la evidencia debe ser del canal
+  // WhatsApp (wa.me/link, número, tags), NO un chat widget SaaS (Tawk/Intercom) — otro canal.
+  return (
+    ops.whatsapp_web_link === true ||
+    (typeof lead.whatsapp === "string" && lead.whatsapp.trim().length > 0) ||
+    lead.tags.some((t) => WHATSAPP_PRESENT_TAGS.includes(t))
+  );
+}
+
+function hasEvidence(ruleName: string, ops: OperationalSystemsSignal, lead: Lead): boolean {
   switch (ruleName) {
     case "booking_system_missing":
       return hasAny(ops.booking_platforms);
     case "whatsapp_business_missing":
-      return ops.chat_widget;
+      return hasWhatsappEvidence(ops, lead);
     case "online_menu_missing":
       return hasAny(ops.menu_links) || hasAny(ops.menu_keywords);
     case "delivery_platform_missing":
@@ -81,7 +93,7 @@ export function scoreSystemsGap(lead: Lead): { total: number; breakdown: Evaluat
     if (rule.requires_none_of?.some((name) => matchedNames.has(name))) {
       continue;
     }
-    if (hasEvidence(rule.name, ops)) {
+    if (hasEvidence(rule.name, ops, lead)) {
       continue;
     }
 
