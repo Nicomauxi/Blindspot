@@ -51,6 +51,13 @@ function adjustOfferScore(lead: Lead, offer: Exclude<PrimaryOffer, "none">, scor
   return Math.max(0, Math.round(next));
 }
 
+// F1: una audiencia social alta SIN web es la señal más clara de que el play es construir
+// web (capturar la demanda que ya tienen) y/o marketing. Estos leads suelen ser digital-dark
+// con sub-scores bajos, así que el boost los lleva a la oferta correcta. Conservador: no pisa
+// un gap operativo dominante (software con sub-score muy alto).
+const SOCIAL_OFFER_BOOST_WEB = 15;
+const SOCIAL_OFFER_BOOST_MARKETING = 8;
+
 function buildAdjustedSubScores(context: LeadScoringContext, scenario: ScoreCalibrationScenario): SubScores {
   const source = context.sub_scores;
   const adjusted: SubScores = {
@@ -62,6 +69,11 @@ function buildAdjustedSubScores(context: LeadScoringContext, scenario: ScoreCali
     contacto_directo: adjustOfferScore(context.lead, "contacto_directo", source.contacto_directo, scenario),
     primary_offer: "none",
   };
+
+  if (computeSocialSignal(context.lead).high_audience_no_web) {
+    adjusted.web_nuevo += SOCIAL_OFFER_BOOST_WEB;
+    adjusted.marketing += SOCIAL_OFFER_BOOST_MARKETING;
+  }
 
   const ranked: Array<[Exclude<PrimaryOffer, "none">, number]> = [
     ["web_nuevo", adjusted.web_nuevo],

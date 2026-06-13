@@ -1,5 +1,6 @@
 import type { Lead } from "../../shared/types.js";
 import type { UrgencySignal } from "./types.js";
+import { computeSocialSignal } from "./social-signal.js";
 
 const OUTDATED_YEAR_THRESHOLD = 2020;
 const TOURIST_NICHES = new Set(["restaurant", "hospedaje", "accommodation"]);
@@ -39,6 +40,13 @@ export function computeUrgencyProfile(lead: Lead): UrgencyProfile {
     lead.tags.includes("domain-old-stale") ||
     lead.tags.includes("not-responsive")
   ) {
+    business = "medium";
+  }
+
+  // F1: un negocio con presencia social ACTIVA está operando y es alcanzable ahora →
+  // buen momento para contactar. Lifta a 'medium' (no pisa un 'high' ya detectado). Ataca
+  // la degeneración del urgency_signal (90% 'low') con dato medido, no heurística de zona.
+  if (business === "low" && computeSocialSignal(lead).active) {
     business = "medium";
   }
 
