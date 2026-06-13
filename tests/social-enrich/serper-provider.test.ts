@@ -72,7 +72,7 @@ describe("discoverEnrichViaSerper (1 query → URL + métricas)", () => {
     expect(res.metrics?.recent_media[0]?.timestamp).toBe("2026-06-01T03:00:00.000Z");
   });
 
-  it("post VIEJO → descarta timestamp (evita falso 'abandoned'), conserva engagement", async () => {
+  it("post VIEJO sin followers → metrics null (solo URL, evita falso 'abandoned')", async () => {
     const old = "30 likes, 4 comments - lapasiva.mvd on January 1, 2024: \"viejo\"";
     const res = await discoverEnrichViaSerper(
       { name: "La Pasiva", address: "Montevideo" },
@@ -81,8 +81,21 @@ describe("discoverEnrichViaSerper (1 query → URL + métricas)", () => {
         nowMs: Date.parse("2026-06-13T00:00:00Z"),
       }
     );
-    expect(res.metrics?.recent_media[0]?.timestamp).toBeNull();
-    expect(res.metrics?.recent_media[0]?.like_count).toBe(30); // engagement se conserva
+    expect(res.instagram.best_url).toBe("https://www.instagram.com/lapasiva.mvd/"); // URL sí
+    expect(res.metrics).toBeNull(); // pero sin métricas usables → no falso abandoned
+  });
+
+  it("post viejo PERO con followers → conserva followers, sin liveness vieja", async () => {
+    const old = "15K followers · 700 following · 300 posts · @lapasiva.mvd · 30 likes - lapasiva.mvd on January 1, 2024: x";
+    const res = await discoverEnrichViaSerper(
+      { name: "La Pasiva", address: "Montevideo" },
+      {
+        fetchImpl: mockFetch({ organic: [{ link: "https://www.instagram.com/lapasiva.mvd/", title: "La Pasiva (@lapasiva.mvd)", snippet: old }] }),
+        nowMs: Date.parse("2026-06-13T00:00:00Z"),
+      }
+    );
+    expect(res.metrics?.followers_count).toBe(15000);
+    expect(res.metrics?.recent_media).toEqual([]); // liveness vieja descartada
   });
 
   it("perfil sin snippet de followers → metrics null pero URL presente", async () => {

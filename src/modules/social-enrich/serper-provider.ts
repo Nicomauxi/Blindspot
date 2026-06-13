@@ -84,8 +84,16 @@ function sanitizeStaleLiveness(profile: SocialProfileData, nowMs: number): Socia
     .filter((t) => !Number.isNaN(t))
     .sort((a, b) => b - a)[0];
   if (newest != null && newest >= cutoff) return profile; // post reciente → liveness confiable
-  // Solo posts viejos (o ninguno): conservar engagement pero sin timestamp (evita falso abandoned).
-  return { ...profile, recent_media: profile.recent_media.map((m) => ({ ...m, timestamp: null })) };
+  // Solo posts viejos (o ninguno): DESCARTAR recent_media por completo. Mantenerla (aun sin
+  // timestamp) haría que buildSocialFusion vea "hay posts sin fecha reciente" → falso
+  // 'abandoned'. Sin recent_media → liveness 'unknown' (honesto: no vemos el último post).
+  return { ...profile, recent_media: [] };
+}
+
+// ¿El perfil tiene ALGO útil tras sanear? (followers reales o actividad reciente). Si no,
+// es solo una URL → no vale como "métricas".
+function profileHasUsableMetrics(profile: SocialProfileData): boolean {
+  return profile.followers_count != null || profile.recent_media.length > 0;
 }
 
 // Descubre el perfil IG + extrae métricas de Serper.
@@ -112,7 +120,10 @@ export async function discoverEnrichViaSerper(
     metrics = parseInstagramProfileRich(raw2.map((r) => r.content ?? "").filter(Boolean), igUsername);
   }
 
-  if (metrics) metrics = sanitizeStaleLiveness(metrics, opts.nowMs ?? Date.now());
+  if (metrics) {
+    metrics = sanitizeStaleLiveness(metrics, opts.nowMs ?? Date.now());
+    if (!profileHasUsableMetrics(metrics)) metrics = null; // solo URL → no cuenta como métricas
+  }
 
   return { instagram, metrics, igUsername };
 }
