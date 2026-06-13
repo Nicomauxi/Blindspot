@@ -405,6 +405,106 @@ function formatCommercialScores(lead: LeadDashboard) {
   return "MKT " + summary.marketing_score + " · SW " + summary.software_score;
 }
 
+// === Cluster C — "Contactos y Redes": señales que lee un vendedor de un vistazo. ===
+const GENERIC_EMAIL_RE = /^(info|ventas|contacto|contactenos|admin|hola|ayuda|soporte|support|sales|reservas|comercial|administracion|gerencia)/i;
+
+function formatUyuCompact(value: number): string {
+  if (value >= 1_000_000) return "$" + (value / 1_000_000).toFixed(1).replace(/\.0$/, "") + "M";
+  if (value >= 1_000) return "$" + Math.round(value / 1_000) + "k";
+  return "$" + value;
+}
+
+type SignalBadge = { label: string; className: string; title?: string };
+
+// FS-02/FS-19: perfil social real (con métricas) vs candidato de discovery (solo tag).
+function socialBadge(lead: LeadDashboard): SignalBadge | null {
+  if (lead.has_social) {
+    const platform = (lead.social_platform ?? "instagram").toUpperCase();
+    const parts = [platform];
+    if (typeof lead.social_followers === "number") parts.push(lead.social_followers.toLocaleString("es-UY") + " seg.");
+    if (lead.social_audience_tier) parts.push(lead.social_audience_tier);
+    return { label: parts.join(" · "), className: "border-emerald-200 bg-emerald-50 text-emerald-700", title: "Perfil social verificado con métricas" };
+  }
+  if (lead.has_social_candidate) {
+    return { label: "IG candidato (sin métricas)", className: "border-slate-200 bg-slate-50 text-slate-400", title: "Descubierto por tag, perfil aún sin resolver" };
+  }
+  return null;
+}
+
+// FS-13: email recomendado — directo (personal) vs genérico (info@/ventas@).
+function emailBadge(lead: LeadDashboard): SignalBadge | null {
+  const email = lead.best_contact_email;
+  if (!email) return null;
+  const isGeneric = GENERIC_EMAIL_RE.test(email);
+  return isGeneric
+    ? { label: "Email genérico", className: "border-amber-200 bg-amber-50 text-amber-700", title: email }
+    : { label: "Email directo", className: "border-emerald-200 bg-emerald-50 text-emerald-700", title: email };
+}
+
+// FS-14: web propia vs solo directorio/redes vs sin web (oportunidad).
+function websiteBadge(lead: LeadDashboard): SignalBadge {
+  switch (lead.website_kind) {
+    case "real":
+      return { label: "Web propia", className: "border-slate-200 bg-slate-50 text-slate-600", title: lead.website ?? undefined };
+    case "directory":
+      return { label: "Solo directorio", className: "border-amber-200 bg-amber-50 text-amber-700", title: "Vive en un listing de terceros (booking/pedidosya/…), sin web propia" };
+    case "social":
+      return { label: "Solo redes", className: "border-amber-200 bg-amber-50 text-amber-700", title: "Usa una red social como sitio web" };
+    default:
+      return { label: "Sin web", className: "border-rose-200 bg-rose-50 text-rose-700", title: "Sin presencia web propia (oportunidad)" };
+  }
+}
+
+// FS-07: tamaño del negocio (eje ortogonal al score).
+function dealValueBadge(lead: LeadDashboard): SignalBadge | null {
+  const tier = lead.deal_value_tier;
+  if (!tier || tier === "unknown") return null;
+  const monthly = typeof lead.deal_value_monthly_uyu === "number" ? " · ~" + formatUyuCompact(lead.deal_value_monthly_uyu) + "/mes" : "";
+  const tierLabel = tier === "high" ? "Deal alto" : tier === "medium" ? "Deal medio" : "Deal chico";
+  const className = tier === "high"
+    ? "border-violet-200 bg-violet-50 text-violet-700"
+    : tier === "medium"
+      ? "border-sky-200 bg-sky-50 text-sky-700"
+      : "border-slate-200 bg-slate-50 text-slate-500";
+  return { label: tierLabel + monthly, className, title: "Tamaño estimado del negocio (review_count × ticket de nicho)" };
+}
+
+function ContactsAndNetworksStrip({ lead }: { lead: LeadDashboard }) {
+  const badges: SignalBadge[] = [];
+  const social = socialBadge(lead);
+  if (social) badges.push(social);
+  const email = emailBadge(lead);
+  if (email) badges.push(email);
+  badges.push(websiteBadge(lead));
+  if (lead.opportunity_no_web) badges.push({ label: "Demanda sin web", className: "border-rose-200 bg-rose-50 text-rose-700", title: "Tracción (reviews) sin sitio propio: caliente" });
+  const realSources = lead.sources_count_real ?? lead.sources_count;
+  if (typeof realSources === "number" && realSources > 0) {
+    badges.push({ label: realSources + (realSources === 1 ? " fuente real" : " fuentes reales"), className: "border-slate-200 bg-slate-50 text-slate-600", title: "Fuentes corroborantes excluyendo signal-only (pedidosya)" });
+  }
+  const deal = dealValueBadge(lead);
+  if (deal) badges.push(deal);
+
+  return (
+    <div className="mt-3">
+      <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+        Contactos y redes
+        <HelpTip label="Contactos y redes">Señales de contacto y presencia digital: perfil social real vs candidato, email recomendado, tipo de web (propia/directorio/redes/sin web), fuentes reales y tamaño del negocio.</HelpTip>
+      </div>
+      <div className="mt-1.5 flex flex-wrap gap-1.5">
+        {badges.map((badge, index) => (
+          <span
+            key={badge.label + index}
+            title={badge.title}
+            className={cn("inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium tabular-nums", badge.className)}
+          >
+            {badge.label}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function LeadRow({ lead }: { lead: LeadDashboard }) {
   return (
     <div className="rounded-2xl border border-slate-200 px-4 py-4 transition-colors hover:border-sky-200 hover:bg-sky-50/30">
@@ -437,6 +537,7 @@ function LeadRow({ lead }: { lead: LeadDashboard }) {
               {lead.urgency_signal ?? "Sin urgencia"}
             </span>
           </div>
+          <ContactsAndNetworksStrip lead={lead} />
         </div>
 
         <div className="grid gap-2 text-right sm:min-w-52">
