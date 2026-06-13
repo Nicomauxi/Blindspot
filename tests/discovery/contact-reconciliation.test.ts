@@ -66,6 +66,17 @@ describe("buildContactMergePlan", () => {
     expect(plan.auto[0]).toMatchObject({ primary_id: "g1", secondary_id: "y1", kind: "phone", reason: "shared-phone" });
   });
 
+  it("IT-02: teléfono de gestor compartido por negocios con nombres distintos → revisión, no auto", () => {
+    const leads = [
+      lead({ id: "g1", source: "google_places", name: "Panadería La Espiga", phone: "099123456" }),
+      lead({ id: "y1", source: "yelu", name: "Ferretería El Tornillo", phone: "099 123 456" }),
+    ];
+    const plan = buildContactMergePlan(leads);
+    expect(plan.auto).toHaveLength(0);
+    expect(plan.review).toHaveLength(1);
+    expect(plan.review[0]).toMatchObject({ kind: "phone", reason: "shared-phone-low-name-sim" });
+  });
+
   it("manda a revisión si las ciudades difieren", () => {
     const leads = [
       lead({ id: "g1", source: "google_places", name: "Sucursal Centro", phone: "099123456", address: "x, Montevideo, Uruguay" }),

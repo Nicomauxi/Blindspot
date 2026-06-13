@@ -28,11 +28,19 @@ export interface ContactMergeOpts {
   maxKeyGroupSize: number;
   // Umbral mínimo de similitud de nombre para auto-unir por dominio compartido.
   minNameSimForDomain: number;
+  // IT-02: piso (bajo) de similitud de nombre para auto-unir por teléfono/email. Un
+  // teléfono de gestor/contador compartido por PYMEs con nombres claramente distintos
+  // ("Panadería A" vs "Ferretería B") NO debe auto-fusionar negocios diferentes.
+  // Bajo a propósito: variantes legítimas cross-source ("Fcia X"/"Farmacia X") pasan.
+  minNameSimForContact: number;
 }
 
 export const DEFAULT_CONTACT_MERGE_OPTS: ContactMergeOpts = {
   maxKeyGroupSize: 4,
   minNameSimForDomain: 0.35,
+  // 0.45: separa gestor-phones entre negocios distintos (~0.32) de variantes legítimas
+  // cross-source del mismo negocio (≥0.5, comparten el token distintivo). Ante la duda → review.
+  minNameSimForContact: 0.45,
 };
 
 function leadPriority(a: Lead, b: Lead): number {
@@ -68,6 +76,12 @@ function classify(
   }
 
   if (kind === "phone" || kind === "email") {
+    // IT-02: el mismo teléfono/email es señal fuerte, PERO si los nombres son claramente
+    // distintos puede ser un número de gestor/contador compartido por negocios diferentes
+    // → a revisión, no auto-fusión.
+    if (nameSim < opts.minNameSimForContact) {
+      return { decision: "review", reason: `shared-${kind}-low-name-sim`, sameCity, nameSim };
+    }
     // Mismo teléfono/email + ciudad compatible (o desconocida) → señal fuerte de mismo negocio.
     return { decision: "auto", reason: `shared-${kind}`, sameCity, nameSim };
   }

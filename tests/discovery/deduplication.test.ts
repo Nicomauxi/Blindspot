@@ -223,6 +223,24 @@ describe("findCrossSourceMatch", () => {
     expect(findCrossSourceMatch(candidate, [lead])).toBe(lead);
   });
 
+  it("IT-05: 'Farmacia' vs 'Farmacia Central' SIN geo NO fusiona (subconjunto genérico)", () => {
+    const candidate = makeCandidate({ name: "Farmacia", source: "mintur" });
+    const lead = makeLead({ name: "Farmacia Central", source: "google_places" });
+    expect(findCrossSourceMatch(candidate, [lead])).toBeNull();
+  });
+
+  it("IT-05: 'Farmacia' vs 'Farmacia Central' CON dirección compatible SÍ fusiona", () => {
+    const candidate = makeCandidate({ name: "Farmacia", source: "mintur", address: "Av Italia 2500, Montevideo" });
+    const lead = makeLead({ name: "Farmacia Central", source: "google_places", address: "Av Italia 2500, Montevideo" });
+    expect(findCrossSourceMatch(candidate, [lead])).toBe(lead);
+  });
+
+  it("IT-05: un subconjunto DISTINTIVO ('Kiosco' es genérico, 'La Palma' no) sigue fusionando sin geo", () => {
+    const candidate = makeCandidate({ name: "La Palma", source: "mintur" });
+    const lead = makeLead({ name: "La Palma Restaurante", source: "google_places" });
+    expect(findCrossSourceMatch(candidate, [lead])).toBe(lead);
+  });
+
   it("returns the lead with higher prospect_score on similarity tie", () => {
     const candidate = makeCandidate({ name: "La Palma", source: "mintur" });
     const leadLow = makeLead({ id: "low", name: "La Palma", source: "google_places", external_id: "ext-low", prospect_score: 30 });

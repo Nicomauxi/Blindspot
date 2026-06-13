@@ -67,6 +67,52 @@ function tokenSetRatio(a: string, b: string): number {
   return Math.max(ratio(t0, t1), ratio(t0, t2), ratio(t1, t2));
 }
 
+// IT-05: palabras de CATEGORÍA genérica. Un nombre formado solo por estas no identifica
+// un negocio puntual: "Farmacia" ⊆ "Farmacia Central" da tokenSetRatio=1.0 pero pueden ser
+// negocios distintos. (Un subconjunto DISTINTIVO como "Multicar"/"La Palma" no entra acá.)
+const GENERIC_BUSINESS_WORDS = new Set([
+  "farmacia", "kiosco", "quiosco", "bar", "almacen", "panaderia", "carniceria", "ferreteria",
+  "restaurante", "restaurant", "cafe", "cafeteria", "pizzeria", "parrilla", "peluqueria",
+  "barberia", "gimnasio", "gym", "hotel", "hostal", "hostel", "supermercado", "autoservicio",
+  "veterinaria", "optica", "libreria", "muebleria", "rotiseria", "heladeria", "lavadero",
+  "taller", "gomeria", "estacion", "despensa", "minimercado", "mercado", "tienda", "local",
+  "comercio", "deposito", "agencia", "boutique", "club",
+]);
+
+// True cuando el match de nombre proviene SOLO del path de subconjunto y el nombre menor
+// es enteramente genérico ("Farmacia" ⊆ "Farmacia Central"): señal débil que exige una 2ª
+// corroboración (geo) para no colapsar genéricos distintos. IT-05.
+function isGenericSubsetMatch(a: string, b: string, threshold: number): boolean {
+  const ta = tokens(a);
+  const tb = tokens(b);
+  const small = ta.length <= tb.length ? ta : tb;
+  const large = ta.length <= tb.length ? tb : ta;
+  if (small.length === 0 || small.length >= large.length) return false;
+  const isSubset = small.every((t) => large.includes(t));
+  if (!isSubset) return false;
+  const allGeneric = small.every((t) => GENERIC_BUSINESS_WORDS.has(t));
+  if (!allGeneric) return false;
+  // Si las medidas fuertes (typos / orden) ya pasan el umbral por sí solas, no es "subset-only".
+  const strong = Math.max(ratio(normalizeName(a), normalizeName(b)), tokenSortRatio(a, b));
+  return strong < threshold;
+}
+
+// Corroboración geográfica POSITIVA (no la vacía de addressesCompatible): GPS dentro del
+// radio (ambos presentes) o direcciones de calle que matchean estructuralmente. IT-05.
+function geoPositivelyCorroborated(
+  candidate: DiscoveryCandidate,
+  lead: Lead,
+  geoRadiusMeters: number
+): boolean {
+  if (candidate.latitude !== null && candidate.longitude !== null) {
+    const leadGps = parseLeadGps(lead.gps);
+    if (leadGps && haversineMeters({ lat: candidate.latitude, lng: candidate.longitude }, leadGps) <= geoRadiusMeters) {
+      return true;
+    }
+  }
+  return streetAddressesMatch(parseStreetAddress(candidate.address), parseStreetAddress(lead.address));
+}
+
 export function nameSimilarity(a: string, b: string): number {
   const normA = normalizeName(a);
   const normB = normalizeName(b);
@@ -157,6 +203,11 @@ export function findCrossSourceMatch(
 
     const sim = nameSimilarity(candidate.name, lead.name);
     if (sim < threshold) continue;
+    // IT-05: un match de nombre que solo se sostiene por subconjunto genérico exige
+    // corroboración geo positiva; sin ella, no fusiona (evita colapsar "Farmacia" distintas).
+    if (isGenericSubsetMatch(candidate.name, lead.name, threshold) && !geoPositivelyCorroborated(candidate, lead, geoRadiusMeters)) {
+      continue;
+    }
 
     if (sim > bestSim) {
       best = lead;
