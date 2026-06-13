@@ -92,6 +92,18 @@ export async function executeRun(run: PipelineRun): Promise<RunResult> {
   return finalizeRun(run.id, finalStatus, phaseResults);
 }
 
+/**
+ * FD-07: `pipeline_config.last_completed_at` debe avanzar SOLO cuando un run realmente
+ * ejecutó y terminó con datos refrescados (completed/partial) — NO en cada tick del cron
+ * (que antes lo adelantaba aunque el run se salteara por slots/error/crash, haciendo que
+ * el dashboard mostrara "último run OK" mientras los runs se saltaban en silencio).
+ */
+export function shouldRecordCompletion(
+  status: "completed" | "failed" | "partial" | "aborted"
+): boolean {
+  return status === "completed" || status === "partial";
+}
+
 async function finalizeRun(
   runId: string,
   status: "completed" | "failed" | "partial" | "aborted",
@@ -119,6 +131,18 @@ async function finalizeRun(
       "finalizeRun: el run ya no estaba 'running' (abortado/finalizado por otro proceso) — no se sobrescribe ni se notifica"
     );
     return { status: "aborted", phase_results: phaseResults };
+  }
+
+  // FD-07: marcar la última corrida realmente completada en pipeline_config (monitoreo),
+  // en vez de hacerlo en cada tick del cron aunque el run no se ejecute.
+  if (shouldRecordCompletion(status)) {
+    const { error: cfgError } = await supabase
+      .from("pipeline_config")
+      .update({ last_completed_at: new Date().toISOString() })
+      .eq("id", "singleton");
+    if (cfgError) {
+      logger.warn({ runId, error: cfgError.message }, "finalizeRun: no se pudo actualizar last_completed_at");
+    }
   }
 
   await appendRunLog(runId, `Run finished with status=${status}`, status === "completed" ? "info" : "warn");

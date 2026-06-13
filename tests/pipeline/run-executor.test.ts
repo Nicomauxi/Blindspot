@@ -143,6 +143,13 @@ function buildPipelineRunTable(aborts: boolean[], invariantCount = 0, finalizeMa
       };
     }
 
+    if (table === "pipeline_config") {
+      // FD-07: finalizeRun escribe last_completed_at acá cuando el run completa.
+      return {
+        update: vi.fn(() => ({ eq: vi.fn().mockResolvedValue({ error: null }) })),
+      };
+    }
+
     throw new Error(`Unexpected table ${table}`);
   });
 

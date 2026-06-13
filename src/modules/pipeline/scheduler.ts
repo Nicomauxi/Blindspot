@@ -356,12 +356,12 @@ export class PipelineScheduler {
   private async updateScheduledFor(expression: string): Promise<void> {
     const supabase = getSupabase();
     const nextRun = nextCronRun(expression);
+    // FD-07: solo avanzamos scheduled_for (la próxima corrida) en cada tick. last_completed_at
+    // lo escribe finalizeRun cuando un run REALMENTE completó — si lo escribiéramos acá, el
+    // dashboard mostraría "último run OK" aunque el run se saltara (slots/error/crash).
     await supabase
       .from("pipeline_config")
-      .update({
-        last_completed_at: new Date().toISOString(),
-        scheduled_for: nextRun.toISOString(),
-      })
+      .update({ scheduled_for: nextRun.toISOString() })
       .eq("id", "singleton");
     logger.info({ nextRun }, "scheduled_for updated");
   }
