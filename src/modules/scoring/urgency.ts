@@ -1,5 +1,6 @@
 import type { Lead } from "../../shared/types.js";
 import type { UrgencySignal } from "./types.js";
+import { computeSocialSignal } from "./social-signal.js";
 
 const OUTDATED_YEAR_THRESHOLD = 2020;
 const GROWING_REVIEW_THRESHOLD = 20;
@@ -49,6 +50,11 @@ export function computeUrgencySignal(lead: Lead): UrgencySignal {
     rating >= GROWING_RATING_MIN
   ) {
     mediumSignals.push("growing_business");
+  }
+
+  // F1: presencia social ACTIVA = negocio operando y alcanzable ahora → urgency media.
+  if (computeSocialSignal(lead).active) {
+    mediumSignals.push("social_activa");
   }
 
   if (highSignals.length > 0) return "high";
