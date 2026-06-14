@@ -3,17 +3,11 @@ import { load } from "js-yaml";
 import { z } from "zod";
 import type { ScoringConfig } from "./types.js";
 
-// Fuentes que ingieren leads activamente y DEBEN tener bonus explícito en
-// source_quality_bonus. Sin la clave, computeSourceQualityBonus caía a `?? 0`
-// silencioso (N-SCORE.3) — ahora es error de parse. miem_dei se sumó en F1.4.
-export const ACTIVE_SCORED_SOURCES = [
-  "google_places",
-  "osm",
-  "yelu",
-  "pedidosya",
-  "mintur",
-  "miem_dei",
-] as const;
+// Fuentes que ingieren leads activamente y DEBEN tener bonus explícito en source_quality_bonus.
+// Sin la clave, computeSourceQualityBonus caía a `?? 0` silencioso (N-SCORE.3) — ahora es error
+// de parse. SoT en shared/discovery-sources.ts (derivado de scoreBonus); se re-exporta por compat.
+export { ACTIVE_SCORED_SOURCES } from "../../shared/discovery-sources.js";
+import { ACTIVE_SCORED_SOURCES } from "../../shared/discovery-sources.js";
 
 export function assertSourceCoverage(
   bonus: Record<string, number | undefined>

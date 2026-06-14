@@ -1,9 +1,10 @@
 import type { DiscoveryCandidate, DiscoverySource, Lead } from "../../shared/types.js";
 import type { Vertical } from "./vertical.js";
 
-// Fuentes que solo aportan valor como SEÑAL al corroborar otro lead (no como lead
-// standalone). pedidosya no expone contacto: su valor es la señal "tiene delivery".
-export const SIGNAL_ONLY_SOURCES = new Set<DiscoverySource>(["pedidosya"]);
+// Fuentes que solo aportan valor como SEÑAL al corroborar otro lead (no como lead standalone).
+// SoT en shared/discovery-sources.ts (derivado de signalOnly); se re-exporta por compat.
+export { SIGNAL_ONLY_SOURCES } from "../../shared/discovery-sources.js";
+import { SIGNAL_ONLY_SOURCES } from "../../shared/discovery-sources.js";
 
 export interface QualificationInput {
   source: DiscoverySource;

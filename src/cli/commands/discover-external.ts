@@ -1,9 +1,5 @@
 import { readFileSync } from "fs";
-import { MINTURProvider } from "../../modules/discovery/providers/mintur.js";
-import { OSMProvider } from "../../modules/discovery/providers/osm.js";
-import { YeluProvider } from "../../modules/discovery/providers/yelu.js";
-import { PedidosYaProvider } from "../../modules/discovery/providers/pedidosya.js";
-import { DEIProvider } from "../../modules/discovery/providers/dei.js";
+import { buildProvider } from "../../modules/discovery/registry.js";
 import { getDedupGeoRadiusMeters, getOnlineDedupThreshold } from "../../modules/discovery/config.js";
 import { findCrossSourceMatch, isFranchise } from "../../modules/discovery/deduplication.js";
 import { normalizeNiche } from "../../modules/discovery/filters.js";
@@ -28,16 +24,6 @@ export interface ExternalDiscoveryExecutionSummary {
   fetched: number;
   inserted: number;
   corroborated: number;
-}
-
-function buildProvider(source: string) {
-  const sleepFn = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
-  if (source === "mintur") return new MINTURProvider();
-  if (source === "osm") return new OSMProvider();
-  if (source === "yelu") return new YeluProvider({ sleepFn });
-  if (source === "pedidosya") return new PedidosYaProvider({ sleepFn });
-  if (source === "miem_dei") return new DEIProvider();
-  throw new Error(`Unknown provider source: ${source}`);
 }
 
 function loadLocations(opts: DiscoverExternalOptions): string[] {
