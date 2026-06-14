@@ -6,7 +6,7 @@ vi.mock("../../src/shared/supabase.js", () => ({
   getSupabase: vi.fn(() => ({ from: mockFrom })),
 }));
 
-import { countLeadsByFilterSelection } from "../../src/storage/leads.js";
+import { countLeadsByFilterSelection, loadLeadsByFilterSelection } from "../../src/storage/leads.js";
 
 function makeQueryChain(overrides: Record<string, unknown> = {}) {
   const chain: Record<string, unknown> = {
@@ -115,5 +115,116 @@ describe("countLeadsByFilterSelection", () => {
     mockFrom.mockReturnValue(chain);
 
     await expect(countLeadsByFilterSelection({ missing_gps: true })).rejects.toThrow("db timeout");
+  });
+});
+
+// Chains "awaitables": el builder de supabase es un thenable; acá cada chain resuelve
+// a un resultado fijo (ids de dashboard) o eco de los ids pedidos (tabla leads).
+function makeDashboardChain(ids: string[]) {
+  const chain: Record<string, unknown> = {
+    select: vi.fn().mockReturnThis(),
+    eq: vi.fn().mockReturnThis(),
+    gte: vi.fn().mockReturnThis(),
+    in: vi.fn().mockReturnThis(),
+    textSearch: vi.fn().mockReturnThis(),
+    is: vi.fn().mockReturnThis(),
+    order: vi.fn().mockReturnThis(),
+    limit: vi.fn().mockReturnThis(),
+    range: vi.fn().mockReturnThis(),
+    then: (resolve: (v: unknown) => unknown) =>
+      Promise.resolve({ data: ids.map((id) => ({ id })), error: null }).then(resolve),
+  };
+  return chain;
+}
+
+function makeLeadsEchoChain() {
+  let captured: string[] = [];
+  const chain: Record<string, unknown> = {
+    select: vi.fn().mockReturnThis(),
+    eq: vi.fn().mockReturnThis(),
+    order: vi.fn().mockReturnThis(),
+    limit: vi.fn().mockReturnThis(),
+    in: vi.fn((_col: string, ids: string[]) => {
+      captured = ids;
+      return chain;
+    }),
+    then: (resolve: (v: unknown) => unknown) =>
+      Promise.resolve({
+        data: captured.map((id) => ({ id, name: id, passed_filter: true })),
+        error: null,
+      }).then(resolve),
+  };
+  return chain;
+}
+
+function ids(from: number, count: number): string[] {
+  return Array.from({ length: count }, (_, i) => `id-${String(from + i).padStart(5, "0")}`);
+}
+
+describe("loadLeadsByFilterSelection — paginación y chunking para scope=all", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("pagina la query de ids más allá del max-rows de Supabase (1000) hasta el límite", async () => {
+    const dashboardChains = [
+      makeDashboardChain(ids(0, 1000)),
+      makeDashboardChain(ids(1000, 1000)),
+      makeDashboardChain(ids(2000, 500)),
+    ];
+    const leadsChains: ReturnType<typeof makeLeadsEchoChain>[] = [];
+    mockFrom.mockImplementation((table: string) => {
+      if (table === "lead_dashboard") return dashboardChains.shift();
+      const chain = makeLeadsEchoChain();
+      leadsChains.push(chain);
+      return chain;
+    });
+
+    const leads = await loadLeadsByFilterSelection({ niche: "restaurante" }, { passedOnly: true, limit: 2500 });
+
+    expect(leads).toHaveLength(2500);
+    // 3 páginas de ids con range correlativo.
+    expect((dashboardChains.length)).toBe(0);
+    // Los leads se piden en lotes acotados (sin .in() gigante que rompa el límite de URL).
+    expect(leadsChains.length).toBeGreaterThanOrEqual(Math.ceil(2500 / 250));
+    for (const chain of leadsChains) {
+      const inCalls = (chain.in as ReturnType<typeof vi.fn>).mock.calls;
+      expect(inCalls).toHaveLength(1);
+      expect((inCalls[0]![1] as string[]).length).toBeLessThanOrEqual(250);
+    }
+  });
+
+  it("corta la paginación cuando una página viene incompleta (colección menor al límite)", async () => {
+    const dashboardChains = [makeDashboardChain(ids(0, 80))];
+    let leadsCalls = 0;
+    mockFrom.mockImplementation((table: string) => {
+      if (table === "lead_dashboard") return dashboardChains.shift();
+      leadsCalls += 1;
+      return makeLeadsEchoChain();
+    });
+
+    const leads = await loadLeadsByFilterSelection({ niche: "x" }, { passedOnly: true, limit: 10000 });
+
+    expect(leads).toHaveLength(80);
+    expect(dashboardChains.length).toBe(0);
+    expect(leadsCalls).toBe(1);
+  });
+
+  it("respeta passedOnly en cada lote de leads", async () => {
+    const dashboardChains = [makeDashboardChain(ids(0, 10))];
+    const leadsChains: ReturnType<typeof makeLeadsEchoChain>[] = [];
+    mockFrom.mockImplementation((table: string) => {
+      if (table === "lead_dashboard") return dashboardChains.shift();
+      const chain = makeLeadsEchoChain();
+      leadsChains.push(chain);
+      return chain;
+    });
+
+    await loadLeadsByFilterSelection({ niche: "x" }, { passedOnly: true, limit: 250 });
+
+    expect(leadsChains.length).toBeGreaterThan(0);
+    for (const chain of leadsChains) {
+      expect(chain.eq as ReturnType<typeof vi.fn>).toHaveBeenCalledWith("passed_filter", true);
+    }
   });
 });

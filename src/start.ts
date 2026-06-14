@@ -1,6 +1,6 @@
 import { getConfig } from "./shared/config.js";
 import { getLogger } from "./shared/logger.js";
-import { recoverOrphanedRuns } from "./modules/pipeline/crash-recovery.js";
+import { recoverOrphanedRuns, recoverOrphanedJobs } from "./modules/pipeline/crash-recovery.js";
 import { PipelineScheduler } from "./modules/pipeline/scheduler.js";
 import { PgListener } from "./modules/pipeline/pg-listener.js";
 
@@ -14,6 +14,11 @@ async function main(): Promise<void> {
   const recovered = await recoverOrphanedRuns();
   if (recovered > 0) {
     logger.warn({ recovered }, "Recovered orphaned runs from previous crash");
+  }
+  // D9: recuperar también runs externos y discovery_jobs huérfanos en 'running'.
+  const recoveredJobs = await recoverOrphanedJobs();
+  if (recoveredJobs > 0) {
+    logger.warn({ recoveredJobs }, "Recovered orphaned discovery runs/jobs from previous crash");
   }
 
   const scheduler = new PipelineScheduler();

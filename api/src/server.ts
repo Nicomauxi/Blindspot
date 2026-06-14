@@ -21,11 +21,13 @@ import { monitoringRoutes } from "./routes/admin/monitoring.js";
 import { servicePricingRoutes } from "./routes/service-pricing.js";
 import { backupsRoutes } from "./routes/admin/backups.js";
 import { variablesRoutes } from "./routes/admin/variables.js";
+import { socialEnrichRoutes } from "./routes/admin/social-enrich.js";
 import { operationsRoutes } from "./routes/admin/operations.js";
 import { trackingRoutes } from "./routes/tracking.js";
 import { discoveryPlacesRoutes } from "./routes/admin/discovery-places.js";
 import { alertsRoutes } from "./routes/alerts.js";
 import { nichesRoutes } from "./routes/admin/niches.js";
+import { mergeCandidatesRoutes } from "./routes/admin/merge-candidates.js";
 import { getBackupScheduler } from "./modules/backups/runtime.js";
 import { startProcessMetricsRecorder, stopProcessMetricsRecorder } from "./modules/process-metrics/recorder.js";
 import { startEmbeddedScheduler, stopEmbeddedScheduler, isSchedulerEmbedded, getSchedulerStatus } from "./modules/scheduler/runtime.js";
@@ -54,6 +56,18 @@ function isAllowedDevelopmentOrigin(origin: string): boolean {
 export async function buildServer() {
   const jwtSecret = process.env["API_JWT_SECRET"];
   if (!jwtSecret) throw new Error("API_JWT_SECRET is required");
+  // N72: en producción el secret debe ser fuerte (la validación de solo-presencia
+  // dejaba pasar secrets de test). En dev solo se advierte.
+  const weakSecret = jwtSecret.length < 32 || /^(test|dev|secret|changeme)/i.test(jwtSecret);
+  if (weakSecret) {
+    if (process.env["NODE_ENV"] === "production") {
+      throw new Error("API_JWT_SECRET demasiado débil para producción (≥32 chars, sin prefijos test/dev)");
+    }
+    console.warn("[security] API_JWT_SECRET débil — aceptado solo fuera de producción (N72)");
+  }
+  if (!process.env["NODE_ENV"]) {
+    console.warn("[security] NODE_ENV no seteado — CORS de desarrollo habilitado por default (setear NODE_ENV=production en deploy) (N73)");
+  }
 
   const app = Fastify({ logger: true });
   const explicitOrigins = normalizeOrigins(CORS_ORIGIN);
@@ -96,12 +110,14 @@ export async function buildServer() {
   await app.register(performanceRoutes, { prefix: "/api/v1" });
   await app.register(monitoringRoutes, { prefix: "/api/v1" });
   await app.register(variablesRoutes, { prefix: "/api/v1" });
+  await app.register(socialEnrichRoutes, { prefix: "/api/v1" });
   await app.register(operationsRoutes, { prefix: "/api/v1" });
   await app.register(servicePricingRoutes, { prefix: "/api/v1" });
   await app.register(trackingRoutes, { prefix: "/api/v1" });
   await app.register(discoveryPlacesRoutes, { prefix: "/api/v1" });
   await app.register(alertsRoutes, { prefix: "/api/v1" });
   await app.register(nichesRoutes, { prefix: "/api/v1" });
+  await app.register(mergeCandidatesRoutes, { prefix: "/api/v1" });
 
   return app;
 }

@@ -49,19 +49,18 @@ describe("high urgency — zona turística", () => {
   it("gym en Punta del Este → no high (niche no turístico)", () => {
     expect(computeUrgencySignal(lead({ niche: "gym", address: "Punta del Este" }))).not.toBe("high");
   });
+  it("FS-20: Piriapolis SIN tilde matchea igual (acentos normalizados)", () => {
+    expect(computeUrgencySignal(lead({ niche: "accommodation", address: "Rambla, Piriapolis" }))).toBe("high");
+    expect(computeUrgencySignal(lead({ niche: "accommodation", address: "Rambla, Piriápolis" }))).toBe("high");
+  });
+  it("FS-20: niche 'accommodation' (no el muerto 'hospedaje') dispara urgency turística", () => {
+    expect(computeUrgencySignal(lead({ niche: "accommodation", address: "Cabo Polonio" }))).toBe("high");
+  });
 });
 
-describe("medium urgency — negocio nuevo", () => {
-  it("created_at hace 30 días → medium", () => {
+describe("N01: la frescura del dato NO es urgencia del negocio", () => {
+  it("un lead recién descubierto sin otras señales → low (antes 97,3% medium)", () => {
     const d = new Date(Date.now() - 30 * 86_400_000).toISOString();
-    expect(computeUrgencySignal(lead({ created_at: d }))).toBe("medium");
-  });
-  it("created_at hace 89 días → medium", () => {
-    const d = new Date(Date.now() - 89 * 86_400_000).toISOString();
-    expect(computeUrgencySignal(lead({ created_at: d }))).toBe("medium");
-  });
-  it("created_at hace 91 días → low", () => {
-    const d = new Date(Date.now() - 91 * 86_400_000).toISOString();
     expect(computeUrgencySignal(lead({ created_at: d }))).toBe("low");
   });
 });

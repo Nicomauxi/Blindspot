@@ -1,7 +1,7 @@
 import type { Lead } from "../../shared/types.js";
-import { calculateContactReliability, calculateDataConfidence } from "./confidence.js";
+import { calculateDataConfidence } from "./confidence.js";
 import { getScoringConfig } from "./config.js";
-import { computeContactTier, CONTACTABLE_TIERS } from "./contact.js";
+import { computeContactProfile, CONTACTABLE_TIERS, resolveContactReliability } from "./contact.js";
 import { computePitchHook } from "./pitch.js";
 import { getLeadInferredState, inferredBool } from "./state.js";
 import { computeUrgencySignal } from "./urgency.js";
@@ -14,6 +14,8 @@ export interface CommercialScoreSnapshot {
   primary_offer: PrimaryOffer;
   source_quality_bonus: number;
   contact_tier: ContactTier;
+  contact_score: number;
+  contact_score_signals: import("./types.js").ContactScoreSignal[];
   pitch_hook: string;
   urgency_signal: UrgencySignal;
   gap_depth: number;
@@ -61,11 +63,13 @@ function computeBusinessQualityPoints(
   );
 }
 
-function computeAccessibilityFactor(contactTier: ContactTier, contactReliability: number): number {
+function computeAccessibilityFactor(contactTier: ContactTier, contactReliability: number, contactScore: number): number {
   const config = getScoringConfig().commercial_score.accessibility;
+  const normalizedScore = Math.max(0, Math.min(1, contactScore / config.contact_score.cap));
   return round3(
     config.tier_base[contactTier] *
-      (config.reliability_adjustment.base + config.reliability_adjustment.weight * contactReliability)
+      (config.reliability_adjustment.base + config.reliability_adjustment.weight * contactReliability) *
+      (config.score_adjustment.base + config.score_adjustment.weight * normalizedScore)
   );
 }
 
@@ -144,8 +148,9 @@ export function computeSourceQualityBonus(source: string): number {
 export function computeCommercialScore(lead: Lead, subScores: SubScores): CommercialScoreSnapshot {
   const config = getScoringConfig().commercial_score;
   const urgencySignal = computeUrgencySignal(lead);
-  const contactTier = computeContactTier(lead);
-  const contactReliability = lead.contact_reliability_score ?? calculateContactReliability(lead);
+  const contactProfile = computeContactProfile(lead);
+  const contactTier = contactProfile.tier;
+  const contactReliability = resolveContactReliability(lead);
   const dataConfidence = lead.data_confidence_score ?? calculateDataConfidence(lead);
   const sourceQualityBonus = computeSourceQualityBonus(lead.source);
 
@@ -160,7 +165,7 @@ export function computeCommercialScore(lead: Lead, subScores: SubScores): Commer
     (secondScore >= config.commercial_breadth.secondary_threshold ? config.commercial_breadth.secondary_bonus : 0) +
     (thirdScore >= config.commercial_breadth.tertiary_threshold ? config.commercial_breadth.tertiary_bonus : 0);
   const businessQualityPts = computeBusinessQualityPoints(lead, dataConfidence, contactReliability);
-  const accessibilityFactor = computeAccessibilityFactor(contactTier, contactReliability);
+  const accessibilityFactor = computeAccessibilityFactor(contactTier, contactReliability, contactProfile.score);
   const { factor: timingFactor, days_in_pool: daysInPool } = computeTimingFactor(lead, urgencySignal);
   const urgencyBonus = computeUrgencyBonus(urgencySignal);
 
@@ -174,6 +179,8 @@ export function computeCommercialScore(lead: Lead, subScores: SubScores): Commer
     primary_offer: primaryOffer,
     source_quality_bonus: sourceQualityBonus,
     contact_tier: contactTier,
+    contact_score: contactProfile.score,
+    contact_score_signals: contactProfile.signals,
     pitch_hook: computePitchHook(lead, primaryOffer),
     urgency_signal: urgencySignal,
     gap_depth: gapDepth,

@@ -26,7 +26,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     const db = getDb();
     const { data: user, error } = await db
       .from("users")
-      .select("id, email, password_hash, role, active")
+      .select("id, email, password_hash, role, active, token_version")
       .eq("email", email)
       .single();
 
@@ -48,7 +48,13 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       .update({ last_login_at: new Date().toISOString() })
       .eq("id", user.id);
 
-    const token = app.jwt.sign({ user_id: user.id, email: user.email }, { expiresIn: "24h" });
+    // N71: tv = token_version (revocación server-side); auth_time = login original
+    // (capa la cadena de refresh — el access token renovable sin límite era un
+    // refresh token eterno).
+    const token = app.jwt.sign(
+      { user_id: user.id, email: user.email, tv: (user.token_version as number | null) ?? 0, auth_time: Date.now() },
+      { expiresIn: "24h" }
+    );
 
     return reply.send({ token, role: user.role });
   });
@@ -65,7 +71,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     const db = getDb();
     const { data: user } = await db
       .from("users")
-      .select("id, email, active")
+      .select("id, email, active, token_version")
       .eq("id", request.user.user_id)
       .single();
 
@@ -73,8 +79,20 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       return reply.status(401).send({ error: "Account inactive", error_code: "account_inactive" });
     }
 
+    const payload = request.user as { user_id: string; email: string; tv?: number; auth_time?: number };
+    // N71: token revocado (token_version bumpeado) no se renueva.
+    if (((user.token_version as number | null) ?? 0) !== (payload.tv ?? 0)) {
+      return reply.status(401).send({ error: "Token revoked", error_code: "token_revoked" });
+    }
+    // N71: la cadena de refresh expira a los 30 días del login original — re-login.
+    const REFRESH_CHAIN_MAX_MS = 30 * 24 * 60 * 60 * 1000;
+    const authTime = payload.auth_time ?? Date.now();
+    if (Date.now() - authTime > REFRESH_CHAIN_MAX_MS) {
+      return reply.status(401).send({ error: "Session expired, login again", error_code: "session_expired" });
+    }
+
     const token = app.jwt.sign(
-      { user_id: request.user.user_id, email: request.user.email },
+      { user_id: payload.user_id, email: payload.email, tv: payload.tv ?? 0, auth_time: authTime },
       { expiresIn: "24h" }
     );
 

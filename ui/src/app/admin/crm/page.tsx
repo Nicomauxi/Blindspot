@@ -110,7 +110,9 @@ export default function CrmBoardPage() {
   const [saveError, setSaveError]   = useState<string | null>(null);
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [contactChannelPick, setContactChannelPick] = useState("whatsapp");
-  const [contactFeedback, setContactFeedback] = useState<Record<string, "idle" | "saving" | "done">>({});
+  // N65: keyeado por `${leadId}::${field}` — antes el estado de un caso contaminaba al
+  // siguiente, y un fallo volvía a 'idle' silenciosamente (parecía no-hecho, no error).
+  const [contactFeedback, setContactFeedback] = useState<Record<string, "idle" | "saving" | "done" | "error">>({});
   const [filters, setFilters]       = useState<TrackingFilters>(() => filtersFromSearchParams(searchParams));
   const [showFilters, setShowFilters] = useState(false);
   const [viewMode, setViewMode]     = useState<CrmViewMode>((searchParams.get("view") === "list" ? "list" : "board"));
@@ -198,7 +200,7 @@ export default function CrmBoardPage() {
       notes: "Ningún canal funcionó",
       channel: "",
       reminder_at: "",
-      isRegression: false,
+      isRegression: isRegressionTransition(tracking.status, "observed"),
     });
 
   const openNote = (tracking: LeadTracking) =>
@@ -803,12 +805,12 @@ export default function CrmBoardPage() {
                         actionLabel="Abrir"
                         fieldKey="whatsapp"
                         leadId={detail.detail.lead_id}
-                        feedbackState={contactFeedback["whatsapp"] ?? "idle"}
+                        feedbackState={contactFeedback[`${detail.detail.lead_id}::whatsapp`] ?? "idle"}
                         onFeedback={(verdict) => {
-                          setContactFeedback((prev) => ({ ...prev, whatsapp: "saving" }));
+                          setContactFeedback((prev) => ({ ...prev, [`${detail.detail!.lead_id}::whatsapp`]: "saving" }));
                           createLeadFeedback(token!, detail.detail!.lead_id, { field_key: "whatsapp", field_value: detail.detail!.lead?.whatsapp ?? undefined, verdict })
-                            .then(() => setContactFeedback((prev) => ({ ...prev, whatsapp: "done" })))
-                            .catch(() => setContactFeedback((prev) => ({ ...prev, whatsapp: "idle" })));
+                            .then(() => setContactFeedback((prev) => ({ ...prev, [`${detail.detail!.lead_id}::whatsapp`]: "done" })))
+                            .catch(() => setContactFeedback((prev) => ({ ...prev, [`${detail.detail!.lead_id}::whatsapp`]: "error" })));
                         }}
                       />
                     )}
@@ -820,12 +822,12 @@ export default function CrmBoardPage() {
                         actionLabel="Llamar"
                         fieldKey="phone"
                         leadId={detail.detail.lead_id}
-                        feedbackState={contactFeedback["phone"] ?? "idle"}
+                        feedbackState={contactFeedback[`${detail.detail.lead_id}::phone`] ?? "idle"}
                         onFeedback={(verdict) => {
-                          setContactFeedback((prev) => ({ ...prev, phone: "saving" }));
+                          setContactFeedback((prev) => ({ ...prev, [`${detail.detail!.lead_id}::phone`]: "saving" }));
                           createLeadFeedback(token!, detail.detail!.lead_id, { field_key: "phone", field_value: detail.detail!.lead?.phone ?? undefined, verdict })
-                            .then(() => setContactFeedback((prev) => ({ ...prev, phone: "done" })))
-                            .catch(() => setContactFeedback((prev) => ({ ...prev, phone: "idle" })));
+                            .then(() => setContactFeedback((prev) => ({ ...prev, [`${detail.detail!.lead_id}::phone`]: "done" })))
+                            .catch(() => setContactFeedback((prev) => ({ ...prev, [`${detail.detail!.lead_id}::phone`]: "error" })));
                         }}
                       />
                     )}
@@ -837,12 +839,12 @@ export default function CrmBoardPage() {
                         actionLabel="Enviar"
                         fieldKey="email"
                         leadId={detail.detail.lead_id}
-                        feedbackState={contactFeedback["email"] ?? "idle"}
+                        feedbackState={contactFeedback[`${detail.detail.lead_id}::email`] ?? "idle"}
                         onFeedback={(verdict) => {
-                          setContactFeedback((prev) => ({ ...prev, email: "saving" }));
+                          setContactFeedback((prev) => ({ ...prev, [`${detail.detail!.lead_id}::email`]: "saving" }));
                           createLeadFeedback(token!, detail.detail!.lead_id, { field_key: "email", field_value: detail.detail!.lead?.email ?? undefined, verdict })
-                            .then(() => setContactFeedback((prev) => ({ ...prev, email: "done" })))
-                            .catch(() => setContactFeedback((prev) => ({ ...prev, email: "idle" })));
+                            .then(() => setContactFeedback((prev) => ({ ...prev, [`${detail.detail!.lead_id}::email`]: "done" })))
+                            .catch(() => setContactFeedback((prev) => ({ ...prev, [`${detail.detail!.lead_id}::email`]: "error" })));
                         }}
                       />
                     )}
@@ -948,7 +950,7 @@ export default function CrmBoardPage() {
                         const tracking = trackings.find((t) => t.id === detail.trackingId);
                         if (tracking) {
                           closeAll();
-                          setTransition({ tracking, to_status: "validation", notes: "", channel: contactChannelPick, reminder_at: "", isRegression: false });
+                          setTransition({ tracking, to_status: "validation", notes: "", channel: contactChannelPick, reminder_at: "", isRegression: isRegressionTransition(tracking.status, "validation") });
                         }
                       }}
                       className="rounded-lg bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700"
@@ -1250,7 +1252,7 @@ function ContactChannelRow({
   actionLabel: string;
   fieldKey: string;
   leadId: string;
-  feedbackState: "idle" | "saving" | "done";
+  feedbackState: "idle" | "saving" | "done" | "error";
   onFeedback: (verdict: "good" | "bad") => void;
 }) {
   return (
@@ -1269,6 +1271,10 @@ function ContactChannelRow({
         <span className="text-emerald-600 text-xs shrink-0">✓</span>
       ) : (
         <>
+          {/* N65: el fallo se muestra (antes volvía a idle y el voto se perdía en silencio) */}
+          {feedbackState === "error" && (
+            <span className="text-rose-600 text-[11px] shrink-0" title="No se pudo guardar — reintentá">⚠ reintentar</span>
+          )}
           <button type="button" title="Dato correcto" disabled={feedbackState === "saving"} onClick={() => onFeedback("good")} className="text-emerald-600 hover:text-emerald-800 disabled:opacity-40 shrink-0">👍</button>
           <button type="button" title="Dato incorrecto" disabled={feedbackState === "saving"} onClick={() => onFeedback("bad")} className="text-rose-500 hover:text-rose-700 disabled:opacity-40 shrink-0">👎</button>
         </>

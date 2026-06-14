@@ -105,8 +105,8 @@ describe("software_pos", () => {
       ...withInferredState({ has_delivery: true }),
     });
     const s = computeAllBuyerScores(l).find((x) => x.buyer_type === "software_pos")!;
-    // base = 40*0.50 + 20*0.20 = 20+4 = 24; adjustments = +20
-    expect(s.score).toBe(44);
+    // N08 normalizado: base = (40*0.50 + 20*0.20)/0.70 = 24/0.7 ≈ 34; adjustments = +20
+    expect(s.score).toBe(54);
     expect(s.breakdown.adjustments).toBe(20);
   });
 
@@ -126,7 +126,26 @@ describe("software_pos", () => {
       ...withTopLevelInferredState({ has_delivery: true }),
     });
     const s = computeAllBuyerScores(l).find((x) => x.buyer_type === "software_pos")!;
-    expect(s.score).toBe(44);
+    expect(s.score).toBe(54); // N08 normalizado
+  });
+
+  it("BL-03: has_pos 'unknown' aplica penalización SUAVE (-7 = round(-50*0.15)), no cero", () => {
+    const l = lead({
+      ...withSubScores({ software: 60 }),
+      inferred_state: { has_pos: { value: null, confidence: 0 }, digitalization_level: "none", computed_at: "2026-01-01T00:00:00Z" } as Lead["inferred_state"],
+    });
+    const s = computeAllBuyerScores(l).find((x) => x.buyer_type === "software_pos")!;
+    expect(s.breakdown.adjustments).toBe(-7);
+    expect(s.breakdown.applied_modifiers).toContain("penalty:has_pos:unknown:-7");
+  });
+
+  it("BL-03: has_pos verificado=false (confidence>0) NO penaliza (oferta relevante)", () => {
+    const l = lead({
+      ...withSubScores({ software: 60 }),
+      ...withInferredState({ has_pos: false }), // value:false, confidence:0.9 → verificado
+    });
+    const s = computeAllBuyerScores(l).find((x) => x.buyer_type === "software_pos")!;
+    expect(s.breakdown.adjustments).toBe(0);
   });
 });
 
@@ -139,8 +158,8 @@ describe("delivery_propio", () => {
       ...withInferredState({ has_delivery: true }),
     });
     const s = computeAllBuyerScores(l).find((x) => x.buyer_type === "delivery_propio")!;
-    // base = 50*0.40 + 30*0.30 = 20+9 = 29; bonus has_delivery +30 → 59
-    expect(s.score).toBe(59);
+    // N08 normalizado: base = (50*0.40 + 30*0.30)/0.70 = 29/0.7 ≈ 41; bonus +30 → 71
+    expect(s.score).toBe(71);
   });
 
   it("inferred_required has_delivery=true — not met → score = 0", () => {
@@ -310,5 +329,44 @@ describe("score boundaries", () => {
       expect(s.score).toBeLessThanOrEqual(100);
       expect(s.score).toBeGreaterThanOrEqual(0);
     }
+  });
+});
+
+// ─── N1.5: buyer scores recalibrados ───────────────────────────────────────
+
+describe("N08: fórmula normalizada a la escala alcanzable", () => {
+  it("software_pos con software=70 da base 50 (promedio ponderado), no 35", () => {
+    const l = lead({ ...withSubScores({ software: 70, catalogo: 0 }), ...withInferredState({}) });
+    const r = computeAllBuyerScores(l).find((s) => s.buyer_type === "software_pos")!;
+    // pesos 0.50+0.20=0.70 → base = (70*0.5)/0.7 = 50
+    expect(r.breakdown.base).toBe(50);
+  });
+});
+
+describe("N13: inferred_required:false sin evidencia degrada en vez de pasar limpio", () => {
+  it("ausencia NO verificada (confidence 0) → multiplicador de incertidumbre + modifier", () => {
+    const inferred = withInferredState({ has_reservations: false });
+    (inferred.inferred_state as Record<string, { value: boolean; confidence: number; via: string[] }>)["has_reservations"] = { value: false, confidence: 0, via: [] };
+    const l = lead({ niche: "gym", ...withSubScores({ software: 70, catalogo: 70 }), ...inferred });
+    const r = computeAllBuyerScores(l).find((s) => s.buyer_type === "reservas_online")!;
+    expect(r.score).toBeGreaterThan(0);
+    expect(r.breakdown.applied_modifiers).toContain("uncertain:has_reservations");
+
+    const verified = lead({ niche: "gym", ...withSubScores({ software: 70, catalogo: 70 }), ...withInferredState({ has_reservations: false }) });
+    const rv = computeAllBuyerScores(verified).find((s) => s.buyer_type === "reservas_online")!;
+    expect(r.score).toBeLessThan(rv.score);
+  });
+});
+
+describe("N14: whatsapp_business acepta whatsapp-derived con penalización", () => {
+  it("derived → score > 0 con modifier; sin tag → bloqueado", () => {
+    const l = lead({ tags: ["whatsapp-derived"], ...withSubScores({ software: 70, marketing: 70, catalogo: 70 }), ...withInferredState({}) });
+    const r = computeAllBuyerScores(l).find((s) => s.buyer_type === "whatsapp_business")!;
+    expect(r.score).toBeGreaterThan(0);
+    expect(r.breakdown.applied_modifiers.join(",")).toContain("derived");
+
+    const none = lead({ ...withSubScores({ software: 70 }), ...withInferredState({}) });
+    const rn = computeAllBuyerScores(none).find((s) => s.buyer_type === "whatsapp_business")!;
+    expect(rn.score).toBe(0);
   });
 });

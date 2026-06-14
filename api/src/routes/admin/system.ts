@@ -456,11 +456,28 @@ export async function systemRoutes(app: FastifyInstance): Promise<void> {
     }
     const { target } = parsed.data;
     if (target === "all") {
-      const coreHandler = restartProcess("core");
-      const apiHandler = restartProcess("api");
-      await coreHandler(request, reply);
-      await apiHandler(request, reply);
-      return;
+      // N91: NUNCA pasar el mismo reply a dos handlers (el segundo send() era doble
+      // respuesta garantizada). El restart de core escribe en un collector; la única
+      // respuesta real la emite el paso de api (o el error agregado).
+      const coreResult: { code: number; body: unknown } = { code: 0, body: null };
+      const collector = {
+        status: (code: number) => ({
+          send: (body: unknown) => {
+            coreResult.code = code;
+            coreResult.body = body;
+            return body;
+          },
+        }),
+      };
+      await restartProcess("core")(request, collector);
+      if (coreResult.code !== 200) {
+        return reply.code(coreResult.code).send({
+          error: "core restart failed",
+          error_code: "core_restart_failed",
+          core: coreResult.body,
+        });
+      }
+      return restartProcess("api")(request, reply);
     }
     return restartProcess(target)(request, reply);
   });

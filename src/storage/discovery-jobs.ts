@@ -183,7 +183,9 @@ export interface BulkJobDefinition {
 
 export async function bulkInsertDiscoveryJobs(
   jobs: BulkJobDefinition[],
-  triggeredBy = "admin_bulk"
+  triggeredBy = "admin_bulk",
+  // N95: trazabilidad — alineado con POST /discovery/jobs y /job-batches.
+  userId: string | null = null
 ): Promise<DiscoveryJobRow[]> {
   if (jobs.length === 0) return [];
   const db = getSupabase();
@@ -195,6 +197,7 @@ export async function bulkInsertDiscoveryJobs(
     cpu_budget: "balanced",
     status: "queued",
     triggered_by: triggeredBy,
+    user_id: userId,
     leads_found: 0,
     leads_new: 0,
     batch_id: null,
@@ -210,6 +213,20 @@ export async function bulkInsertDiscoveryJobs(
     .select();
   if (error) throw new Error(`bulkInsertDiscoveryJobs failed: ${error.message}`);
   return (data ?? []) as DiscoveryJobRow[];
+}
+
+// N40: claim atómico queued→running. El path viejo (update incondicional) permitía
+// que el timer del scheduler y la fase discovery del run ejecuten el MISMO job.
+export async function claimDiscoveryJob(id: string): Promise<boolean> {
+  const db = getSupabase();
+  const { data, error } = await db
+    .from("discovery_jobs")
+    .update({ status: "running", started_at: new Date().toISOString(), completed_at: null })
+    .eq("id", id)
+    .eq("status", "queued")
+    .select("id");
+  if (error) throw new Error(`claimDiscoveryJob failed: ${error.message}`);
+  return (data ?? []).length > 0;
 }
 
 export async function updateDiscoveryJobStatus(

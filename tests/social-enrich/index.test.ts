@@ -170,20 +170,28 @@ describe("runSocialEnrich", () => {
       "https://instagram.com/salonbella",
       lead
     );
-    expect(updateLeadSocialSearch).toHaveBeenCalledWith(
-      "lead-1",
+    // Validación posicional de los primeros 5 args; el 6º (socialCanonical) es opcional
+    // y varía según lo que parsea de la bio/descripción.
+    expect(updateLeadSocialSearch).toHaveBeenCalled();
+    const socialCall = vi.mocked(updateLeadSocialSearch).mock.calls[0]!;
+    expect(socialCall[0]).toBe("lead-1");
+    expect(socialCall[1]).toEqual(
       expect.objectContaining({
         source: "playwright",
         facebook: expect.objectContaining({ confidence: 0.95 }),
         instagram: expect.objectContaining({ confidence: 0.8 }),
-      }),
-      expect.arrayContaining([
-        "fb-confirmed",
-        "ig-confirmed",
-        "whatsapp-derived",
-        "whatsapp-confirmed",
-      ]),
-      "+59898365592"
+      })
+    );
+    expect(socialCall[2]).toEqual(
+      expect.arrayContaining(["fb-confirmed", "ig-confirmed", "whatsapp-derived", "whatsapp-confirmed"])
+    );
+    expect(socialCall[3]).toBe("+59898365592");
+    expect(socialCall[4]).toEqual(
+      expect.objectContaining({
+        source: "playwright_public",
+        profiles: expect.any(Object),
+        summary: expect.any(Object),
+      })
     );
     expect(result.processed).toBe(1);
     const opened = vi.mocked(openSocialEnrichBrowser).mock.results[0];
@@ -229,6 +237,53 @@ describe("runSocialEnrich", () => {
 
     expect(result.errors).toBe(1);
     expect(result.processed).toBe(1);
+  });
+
+  it("does not crash when newPage fails; counts the lead as error and continues", async () => {
+    vi.mocked(loadLeadsByRunId).mockResolvedValue([
+      makeLead({ id: "newpage-fails" }),
+      makeLead({ id: "ok-lead" }),
+    ]);
+    const newPage = vi
+      .fn(async () => ({ close: vi.fn(async () => undefined) }))
+      .mockRejectedValueOnce(new Error("boom"));
+    const context = { newPage, close: vi.fn(async () => undefined) };
+    const browser = { close: vi.fn(async () => undefined) };
+    vi.mocked(openSocialEnrichBrowser).mockResolvedValue({
+      browser: browser as unknown as Browser,
+      context: context as unknown as BrowserContext,
+    });
+
+    const result = await runSocialEnrich({ run: RUN_ID, limit: 10, force: true });
+
+    expect(result.errors).toBe(1);
+    expect(result.processed).toBe(1);
+  });
+
+  it("aborts remaining leads gracefully when the browser dies (no unhandled rejection)", async () => {
+    vi.mocked(loadLeadsByRunId).mockResolvedValue([
+      makeLead({ id: "l1" }),
+      makeLead({ id: "l2" }),
+      makeLead({ id: "l3" }),
+      makeLead({ id: "l4" }),
+    ]);
+    const newPage = vi.fn(async () => {
+      throw new Error("browserContext.newPage: Target page, context or browser has been closed");
+    });
+    const context = { newPage, close: vi.fn(async () => undefined) };
+    const browser = { close: vi.fn(async () => undefined) };
+    vi.mocked(openSocialEnrichBrowser).mockResolvedValue({
+      browser: browser as unknown as Browser,
+      context: context as unknown as BrowserContext,
+    });
+
+    const result = await runSocialEnrich({ run: RUN_ID, limit: 10, force: true });
+
+    expect(result.processed).toBe(0);
+    expect(result.errors).toBe(4);
+    // El browser está muerto: los leads restantes cortocircuitan sin pedir páginas nuevas.
+    expect(newPage.mock.calls.length).toBeLessThanOrEqual(2);
+    expect(browser.close).toHaveBeenCalled();
   });
 
   it("counts blocked leads separately from errors", async () => {

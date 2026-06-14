@@ -62,6 +62,30 @@ export interface AccessibilityConfig {
     base: number;
     weight: number;
   };
+  score_adjustment: {
+    base: number;
+    weight: number;
+  };
+  contact_score: {
+    weights: {
+      email: number;
+      extra_email: number;
+      whatsapp_direct: number;
+      whatsapp_derived: number;
+      phone: number;
+      phone_landline?: number;
+      phone_confirmed_bonus: number;
+      address: number;
+      website: number;
+      contact_form: number;
+      social_dm_channel: number;
+      whatsapp_web_link: number;
+      multi_channel_bonus: number;
+      high_confidence_bonus: number;
+    };
+    thresholds: Record<Exclude<ContactTier, "X">, number>;
+    cap: number;
+  };
 }
 
 export interface DaysInPoolConfig {
@@ -95,6 +119,81 @@ export interface CommercialScoreConfig {
   accessibility: AccessibilityConfig;
   timing: TimingConfig;
   urgency_bonus: UrgencyBonusConfig;
+}
+
+export type ScoreModelFamily =
+  | "multiplicative_attenuated"
+  | "additive_pure"
+  | "hybrid_bounded";
+
+export interface VerticalOfferAdjustment {
+  multiplier?: number;
+  cap?: number;
+}
+
+export interface ScoreBandThresholds {
+  normal_max: number;
+  good_min: number;
+  very_good_min: number;
+  exceptional_min: number;
+}
+
+export interface DedupeCalibrationConfig {
+  possible_duplicate_penalty: number;
+  duplicate_secondary_penalty: number;
+  block_duplicate_secondary_exceptional: boolean;
+}
+
+export interface ScoreCalibrationScenario {
+  family: ScoreModelFamily;
+  gap_depth_cap: number;
+  source_quality_bonus: SourceQualityBonusConfig;
+  commercial_breadth: CommercialBreadthConfig;
+  business_quality: {
+    rating_tiers: RangePointsRule[];
+    review_tiers: RangePointsRule[];
+    data_confidence_multiplier: number;
+    contact_reliability_multiplier: number;
+    corroboration_bonus: number;
+    cap: number;
+  };
+  accessibility: {
+    bounded_bonus_by_tier: Record<ContactTier, number>;
+    score_tiers: Array<{ min: number; points: number }>;
+    multiplicative_multiplier_by_tier: Record<ContactTier, number>;
+    score_multiplier_weight: number;
+    reliability_multiplier_weight: number;
+  };
+  timing: {
+    high_urgency_bonus: number;
+    medium_urgency_bonus: number;
+    low_urgency_bonus: number;
+    franchise_penalty: number;
+    freshness_bonus: number;
+    stale_penalty: number;
+  };
+  offer_adjustments?: Partial<Record<Exclude<PrimaryOffer, "none">, VerticalOfferAdjustment>>;
+  catalogo_by_niche?: Record<string, VerticalOfferAdjustment>;
+  preview_thresholds?: ScoreBandThresholds;
+  dedupe?: DedupeCalibrationConfig;
+  social?: SocialScoringConfig;
+  // FS-22: peso (0..1) con el que la dimensión digital_gap entra al base de v3. Default 0 =
+  // inerte (comportamiento previo). Solo el escenario activo lo sube, tras validar con score-eval.
+  digital_gap_weight?: number;
+}
+
+// Bonus por señal social (F1): audiencia (followers) + actividad (liveness) + el combo
+// "audiencia alta sin web" (prospecto ideal de web_nuevo/marketing). Conservador por diseño.
+export interface SocialScoringConfig {
+  audience_bonus: { low: number; medium: number; high: number };
+  active_bonus: number;
+  high_audience_no_web_bonus: number;
+}
+
+export interface ScoreCalibrationConfig {
+  version: number;
+  default_scenario: string;
+  scenarios: Record<string, ScoreCalibrationScenario>;
 }
 
 export interface ThresholdsConfig {
@@ -172,6 +271,12 @@ export interface InferredStateSummary {
   digitalization_level: string | null;
 }
 
+export interface ContactScoreSignal {
+  name: string;
+  weight: number;
+  value: string | number | boolean | null;
+}
+
 export interface ScoreBreakdown {
   computed_at: string;
   config_version: number;
@@ -180,9 +285,13 @@ export interface ScoreBreakdown {
   systems_gap: { total: number; rules: EvaluatedRule[] };
   prospect: { formula: string; total: number };
   sub_scores: SubScores;
+  /** N04/N11: crudos pre-calibración, solo para debugging (sub_scores son los ajustados). */
+  sub_scores_raw?: SubScores;
   primary_offer: PrimaryOffer;
   source_quality_bonus: number;
   contact_tier: ContactTier;
+  contact_score: number;
+  contact_score_signals: ContactScoreSignal[];
   pitch_hook: string;
   urgency_signal: UrgencySignal;
   gap_depth: number;
@@ -193,6 +302,15 @@ export interface ScoreBreakdown {
   urgency_bonus: number;
   days_in_pool: number;
   inferred_state_summary: InferredStateSummary;
+  score_model?: ScoreModelFamily;
+  score_band?: "normal" | "bueno" | "muy_bueno" | "excepcional";
+  business_urgency_signal?: UrgencySignal;
+  freshness_signal?: "fresh" | "stale" | "neutral";
+  accessibility_bonus?: number;
+  timing_bonus?: number;
+  social_bonus?: number;
+  digital_gap_bonus?: number;
+  dedupe_penalty?: number;
 }
 
 export type BuyerTypeSubScoreKey =
@@ -242,4 +360,14 @@ export interface ScoreResult {
   contact_ready: boolean;
   score_breakdown: ScoreBreakdown;
   systems_gap_breakdown: { total: number; rules: EvaluatedRule[] };
+}
+
+export interface LeadScoreSnapshot {
+  lead_id: string;
+  snapshot_label: string;
+  scoring_version: number;
+  prospect_score: number | null;
+  score_breakdown: Record<string, unknown> | null;
+  contact_ready: boolean | null;
+  captured_at: string;
 }

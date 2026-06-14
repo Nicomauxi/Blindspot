@@ -131,6 +131,13 @@ vi.mock("../../api/src/db/client.js", () => ({
             order: () => ({
               limit: async (n: number) => ({ data: state.discoveryJobs.slice(0, n), error: null }),
             }),
+            // Conteos exactos por estado: .select("*", {count}).eq("status", X)
+            eq: (_col: string, status: string) => ({
+              count: state.discoveryJobs.filter((j) => j.status === status).length,
+              error: null,
+              then: (resolve: (v: { count: number; error: null }) => unknown) =>
+                resolve({ count: state.discoveryJobs.filter((j) => j.status === status).length, error: null }),
+            }),
           }),
         };
       }

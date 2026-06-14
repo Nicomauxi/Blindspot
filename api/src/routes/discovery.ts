@@ -1,3 +1,4 @@
+import { fetchAllRows } from "../services/fetch-all-rows.js";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { getDb } from "../db/client.js";
@@ -27,6 +28,7 @@ import {
   type OpportunityLead,
 } from "../../../src/modules/discovery/location-opportunity.js";
 import { createLeadGeocodingService } from "../services/lead-geocoding.js";
+import { buildCommercialOfferings } from "../../../src/modules/scoring/offerings.js";
 
 const permissiveUuid = z
   .string()
@@ -37,7 +39,7 @@ const permissiveUuid = z
 
 const cpuBudgetSchema = z.enum(["conservative", "balanced", "aggressive"]);
 const profileSchema = z.enum(["A", "B", "C", "D"]);
-const sourceSchema = z.enum(["mintur", "osm", "yelu", "pedidosya", "google_places"]);
+const sourceSchema = z.enum(["mintur", "osm", "yelu", "pedidosya", "google_places", "miem_dei"]);
 
 const predictiveContextSchema = z.object({
   suggestion_source: z.literal("predictive_location"),
@@ -134,7 +136,17 @@ const recommendationsQuerySchema = z.object({
 
 const LEAD_DENSITY_CONTACT_TIERS = ["A", "B", "C", "D", "X"] as const;
 const LEAD_DENSITY_GPS_SOURCES = ["real", "inferred", "google"] as const;
+const LEAD_DENSITY_HEAT_METRICS = ["mixed", "marketing", "software", "combined"] as const;
 const GEO_ZONE_KIND_OPTIONS = ["departamento", "ciudad", "barrio", "zona_turistica", "polo_industrial", "avenida"] as const;
+
+// Acota una coordenada del query a [min, max]. Vacío/no-numérico → undefined (sin bbox).
+// Evita el 400 cuando el mapa, en zoom-out extremo, manda bounds que dan la vuelta al mundo.
+function clampGeo(value: string | undefined, min: number, max: number): number | undefined {
+  if (value == null || value.trim() === "") return undefined;
+  const n = Number(value);
+  if (!Number.isFinite(n)) return undefined;
+  return Math.min(max, Math.max(min, n));
+}
 
 const geoFilterQueryFields = {
   source: z
@@ -153,6 +165,8 @@ const geoFilterQueryFields = {
       (value) => !value || value.every((entry) => LEAD_DENSITY_CONTACT_TIERS.includes(entry as (typeof LEAD_DENSITY_CONTACT_TIERS)[number])),
       { message: "contact_tier must be one of A, B, C, D or X" }
     ),
+  primary_offer: z.string().trim().min(1).optional(),
+  commercial_offer_type: z.enum(["marketing", "software", "both", "unknown"]).optional(),
   gps_source: z
     .union([z.string(), z.array(z.string())])
     .optional()
@@ -175,9 +189,32 @@ const geoFilterQueryFields = {
     .optional()
     .transform((value) => parseMultiValue(value)),
   zone: z.string().trim().min(1).max(120).optional(),
+  zoom: z
+    .string()
+    .optional()
+    .transform((value) => {
+      if (value == null || value.trim() === "") return undefined;
+      return Number(value);
+    })
+    .pipe(z.number().min(0).max(22).optional()),
+  // Un viewport de mapa con zoom-out extremo manda bounds fuera de rango (da la vuelta al
+  // mundo: west < -180, east > 180). No es un error del cliente: se ACOTAN al rango válido
+  // en vez de rechazar con 400. NaN / vacío → undefined (sin bbox).
+  south: z.string().optional().transform((value) => clampGeo(value, -90, 90)),
+  west: z.string().optional().transform((value) => clampGeo(value, -180, 180)),
+  north: z.string().optional().transform((value) => clampGeo(value, -90, 90)),
+  east: z.string().optional().transform((value) => clampGeo(value, -180, 180)),
+  heat_metric: z.enum(LEAD_DENSITY_HEAT_METRICS).optional(),
 } satisfies z.ZodRawShape;
 
-const leadDensityQuerySchema = recommendationsQuerySchema.extend(geoFilterQueryFields);
+const leadDensityQuerySchema = recommendationsQuerySchema.extend(geoFilterQueryFields).extend({
+  // Geocoding por request es costoso (bloquea la carga del mapa). Default off:
+  // el mapa carga rápido solo con GPS y reporta los leads sin coordenadas (deferred).
+  include_geocode: z
+    .enum(["true", "false"])
+    .optional()
+    .transform((v) => v === "true"),
+});
 
 const batchActionSchema = z.object({
   action: z.enum(["pause", "resume", "cancel"]),
@@ -252,6 +289,15 @@ function buildLocationKey(input: string): string {
     .replace(/^-+|-+$/g, "");
 }
 
+function asNullableNumber(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim() !== "") {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
 function asNumber(value: unknown): number {
   if (typeof value === "number" && Number.isFinite(value)) return value;
   if (typeof value === "string" && value.trim() !== "") {
@@ -259,6 +305,28 @@ function asNumber(value: unknown): number {
     return Number.isFinite(parsed) ? parsed : 0;
   }
   return 0;
+}
+
+function isValidMapPoint(point: { lat: number; lng: number } | null | undefined): point is { lat: number; lng: number } {
+  return Boolean(
+    point &&
+    Number.isFinite(point.lat) &&
+    Number.isFinite(point.lng) &&
+    point.lat >= -90 &&
+    point.lat <= 90 &&
+    point.lng >= -180 &&
+    point.lng <= 180 &&
+    point.lat !== 0 &&
+    point.lng !== 0
+  );
+}
+
+function gridCellForRequestedKey(point: { lat: number; lng: number }, gridLocationKey: string) {
+  const aggregationLevel = gridLocationKey.split(":", 1)[0];
+  if (aggregationLevel === "country") return buildGridCell(point, 0.45, "country");
+  if (aggregationLevel === "regional") return buildGridCell(point, 0.12, "regional");
+  if (aggregationLevel === "local") return buildGridCell(point, 0.04, "local");
+  return buildGridCell(point);
 }
 
 async function resolveZoneLocationMatch(
@@ -270,14 +338,20 @@ async function resolveZoneLocationMatch(
   if (parentLocationKey !== requestedParentLocationKey) return null;
 
   const rawCoordinate = getPrimaryCoordinate(lead);
-  const geocodedCoordinate = !rawCoordinate && typeof lead.address === "string" && lead.address.trim() !== ""
-    ? await leadGeocodingService.geocodeAddress(lead.address)
-    : null;
+  let geocodedCoordinate: { lat: number; lng: number } | null = null;
+  if (!rawCoordinate && typeof lead.address === "string" && lead.address.trim() !== "") {
+    try {
+      const point = await leadGeocodingService.geocodeAddress(lead.address);
+      geocodedCoordinate = isValidMapPoint(point) ? point : null;
+    } catch {
+      geocodedCoordinate = null;
+    }
+  }
   const coordinate = rawCoordinate ?? (geocodedCoordinate ? { ...geocodedCoordinate, source: "geocoded" as const } : null);
   if (!coordinate) return null;
   if (!requestedGridLocationKey) return { lat: coordinate.lat, lng: coordinate.lng };
 
-  return buildGridCell(coordinate).gridKey === requestedGridLocationKey ? { lat: coordinate.lat, lng: coordinate.lng } : null;
+  return gridCellForRequestedKey(coordinate, requestedGridLocationKey).gridKey === requestedGridLocationKey ? { lat: coordinate.lat, lng: coordinate.lng } : null;
 }
 function isDiscoveryBatchSchemaMissing(error: { code?: string; message?: string; details?: string; hint?: string } | null | undefined): boolean {
   if (!error) return false;
@@ -317,11 +391,20 @@ async function fetchGpsByLeadIds(db: ReturnType<typeof getDb>, leadIds: string[]
 
 async function loadLeadDensityRows(request: { log: FastifyInstance["log"] }) {
   const db = getDb();
-  const baseQuery = await db
-    .from("lead_dashboard")
-    .select("id, source, niche, address, prospect_score, contact_tier, corroborating_sources, created_at")
-    .order("created_at", { ascending: false })
-    .limit(5000);
+  // N55: paginado con range() — ver loadZoneLeadRows.
+  let baseQuery: { data: unknown[] | null; error: { message: string } | null };
+  try {
+    const rows = await fetchAllRows<Record<string, unknown>>((from, to) =>
+      db
+        .from("lead_dashboard")
+        .select("id, source, niche, address, prospect_score, contact_tier, primary_offer, corroborating_sources, created_at")
+        .order("created_at", { ascending: false })
+        .range(from, to)
+    );
+    baseQuery = { data: rows, error: null };
+  } catch (err) {
+    baseQuery = { data: null, error: { message: err instanceof Error ? err.message : String(err) } };
+  }
 
   if (baseQuery.error) {
     request.log.warn({ error: baseQuery.error }, "lead density fallback to legacy leads table");
@@ -337,7 +420,7 @@ async function loadLeadDensityRows(request: { log: FastifyInstance["log"] }) {
     }
 
     return {
-      data: (legacyQuery.data ?? []).map((lead) => ({ ...(lead as Record<string, unknown>), contact_tier: null })) as unknown as LeadInsightRow[],
+      data: (legacyQuery.data ?? []).map((lead) => ({ ...(lead as Record<string, unknown>), contact_tier: null, primary_offer: null, commercial_offers_summary: null })) as unknown as LeadInsightRow[],
       schemaFallback: true,
     };
   }
@@ -350,6 +433,7 @@ async function loadLeadDensityRows(request: { log: FastifyInstance["log"] }) {
     data: (baseQuery.data ?? []).map((lead) => ({
       ...(lead as Record<string, unknown>),
       gps: gpsById.get(String((lead as Record<string, unknown>).id)) ?? null,
+      commercial_offers_summary: null,
     })) as unknown as LeadInsightRow[],
     schemaFallback: false,
   };
@@ -381,19 +465,47 @@ type AdminGeoZoneOption = {
   last_seen_at: string | null;
 };
 
+// N59: loadZoneLeadRows mueve ~6 MB y lo llaman 4 rutas; los datos solo cambian con
+// corridas del pipeline → cache in-memory con TTL corto.
+const ZONE_LEADS_CACHE_TTL_MS = 5 * 60 * 1000;
+let _zoneLeadsCache: { at: number; rows: unknown[] } | null = null;
+
+export function invalidateZoneLeadsCache(): void {
+  _zoneLeadsCache = null;
+}
+
 async function loadZoneLeadRows(request: { log: FastifyInstance["log"] }) {
+  // En tests cada caso monta datos distintos — el cache cruzaría estados.
+  if (!process.env["VITEST"] && _zoneLeadsCache && Date.now() - _zoneLeadsCache.at < ZONE_LEADS_CACHE_TTL_MS) {
+    return _zoneLeadsCache.rows as Awaited<ReturnType<typeof loadZoneLeadRowsUncached>>;
+  }
+  const rows = await loadZoneLeadRowsUncached(request);
+  _zoneLeadsCache = { at: Date.now(), rows };
+  return rows;
+}
+
+async function loadZoneLeadRowsUncached(request: { log: FastifyInstance["log"] }) {
   const db = getDb();
-  const baseQuery = await db
-    .from("lead_dashboard")
-    .select("id, name, niche, contact_tier, prospect_score, address, source, corroborating_sources, created_at, website, phone, whatsapp, rating, review_count, primary_offer, pitch_hook, contact_ready, tags")
-    .order("created_at", { ascending: false })
-    .limit(5000);
+  // N55: paginado con range() — limit(5000) devolvía 1000 filas (max_rows de PostgREST).
+  let baseQuery: { data: unknown[] | null; error: { message: string } | null };
+  try {
+    const rows = await fetchAllRows<Record<string, unknown>>((from, to) =>
+      db
+        .from("lead_dashboard")
+        .select("id, name, niche, contact_tier, prospect_score, address, source, corroborating_sources, created_at, website, phone, whatsapp, rating, review_count, primary_offer, pitch_hook, contact_ready, tags, score_breakdown, digital_footprint")
+        .order("created_at", { ascending: false })
+        .range(from, to)
+    );
+    baseQuery = { data: rows, error: null };
+  } catch (err) {
+    baseQuery = { data: null, error: { message: err instanceof Error ? err.message : String(err) } };
+  }
 
   if (baseQuery.error) {
     request.log.warn({ error: baseQuery.error }, "zone-leads fallback to legacy leads table");
     const legacyQuery = await db
       .from("leads")
-      .select("id, name, niche, address, gps, source, corroborating_sources, created_at")
+      .select("id, name, niche, address, gps, source, corroborating_sources, created_at, website, phone, whatsapp, rating, review_count, tags, score_breakdown, digital_footprint")
       .order("created_at", { ascending: false })
       .limit(5000);
 
@@ -519,13 +631,19 @@ function resolveZoneIds(query: Pick<GeoFilterQueryData, "zone_id" | "zone_ids" |
 }
 
 function buildLeadDensityFiltersFromQuery(query: GeoFilterQueryData) {
+  const hasBounds = [query.south, query.west, query.north, query.east].every((value) => typeof value === "number" && Number.isFinite(value));
   return {
     filters: {
       sources: query.source,
       niche: query.niche ?? null,
       prospect_score_gte: query.prospect_score_gte ?? null,
       contact_tiers: query.contact_tier,
+      primary_offer: query.primary_offer ?? null,
+      commercial_offer_type: query.commercial_offer_type ?? null,
       gps_sources: query.gps_source as Array<"real" | "inferred" | "google"> | undefined,
+      ...(hasBounds ? { bbox: { south: query.south!, west: query.west!, north: query.north!, east: query.east! } } : {}),
+      ...(typeof query.zoom === "number" ? { zoom: query.zoom } : {}),
+      ...(query.heat_metric ? { heat_metric: query.heat_metric } : {}),
     },
     zoneIds: resolveZoneIds(query),
   };
@@ -1118,25 +1236,34 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
     }
 
     const db = getDb();
+    // N55: paginado con range() — los limit(2000/5000) volvían capados a 1000.
     const [catalogResult, jobsRes, leadsRes] = await Promise.allSettled([
       listDiscoveryPlaces({ limit: 2000 }),
-      db
-        .from("discovery_jobs")
-        .select("source, niche, location, created_at, completed_at, status, leads_found, leads_new, estimated_cost_usd")
-        .order("created_at", { ascending: false })
-        .limit(2000),
-      db
-        .from("lead_dashboard")
-        .select("id, niche, address, prospect_score, created_at")
-        .order("created_at", { ascending: false })
-        .limit(5000),
+      fetchAllRows<Record<string, unknown>>((from, to) =>
+        db
+          .from("discovery_jobs")
+          .select("source, niche, location, created_at, completed_at, status, leads_found, leads_new, estimated_cost_usd, actual_cost_usd")
+          .order("created_at", { ascending: false })
+          .range(from, to)
+      ),
+      fetchAllRows<Record<string, unknown>>((from, to) =>
+        db
+          .from("lead_dashboard")
+          .select("id, niche, address, prospect_score, created_at")
+          .order("created_at", { ascending: false })
+          .range(from, to)
+      ),
     ]);
 
-    const jobsSettled = jobsRes.status === "fulfilled" ? jobsRes.value : null;
-    const leadsSettled = leadsRes.status === "fulfilled" ? leadsRes.value : null;
+    // fetchAllRows ya valida errores (rechaza la promesa) — fulfilled = filas completas.
+    const jobsRows = jobsRes.status === "fulfilled" ? jobsRes.value : null;
+    const leadsRows = leadsRes.status === "fulfilled" ? leadsRes.value : null;
 
-    if (!jobsSettled || !leadsSettled || jobsSettled.error || leadsSettled.error) {
-      request.log.error({ jobs: jobsSettled?.error, leads: leadsSettled?.error }, "location suggestions history load error");
+    if (!jobsRows || !leadsRows) {
+      request.log.error(
+        { jobs: jobsRes.status === "rejected" ? String(jobsRes.reason) : null, leads: leadsRes.status === "rejected" ? String(leadsRes.reason) : null },
+        "location suggestions history load error"
+      );
       return reply.status(500).send({ error: "Database error", error_code: "db_error" });
     }
 
@@ -1164,8 +1291,8 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
 
     const data = buildLocationOpportunitySuggestions({
       catalog,
-      discoveryJobs: (jobsSettled.data ?? []) as OpportunityDiscoveryJob[],
-      leads: (leadsSettled.data ?? []) as OpportunityLead[],
+      discoveryJobs: jobsRows as unknown as OpportunityDiscoveryJob[],
+      leads: leadsRows as unknown as OpportunityLead[],
       filters: {
         departamento: parsedQuery.data.departamento ?? null,
         ciudad: parsedQuery.data.ciudad ?? null,
@@ -1203,9 +1330,9 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
       });
     }
 
-    let leads: LeadInsightRow[];
+    let leads: GeoZoneLeadRow[];
     try {
-      ({ data: leads } = await loadLeadDensityRows(request));
+      leads = await loadZoneLeadRows(request) as GeoZoneLeadRow[];
     } catch {
       return reply.status(500).send({ error: "Database error", error_code: "db_error" });
     }
@@ -1213,13 +1340,20 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
     const { filters: densityFilters, zoneIds } = buildLeadDensityFiltersFromQuery(parsedQuery.data);
     let density;
     try {
+      const includeGeocode = parsedQuery.data.include_geocode === true;
       density = await buildLeadDensitySnapshot(
         zoneIds && zoneIds.length > 0 ? leads.filter((lead) => matchesZoneIdsFilter(lead, zoneIds)) : leads,
         {
           locationFilter: parsedQuery.data.location ?? null,
           filters: densityFilters,
-          geocodeAddress: leadGeocodingService.geocodeAddress,
-          maxGeocodes: Math.min(160, Math.max(parsedQuery.data.limit * 8, 40)),
+          // Solo geocodificar en el request cuando se pide explícitamente (opt-in).
+          // Por defecto el mapa carga rápido con GPS y deja el resto como deferred.
+          ...(includeGeocode ? { geocodeAddress: leadGeocodingService.geocodeAddress } : {}),
+          maxGeocodes: !includeGeocode
+            ? 0
+            : typeof parsedQuery.data.zoom === "number" && parsedQuery.data.zoom >= 14
+              ? Math.min(240, Math.max(parsedQuery.data.limit * 10, 80))
+              : Math.min(160, Math.max(parsedQuery.data.limit * 8, 40)),
         }
       );
     } catch (err) {
@@ -1306,7 +1440,7 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
 
     let rows;
     try {
-      rows = await bulkInsertDiscoveryJobs(jobDefs, parsed.data.jobs.some((job) => job.predictive_context) ? "predictive_location" : "manual");
+      rows = await bulkInsertDiscoveryJobs(jobDefs, parsed.data.jobs.some((job) => job.predictive_context) ? "predictive_location" : "manual", getAuthUser(request).id);
     } catch (err) {
       request.log.error({ err }, "bulk discovery job insert failed");
       return reply.status(500).send({ error: "Database error", error_code: "db_error" });
@@ -1379,11 +1513,26 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
       if (!matchesLeadDensityFilters(lead, densityFilters, rawCoordinate)) continue;
       const mapPoint = await resolveZoneLocationMatch(lead, requestedParentLocationKey, requestedGridLocationKey);
       if (mapPoint) {
-        matching.push({ ...lead, map_point: mapPoint });
+        matching.push({
+          ...lead,
+          prospect_score: asNullableNumber(lead.prospect_score),
+          rating: asNullableNumber(lead.rating),
+          review_count: asNullableNumber(lead.review_count),
+          map_point: mapPoint,
+        });
       }
     }
 
-    const page = matching.slice(0, limit);
+    // Ofertas derivadas (barras + "por qué" en la card del mapa) SOLO para la página devuelta,
+    // no para todos los matching (evita O(n) de buildCommercialOfferings sobre el zone entero).
+    const page = matching.slice(0, limit).map((lead) => ({
+      ...lead,
+      commercial_offerings: buildCommercialOfferings(
+        Array.isArray(lead.tags) ? lead.tags : [],
+        lead.score_breakdown && typeof lead.score_breakdown === "object" ? (lead.score_breakdown as Record<string, unknown>) : null,
+        lead.digital_footprint && typeof lead.digital_footprint === "object" ? (lead.digital_footprint as Record<string, unknown>) : null
+      ),
+    }));
     return reply.status(200).send({ data: page, total: matching.length, has_more: matching.length > limit });
   });
 }

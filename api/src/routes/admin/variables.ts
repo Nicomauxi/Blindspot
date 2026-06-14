@@ -5,6 +5,10 @@ import { getAuthUser, requireAdmin } from "../../auth/middleware.js";
 
 type VarType = "boolean" | "number" | "string" | "string_array";
 
+// group: "pipeline" se edita en la sección Pipeline (no se lista en la UI de Variables);
+// "resources" es gobernanza de recursos sin otro lugar de edición.
+type VariableGroup = "resources" | "pipeline";
+
 type VariableDef = {
   key: string;
   label: string;
@@ -12,6 +16,7 @@ type VariableDef = {
   type: VarType;
   sensitive: boolean;
   nullable: boolean;
+  group: VariableGroup;
 };
 
 const VARIABLE_REGISTRY: VariableDef[] = [
@@ -22,6 +27,7 @@ const VARIABLE_REGISTRY: VariableDef[] = [
     type: "boolean",
     sensitive: false,
     nullable: false,
+    group: "pipeline",
   },
   {
     key: "cron_expression",
@@ -30,6 +36,7 @@ const VARIABLE_REGISTRY: VariableDef[] = [
     type: "string",
     sensitive: false,
     nullable: true,
+    group: "pipeline",
   },
   {
     key: "max_jobs",
@@ -38,6 +45,7 @@ const VARIABLE_REGISTRY: VariableDef[] = [
     type: "number",
     sensitive: false,
     nullable: false,
+    group: "pipeline",
   },
   {
     key: "google_places_budget_total",
@@ -46,6 +54,7 @@ const VARIABLE_REGISTRY: VariableDef[] = [
     type: "number",
     sensitive: false,
     nullable: false,
+    group: "pipeline",
   },
   {
     key: "google_places_alert_threshold",
@@ -54,6 +63,70 @@ const VARIABLE_REGISTRY: VariableDef[] = [
     type: "number",
     sensitive: false,
     nullable: false,
+    group: "pipeline",
+  },
+  {
+    key: "max_concurrent_runs",
+    label: "Runs simultáneos máximos",
+    description: "Cuántos runs puede correr el core a la vez (si los recursos lo permiten).",
+    type: "number",
+    sensitive: false,
+    nullable: false,
+    group: "resources",
+  },
+  {
+    key: "max_cpu_pct",
+    label: "CPU máximo del host (%)",
+    description: "El core no lanza un nuevo run si el CPU del host supera este porcentaje.",
+    type: "number",
+    sensitive: false,
+    nullable: false,
+    group: "resources",
+  },
+  {
+    key: "max_ram_pct",
+    label: "RAM máxima del host (%)",
+    description: "El core no lanza un nuevo run si la RAM usada del host supera este porcentaje.",
+    type: "number",
+    sensitive: false,
+    nullable: false,
+    group: "resources",
+  },
+  {
+    key: "max_enrich_threads",
+    label: "Hilos máximos de enrichment",
+    description: "Tope de concurrencia para los trabajos de enrichment.",
+    type: "number",
+    sensitive: false,
+    nullable: false,
+    group: "resources",
+  },
+  {
+    key: "fetch_timeout_ms",
+    label: "Timeout de fetch (ms)",
+    description: "Timeout por request HTTP del enrichment. Bajarlo acelera reprocesos (fail-fast en dominios muertos).",
+    type: "number",
+    sensitive: false,
+    nullable: false,
+    group: "resources",
+  },
+  {
+    key: "fetch_retries",
+    label: "Reintentos de fetch",
+    description: "Reintentos por request HTTP del enrichment. 0 = sin reintentos (más rápido).",
+    type: "number",
+    sensitive: false,
+    nullable: false,
+    group: "resources",
+  },
+  {
+    key: "enrich_heuristic_max_concurrency",
+    label: "Cap heurístico de concurrencia",
+    description: "Tope de hilos efectivos cuando el enrichment corre con heurística (muchos sub-requests por lead).",
+    type: "number",
+    sensitive: false,
+    nullable: false,
+    group: "resources",
   },
   {
     key: "webhook_url",
@@ -62,6 +135,7 @@ const VARIABLE_REGISTRY: VariableDef[] = [
     type: "string",
     sensitive: false,
     nullable: true,
+    group: "pipeline",
   },
   {
     key: "webhook_secret",
@@ -70,6 +144,7 @@ const VARIABLE_REGISTRY: VariableDef[] = [
     type: "string",
     sensitive: true,
     nullable: true,
+    group: "pipeline",
   },
   {
     key: "webhook_events",
@@ -78,6 +153,7 @@ const VARIABLE_REGISTRY: VariableDef[] = [
     type: "string_array",
     sensitive: false,
     nullable: false,
+    group: "pipeline",
   },
 ];
 
@@ -90,13 +166,20 @@ type PipelineConfigRow = {
   notify_webhook_url: string | null;
   notify_webhook_secret: string | null;
   notify_webhook_events: string[];
+  max_concurrent_runs: number;
+  max_cpu_pct: number;
+  max_ram_pct: number;
+  max_enrich_threads: number;
+  fetch_timeout_ms: number;
+  fetch_retries: number;
+  enrich_heuristic_max_concurrency: number;
 };
 
 type VariableValue = boolean | number | string | string[] | null;
 
 export type VariableItem = VariableDef & { value: VariableValue };
 
-const CONFIG_SELECT = "enabled, cron_expression, phases, google_places_budget_total, google_places_alert_threshold, notify_webhook_url, notify_webhook_secret, notify_webhook_events";
+const CONFIG_SELECT = "enabled, cron_expression, phases, google_places_budget_total, google_places_alert_threshold, notify_webhook_url, notify_webhook_secret, notify_webhook_events, max_concurrent_runs, max_cpu_pct, max_ram_pct, max_enrich_threads, fetch_timeout_ms, fetch_retries, enrich_heuristic_max_concurrency";
 
 function readMaxJobs(phases: Record<string, unknown> | null): number {
   const discovery = phases?.["discovery"] as Record<string, unknown> | undefined;
@@ -119,6 +202,13 @@ function buildVariableItems(row: PipelineConfigRow): VariableItem[] {
     webhook_url: row.notify_webhook_url,
     webhook_secret: row.notify_webhook_secret,
     webhook_events: row.notify_webhook_events ?? [],
+    max_concurrent_runs: row.max_concurrent_runs,
+    max_cpu_pct: row.max_cpu_pct,
+    max_ram_pct: row.max_ram_pct,
+    max_enrich_threads: row.max_enrich_threads,
+    fetch_timeout_ms: row.fetch_timeout_ms,
+    fetch_retries: row.fetch_retries,
+    enrich_heuristic_max_concurrency: row.enrich_heuristic_max_concurrency,
   };
   return VARIABLE_REGISTRY.map((def) => ({
     ...def,
@@ -134,6 +224,13 @@ const VALUE_VALIDATORS: Record<string, z.ZodTypeAny> = {
   max_jobs: z.number().int().min(1).max(50),
   google_places_budget_total: z.number().positive(),
   google_places_alert_threshold: z.number().nonnegative(),
+  max_concurrent_runs: z.number().int().min(1).max(8),
+  max_cpu_pct: z.number().int().min(10).max(100),
+  max_ram_pct: z.number().int().min(10).max(100),
+  max_enrich_threads: z.number().int().min(1).max(32),
+  fetch_timeout_ms: z.number().int().min(1000).max(15000),
+  fetch_retries: z.number().int().min(0).max(3),
+  enrich_heuristic_max_concurrency: z.number().int().min(1).max(32),
   webhook_url: z.string().url().nullable(),
   webhook_secret: z.string().min(8).nullable(),
   webhook_events: WEBHOOK_EVENTS_SCHEMA,
@@ -147,6 +244,13 @@ const DB_KEY_MAP: Record<string, string> = {
   webhook_url: "notify_webhook_url",
   webhook_secret: "notify_webhook_secret",
   webhook_events: "notify_webhook_events",
+  max_concurrent_runs: "max_concurrent_runs",
+  max_cpu_pct: "max_cpu_pct",
+  max_ram_pct: "max_ram_pct",
+  max_enrich_threads: "max_enrich_threads",
+  fetch_timeout_ms: "fetch_timeout_ms",
+  fetch_retries: "fetch_retries",
+  enrich_heuristic_max_concurrency: "enrich_heuristic_max_concurrency",
 };
 
 async function applyUpdate(

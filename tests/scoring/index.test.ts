@@ -29,24 +29,24 @@ afterEach(() => {
 });
 
 describe("scoreLead", () => {
-  it("profile A full enrichment → tier X colapsa a prospect=9 en scoring v2", () => {
+  it("profile A full enrichment → tier X, prospect=34 (v3, recalibrado v32)", () => {
     const result = scoreLead(profileA_full);
     expect(result.business_quality_score).toBe(50);
     expect(result.digital_gap_score).toBe(55);
-    expect(result.prospect_score).toBe(9);
+    expect(result.prospect_score).toBe(34);
     expect(result.score_breakdown.contact_tier).toBe("X");
     expect(result.score_breakdown.sub_scores.web_nuevo).toBe(35);
     expect(result.score_breakdown.sub_scores.primary_offer).toBe("web_nuevo");
   });
 
-  it("site_unreachable (no no-website tag) → dg=15 only, prospect=3 via rediseno en tier X", () => {
+  it("site_unreachable (no no-website tag) → dg=15 only, prospect=7 via rediseno en tier X", () => {
     // Invariant: enrichment returns skipped("no-website") before fetch attempt,
     // so site-unreachable cannot co-exist with no-website tag.
     // ssl-missing also cannot co-tag: fetch_error branch never sets footprint.ssl.
     const result = scoreLead(site_unreachable);
     expect(result.digital_gap_score).toBe(15);
     expect(result.business_quality_score).toBe(0);
-    expect(result.prospect_score).toBe(3);
+    expect(result.prospect_score).toBe(7);
     expect(result.score_breakdown.sub_scores.rediseno).toBe(15);
     expect(result.score_breakdown.sub_scores.primary_offer).toBe("rediseno");
   });
@@ -103,11 +103,14 @@ describe("scoreLead", () => {
     expect(result.prospect_score).toBe(0);
   });
 
-  it("prospect_score usa la fórmula v2 y mantiene floor en el producto final", () => {
+  it("email aislado suma score compuesto pero no alcanza tier A", () => {
     const lead = { ...empty_lead, tags: ["web-only-no-social"], canonical_fields: { email: "owner@example.com" } };
     const result = scoreLead(lead);
-    expect(result.score_breakdown.sub_scores.marketing).toBe(28);
-    expect(result.score_breakdown.contact_tier).toBe("A");
+    // N1.3: sub_scores ahora son los AJUSTADOS (los que deciden primary_offer); el crudo va en sub_scores_raw.
+    expect(result.score_breakdown.sub_scores.marketing).toBe(27);
+    expect(result.score_breakdown.sub_scores_raw?.marketing).toBe(28);
+    expect(result.score_breakdown.contact_score).toBe(30); // F3.4: email 45→30
+    expect(result.score_breakdown.contact_tier).toBe("C"); // 30 → tier C, no B
     expect(result.prospect_score).toBe(28);
   });
 
@@ -139,11 +142,11 @@ describe("scoreLead", () => {
     expect(ts).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
   });
 
-  it("floor not round: web-only-no-social + email no redondea hacia arriba", () => {
+  it("floor not round: el score compuesto sigue usando floor", () => {
     const lead = { ...empty_lead, tags: ["web-only-no-social"], canonical_fields: { email: "owner@example.com" } };
     const result = scoreLead(lead);
     expect(result.prospect_score).toBe(28);
-    expect(result.prospect_score).not.toBe(29);
+    expect(Number.isInteger(result.prospect_score)).toBe(true);
   });
 
   it("google_data fields absent → matched:false, no throw", () => {
@@ -157,11 +160,11 @@ describe("scoreLead", () => {
     expect(bqRuleNames).not.toContain("has_recent_reviews");
   });
 
-  it("profile A no_enrichment → mismo tier X y prospect=9 en scoring v2", () => {
+  it("profile A no_enrichment → tier X, prospect=32 (v3, recalibrado v32)", () => {
     const result = scoreLead(profileA_no_enrichment);
     expect(result.business_quality_score).toBe(43);
     expect(result.digital_gap_score).toBe(35);
-    expect(result.prospect_score).toBe(9);
+    expect(result.prospect_score).toBe(32);
   });
 
   it("clamps digital_gap to 0 after summing negative weights", () => {
@@ -209,12 +212,13 @@ describe("scoreLead", () => {
   });
 
   describe("days_in_pool timing adjustment", () => {
-    it("fresh lead (< 7 days) gets fresh_bonus in timing_factor", () => {
-      vi.setSystemTime(new Date("2026-04-21T00:00:00.000Z").getTime()); // 3 days after fixture date
+    it("fresh lead (< 7 days) → freshness_signal 'fresh' y days_in_pool=3 (v3)", () => {
+      // v3 expresa la frescura vía freshness_signal/timing_bonus, no el timing_factor de v2
+      // (que queda en 0). Ver buildScoreResultV3.
+      vi.setSystemTime(new Date("2026-04-21T00:00:00.000Z").getTime()); // 3 días después del fixture
       const result = scoreLead({ ...empty_lead, tags: ["no-website"] });
-      // fresh_bonus (+0.05) + new_business_window (+0.05) → timing_factor > 1
-      expect(result.score_breakdown.timing_factor).toBeGreaterThan(1);
       expect(result.score_breakdown.days_in_pool).toBe(3);
+      expect(result.score_breakdown.freshness_signal).toBe("fresh");
     });
 
     it("stale lead (> 90 days) gets stale_penalty in timing_factor when outside new_business_window", () => {

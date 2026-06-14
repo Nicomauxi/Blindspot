@@ -8,6 +8,8 @@ import type { PipelineConfig } from "./types.js";
 
 interface PhaseExecutionSummary {
   itemsProcessed: number;
+  /** N43: ítems que FALLARON dentro de la fase (la fase puede 'terminar' con 100% de fallos). */
+  failedItems?: number;
   note?: string;
 }
 
@@ -48,7 +50,8 @@ async function countRows(table: string, filters: Array<[string, unknown]> = []):
 
 export async function executeRefreshPhase(
   config: PipelineConfig["phases"]["refresh"],
-  isDryRun: boolean
+  isDryRun: boolean,
+  shouldStop?: () => boolean | Promise<boolean>
 ): Promise<PhaseExecutionSummary> {
   const plan = await buildRefreshPlan(config);
   const itemsProcessed = plan.staleRunIds.length + plan.staleExternalSources.length;
@@ -61,22 +64,27 @@ export async function executeRefreshPhase(
   }
 
   for (const runId of plan.staleRunIds) {
+    // FD-01: refresh dispara N enriches secuenciales; cortar entre cada uno ante abort.
+    if (shouldStop && (await shouldStop())) return { itemsProcessed, note: "aborted" };
     await enrichCommand({
       run: runId,
       forceRefresh: false,
       withHeuristic: true,
       concurrency: "5",
       all: false,
+      ...(shouldStop ? { shouldStop } : {}),
     });
   }
 
   for (const source of plan.staleExternalSources) {
+    if (shouldStop && (await shouldStop())) return { itemsProcessed, note: "aborted" };
     await enrichCommand({
       source,
       forceRefresh: false,
       withHeuristic: false,
       concurrency: "5",
       all: false,
+      ...(shouldStop ? { shouldStop } : {}),
     });
   }
 
@@ -93,15 +101,19 @@ export async function executeDiscoveryPhase(
   }
 
   const result = await processQueuedDiscoveryJobs(config.max_jobs);
+  // D5: los jobs fallidos deben degradar la fase (failureRatio), no reportarse como ok.
+  // itemsProcessed = solo exitosos (patrón de executeScorePhase: total = procesados + fallidos).
   return {
-    itemsProcessed: result.jobs_processed,
-    note: `leads_found=${result.leads_found}, leads_new=${result.leads_new}`,
+    itemsProcessed: result.jobs_processed - result.jobs_failed,
+    failedItems: result.jobs_failed,
+    note: `leads_found=${result.leads_found}, leads_new=${result.leads_new}, jobs_failed=${result.jobs_failed}`,
   };
 }
 
 export async function executeEnrichPhase(
   config: PipelineConfig["phases"]["enrich"],
-  isDryRun: boolean
+  isDryRun: boolean,
+  shouldStop?: () => boolean | Promise<boolean>
 ): Promise<PhaseExecutionSummary> {
   const itemsProcessed = await countRows("leads", [["passed_filter", true]]);
 
@@ -109,14 +121,20 @@ export async function executeEnrichPhase(
     return { itemsProcessed };
   }
 
-  await enrichCommand({
+  const result = await enrichCommand({
     all: true,
     forceRefresh: false,
     withHeuristic: config.with_heuristic,
     concurrency: String(config.concurrency),
+    ...(shouldStop ? { shouldStop } : {}),
   });
 
-  return { itemsProcessed };
+  // N43: items_processed = trabajo real (no el pre-count del pool).
+  return {
+    itemsProcessed: result.stats.leads_processed,
+    failedItems: result.stats.fetched_error + result.stats.whois_errors,
+    note: `fetched_ok=${result.stats.fetched_ok}, fetched_error=${result.stats.fetched_error}`,
+  };
 }
 
 export async function executeScorePhase(
@@ -129,10 +147,15 @@ export async function executeScorePhase(
     return { itemsProcessed };
   }
 
-  await scoreCommand({
+  const result = await scoreCommand({
     all: true,
     dryRun: false,
   });
 
-  return { itemsProcessed };
+  // N43: lo cargado que NO terminó scoreado cuenta como fallo de la fase.
+  return {
+    itemsProcessed: result.leads_scored,
+    failedItems: Math.max(0, result.leads_loaded - result.leads_scored),
+    note: `loaded=${result.leads_loaded}, scored=${result.leads_scored}`,
+  };
 }

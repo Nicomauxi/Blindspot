@@ -3,6 +3,22 @@ import { load } from "js-yaml";
 import { z } from "zod";
 import type { ScoringConfig } from "./types.js";
 
+// Fuentes que ingieren leads activamente y DEBEN tener bonus explícito en source_quality_bonus.
+// Sin la clave, computeSourceQualityBonus caía a `?? 0` silencioso (N-SCORE.3) — ahora es error
+// de parse. SoT en shared/discovery-sources.ts (derivado de scoreBonus); se re-exporta por compat.
+export { ACTIVE_SCORED_SOURCES } from "../../shared/discovery-sources.js";
+import { ACTIVE_SCORED_SOURCES } from "../../shared/discovery-sources.js";
+
+export function assertSourceCoverage(
+  bonus: Record<string, number | undefined>
+): Record<string, number | undefined> {
+  const missing = ACTIVE_SCORED_SOURCES.filter((s) => !(s in bonus));
+  if (missing.length > 0) {
+    throw new Error(`source_quality_bonus sin cobertura para fuentes activas: ${missing.join(", ")}`);
+  }
+  return bonus;
+}
+
 const FieldConditionSchema = z.object({
   field: z.string(),
   op: z.enum(["eq", "neq", "gte", "lte", "between"]),
@@ -79,6 +95,35 @@ const CommercialScoreSchema = z.object({
     reliability_adjustment: z.object({
       base: z.number().nonnegative(),
       weight: z.number().nonnegative(),
+    }),
+    score_adjustment: z.object({
+      base: z.number().nonnegative(),
+      weight: z.number().nonnegative(),
+    }),
+    contact_score: z.object({
+      weights: z.object({
+        email: z.number().nonnegative(),
+        extra_email: z.number().nonnegative(),
+        whatsapp_direct: z.number().nonnegative(),
+        whatsapp_derived: z.number().nonnegative(),
+        phone: z.number().nonnegative(),
+        phone_landline: z.number().nonnegative().optional(), // F3.3: fijo vale menos que móvil
+        phone_confirmed_bonus: z.number().nonnegative(),
+        address: z.number().nonnegative(),
+        website: z.number().nonnegative(),
+        contact_form: z.number().nonnegative(),
+        social_dm_channel: z.number().nonnegative(),
+        whatsapp_web_link: z.number().nonnegative(),
+        multi_channel_bonus: z.number().nonnegative(),
+        high_confidence_bonus: z.number().nonnegative(),
+      }),
+      thresholds: z.object({
+        A: z.number().nonnegative(),
+        B: z.number().nonnegative(),
+        C: z.number().nonnegative(),
+        D: z.number().nonnegative(),
+      }),
+      cap: z.number().positive(),
     }),
   }),
   timing: z.object({
@@ -195,6 +240,10 @@ export function getScoringConfig(): ScoringConfig {
   const yamlUrl = new URL("../../../config/scoring.yaml", import.meta.url);
   const yamlString = readFileSync(yamlUrl, "utf-8");
   cached = parseConfig(yamlString);
+  // Cobertura de fuentes activas se valida al cargar la config de producción (N-SCORE.3):
+  // un source sin bonus caería a `?? 0` silencioso. Los fixtures mínimos de tests no pasan
+  // por acá, así que no se ven afectados.
+  assertSourceCoverage(cached.commercial_score.source_quality_bonus);
   return cached;
 }
 

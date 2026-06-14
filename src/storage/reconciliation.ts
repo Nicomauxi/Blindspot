@@ -1,6 +1,8 @@
 import { getSupabase } from "../shared/supabase.js";
 import type { CorroboratingSource, DiscoveryCandidate, DiscoverySource, Lead } from "../shared/types.js";
 import { calculateContactReliability, calculateDataConfidence } from "../modules/scoring/confidence.js";
+import { parseLeadGps } from "../modules/discovery/geo-text.js";
+import { mergeCanonicalFields } from "./canonical-field.js";
 
 interface LeadSourceReferenceRow {
   lead_id: string;
@@ -21,155 +23,6 @@ interface LeadFieldEvidenceRow {
   last_seen: string | null;
 }
 
-interface CanonicalFieldValue {
-  value: string;
-  confidence: number;
-  sources: string[];
-  conflict: boolean;
-}
-
-function round2(value: number): number {
-  return Math.round((value + Number.EPSILON) * 100) / 100;
-}
-
-function canonicalFieldEntry(value: unknown): CanonicalFieldValue | null {
-  if (typeof value === "string") {
-    return {
-      value,
-      confidence: 0.5,
-      sources: [],
-      conflict: false,
-    };
-  }
-
-  if (value && typeof value === "object" && "value" in value && typeof value.value === "string") {
-    const field = value as {
-      value: string;
-      confidence?: number;
-      sources?: unknown[];
-      conflict?: boolean;
-    };
-    const sources = Array.isArray(field.sources)
-      ? field.sources.filter((source): source is string => typeof source === "string")
-      : [];
-
-    return {
-      value: field.value,
-      confidence: typeof field.confidence === "number" ? field.confidence : 0.5,
-      sources,
-      conflict: field.conflict === true,
-    };
-  }
-
-  return null;
-}
-
-function normalizeComparableValue(field: "phone" | "website" | "email", value: string): string {
-  const trimmed = value.trim();
-  if (field === "phone") return trimmed.replace(/\D/g, "");
-
-  if (field === "website") {
-    try {
-      const url = new URL(trimmed);
-      url.hash = "";
-      url.search = "";
-      url.hostname = url.hostname.toLowerCase().replace(/^www\./, "");
-      url.pathname = url.pathname.replace(/\/+$/, "");
-      return url.toString().replace(/\/$/, "");
-    } catch {
-      return trimmed.toLowerCase().replace(/\/+$/, "");
-    }
-  }
-
-  return trimmed.toLowerCase();
-}
-
-function buildCanonicalField(
-  lead: Lead,
-  field: "phone" | "website" | "email",
-  candidate: DiscoveryCandidate,
-  candidateValue: string | null
-): CanonicalFieldValue | null {
-  const existingField = canonicalFieldEntry(lead.canonical_fields?.[field]);
-  const existingValue =
-    existingField?.value ??
-    (field === "phone" ? lead.phone : field === "website" ? lead.website : null);
-
-  if (!existingValue && !candidateValue) return null;
-  if (!existingValue && candidateValue) {
-    return {
-      value: candidateValue,
-      confidence: round2(Math.min(0.95, candidate.source_confidence)),
-      sources: [candidate.source],
-      conflict: false,
-    };
-  }
-
-  if (!candidateValue && existingField) return existingField;
-  if (!candidateValue && existingValue) {
-    return {
-      value: existingValue,
-      confidence: round2(Math.min(0.95, lead.source_confidence ?? 0.5)),
-      sources: existingField?.sources.length ? existingField.sources : [lead.source],
-      conflict: existingField?.conflict ?? false,
-    };
-  }
-
-  const safeExistingValue = existingValue ?? "";
-  const safeCandidateValue = candidateValue ?? "";
-  const sameValue =
-    normalizeComparableValue(field, safeExistingValue) === normalizeComparableValue(field, safeCandidateValue);
-
-  if (sameValue) {
-    const sources = Array.from(new Set([
-      ...(existingField?.sources.length ? existingField.sources : [lead.source]),
-      candidate.source,
-    ]));
-
-    return {
-      value: safeExistingValue,
-      confidence: round2(
-        Math.min(0.95, (lead.source_confidence ?? 0.5) + ((sources.length - 1) * 0.15))
-      ),
-      sources,
-      conflict: false,
-    };
-  }
-
-  const existingConfidence = existingField?.confidence ?? (lead.source_confidence ?? 0.5);
-  const useCandidate = candidate.source_confidence > existingConfidence;
-  const winnerValue = useCandidate ? safeCandidateValue : safeExistingValue;
-  const winnerSources = useCandidate
-    ? [candidate.source]
-    : (existingField?.sources.length ? existingField.sources : [lead.source]);
-
-  return {
-    value: winnerValue,
-    confidence: round2(Math.min(0.95, Math.max(existingConfidence, candidate.source_confidence))),
-    sources: Array.from(new Set(winnerSources)),
-    conflict: true,
-  };
-}
-
-function mergeCanonicalFields(
-  lead: Lead,
-  candidate: DiscoveryCandidate
-): Record<string, unknown> | null {
-  const nextFields: Record<string, unknown> = {
-    ...((lead.canonical_fields ?? {}) as Record<string, unknown>),
-  };
-
-  const phone = buildCanonicalField(lead, "phone", candidate, candidate.phone);
-  const website = buildCanonicalField(lead, "website", candidate, candidate.website);
-  const email = buildCanonicalField(lead, "email", candidate, candidate.email);
-
-  if (phone) nextFields.phone = phone;
-  if (website) nextFields.website = website;
-  if (email) nextFields.email = email;
-
-  return Object.keys(nextFields).length > 0 ? nextFields : null;
-}
-
 function canonicalFieldValue(canonicalFields: Lead["canonical_fields"], field: "phone" | "website" | "email"): string | null {
   if (!canonicalFields || typeof canonicalFields !== "object") return null;
   const raw = canonicalFields[field];
@@ -177,43 +30,6 @@ function canonicalFieldValue(canonicalFields: Lead["canonical_fields"], field: "
   if (raw && typeof raw === "object" && "value" in raw && typeof raw.value === "string") {
     return raw.value;
   }
-  return null;
-}
-
-function parseLeadGps(gps: Lead["gps"]): { lat: number; lng: number } | null {
-  if (!gps) return null;
-
-  if (typeof gps === "string") {
-    const match = gps.match(/POINT\((-?\d+(?:\.\d+)?) (-?\d+(?:\.\d+)?)\)/);
-    if (match) {
-      return {
-        lng: Number(match[1]),
-        lat: Number(match[2]),
-      };
-    }
-  }
-
-  if (typeof gps === "object") {
-    const record = gps as Record<string, unknown>;
-    const coordinates = record["coordinates"];
-    if (
-      Array.isArray(coordinates) &&
-      coordinates.length >= 2 &&
-      typeof coordinates[0] === "number" &&
-      typeof coordinates[1] === "number"
-    ) {
-      return { lng: coordinates[0], lat: coordinates[1] };
-    }
-
-    if (typeof record["lat"] === "number" && typeof record["lng"] === "number") {
-      return { lat: record["lat"], lng: record["lng"] };
-    }
-
-    if (typeof record["latitude"] === "number" && typeof record["longitude"] === "number") {
-      return { lat: record["latitude"], lng: record["longitude"] };
-    }
-  }
-
   return null;
 }
 
@@ -304,7 +120,16 @@ function mergeFieldEvidenceRows(
     const key = `${row.field_name}::${row.value}`;
     const existing = merged.get(key);
     if (!existing) {
-      merged.set(key, { ...row, lead_id: primaryLeadId });
+      // Omitimos `id` (igual que en source refs): el upsert genera el uuid por default.
+      merged.set(key, {
+        lead_id: primaryLeadId,
+        field_name: row.field_name,
+        value: row.value,
+        sources: row.sources,
+        confidence: row.confidence,
+        first_seen: row.first_seen,
+        last_seen: row.last_seen,
+      });
       continue;
     }
 
@@ -401,13 +226,32 @@ export async function reconcileLeadIntoPrimary(
   const dataConfidenceScore = calculateDataConfidence(mergedLead);
   const contactReliabilityScore = calculateContactReliability(mergedLead);
 
-  const mergedSourceRefs = [
-    ...primaryRefs,
-    sourceReferenceFromLead(secondaryLead),
-    ...secondaryRefs,
-  ]
-    .filter((row) => row.source !== primaryLead.source)
-    .map((row) => ({ ...row, lead_id: primaryLeadId }));
+  // Se omite `id` deliberadamente: las filas sintéticas no lo tienen y, al hacer
+  // upsert, pasar `id: null` viola el NOT NULL (el default gen_random_uuid solo
+  // aplica cuando la columna se omite). El conflicto se resuelve por (lead_id, source).
+  // Dedup por source: el upsert resuelve conflictos por (lead_id, source), así que
+  // no puede recibir dos filas de la misma source en el mismo batch ("cannot affect
+  // row a second time"). Conservamos la de mayor confianza (y la más reciente).
+  const sourceRefByKey = new Map<string, LeadSourceReferenceRow>();
+  for (const row of [sourceReferenceFromLead(secondaryLead), ...secondaryRefs, ...primaryRefs]) {
+    if (row.source === primaryLead.source) continue;
+    const existing = sourceRefByKey.get(row.source);
+    if (
+      !existing ||
+      (row.source_confidence ?? 0) > (existing.source_confidence ?? 0) ||
+      ((row.source_confidence ?? 0) === (existing.source_confidence ?? 0) && row.seen_at > existing.seen_at)
+    ) {
+      sourceRefByKey.set(row.source, row);
+    }
+  }
+  const mergedSourceRefs = Array.from(sourceRefByKey.values()).map((row) => ({
+    lead_id: primaryLeadId,
+    source: row.source,
+    external_id: row.external_id,
+    source_confidence: row.source_confidence,
+    raw_data: row.raw_data,
+    seen_at: row.seen_at,
+  }));
 
   if (mergedSourceRefs.length > 0) {
     const { error } = await db
@@ -427,6 +271,16 @@ export async function reconcileLeadIntoPrimary(
     if (error) throw new Error(`lead_field_evidences upsert failed: ${error.message}`);
   }
 
+  // Transferir GPS del secundario al primario si éste no tenía coordenadas.
+  // Preserva la mejor señal de cruce cuando el primario es una fuente sin GPS
+  // (ej. mintur/yelu) que absorbe un secundario con coordenadas (ej. osm).
+  const primaryGps = parseLeadGps(primaryLead.gps);
+  const secondaryGps = parseLeadGps(secondaryLead.gps);
+  const gpsTransfer =
+    primaryGps == null && secondaryGps != null
+      ? { gps: `SRID=4326;POINT(${secondaryGps.lng} ${secondaryGps.lat})` }
+      : {};
+
   const { error: updateError } = await db
     .from("leads")
     .update({
@@ -435,10 +289,21 @@ export async function reconcileLeadIntoPrimary(
       canonical_source: canonicalSource,
       data_confidence_score: dataConfidenceScore,
       contact_reliability_score: contactReliabilityScore,
+      ...gpsTransfer,
       updated_at: new Date().toISOString(),
     })
     .eq("id", primaryLeadId);
   if (updateError) throw new Error(`primary lead update failed: ${updateError.message}`);
+
+  // N0.1 [N21, CRIT]: re-apuntar el caso CRM del secundario al primario ANTES de borrarlo.
+  // La FK lead_tracking_lead_id_fkey es ON DELETE CASCADE → el merge destruía el tracking
+  // (y su historial vía lead_tracking_events) del secundario. No hay unique(lead_id), así que
+  // re-apuntar no colisiona aunque el primario ya tenga su propio caso.
+  const { error: trackingError } = await db
+    .from("lead_tracking")
+    .update({ lead_id: primaryLeadId })
+    .eq("lead_id", secondaryLeadId);
+  if (trackingError) throw new Error(`lead_tracking re-point failed: ${trackingError.message}`);
 
   const { error: deleteError } = await db
     .from("leads")

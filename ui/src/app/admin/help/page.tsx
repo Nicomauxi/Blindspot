@@ -1,3 +1,4 @@
+import { HOT_LEAD_THRESHOLD } from "@/lib/hot-leads";
 import Link from "next/link";
 import { AdminPageLayout, HelpTip, SectionCard } from "@/components/admin-shell";
 
@@ -15,8 +16,8 @@ const modules = [
     text: "Concentra el seguimiento comercial vigente por etapas, owner y timeline de cada oportunidad.",
   },
   {
-    title: "Discovery",
-    text: "Controla cómo entran nuevos leads al sistema y cómo se preparan jobs, recomendaciones y refresh del inventario.",
+    title: "Operaciones · Discovery",
+    text: "Dentro de Operaciones: controla cómo entran nuevos leads al sistema y cómo se preparan jobs, recomendaciones y refresh del inventario.",
   },
   {
     title: "Operaciones y Plataforma",
@@ -26,7 +27,7 @@ const modules = [
 
 const glossary = [
   ["Prospect score", "Qué tan atractiva parece la oportunidad en una escala de 0 a 100 usando señales de valor, contacto y urgencia."],
-  ["Tier de contacto", "Calidad esperada del contacto. Tier A y B suelen ser los mejores puntos de partida para outreach."],
+  ["Tier de contacto", "Calidad esperada del contacto (≠ valor del lead). El valor comercial está en el prospect score y la brecha; el tier solo indica qué tan accionable es el contacto."],
   ["Contacto listo", "El lead tiene suficiente información de contacto útil para actuar sin investigación extra."],
   ["Urgencia", "Señal sintética de necesidad o dolor comercial. Sirve para ordenar el barrido, no como verdad absoluta."],
   ["Fuente canónica", "La fuente que el sistema toma como referencia principal cuando hay datos de múltiples orígenes."],
@@ -65,10 +66,10 @@ export default function HelpPage() {
           description="Combinaciones simples para admins que recién entran al panel."
         >
           <div className="space-y-3 text-sm text-slate-600">
-            <ShortcutRow href="/admin/leads?prospect_score_gte=70" label="Hot leads" text="Priorizar oportunidades con score alto." />
-            <ShortcutRow href="/admin/leads?contact_tier=A" label="Tier A" text="Trabajar contactos más fuertes primero." />
+            <ShortcutRow href={`/admin/leads?prospect_score_gte=${HOT_LEAD_THRESHOLD}`} label="Hot leads" text="Priorizar oportunidades con score alto." />
+            <ShortcutRow href="/admin/leads?contact_tier=A" label="Contacto A" text="Mejor calidad de contacto (no es ranking de valor)." />
             <ShortcutRow href="/admin/crm" label="CRM" text="Seguir etapas, notas, outcomes y ownership comercial." />
-            <ShortcutRow href="/admin/discovery" label="Discovery" text="Ver si están entrando leads nuevos o si hay jobs fallidos." />
+            <ShortcutRow href="/admin/operations" label="Operaciones · Discovery" text="Ver si están entrando leads nuevos o si hay jobs fallidos." />
           </div>
         </SectionCard>
       </div>

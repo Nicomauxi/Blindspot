@@ -92,13 +92,27 @@ export async function executeRun(run: PipelineRun): Promise<RunResult> {
   return finalizeRun(run.id, finalStatus, phaseResults);
 }
 
+/**
+ * FD-07: `pipeline_config.last_completed_at` debe avanzar SOLO cuando un run realmente
+ * ejecutó y terminó con datos refrescados (completed/partial) — NO en cada tick del cron
+ * (que antes lo adelantaba aunque el run se salteara por slots/error/crash, haciendo que
+ * el dashboard mostrara "último run OK" mientras los runs se saltaban en silencio).
+ */
+export function shouldRecordCompletion(
+  status: "completed" | "failed" | "partial" | "aborted"
+): boolean {
+  return status === "completed" || status === "partial";
+}
+
 async function finalizeRun(
   runId: string,
   status: "completed" | "failed" | "partial" | "aborted",
   phaseResults: PhaseResults
 ): Promise<RunResult> {
   const supabase = getSupabase();
-  await supabase
+  // N42: CAS running→terminal. Sin el guard, un executor zombie resucitaba runs ya
+  // marcados 'aborted' por crash-recovery escribiéndoles 'completed' encima.
+  const { data: finalized, error: finalizeError } = await supabase
     .from("pipeline_runs")
     .update({
       status,
@@ -107,7 +121,29 @@ async function finalizeRun(
       dashboard_stale: status !== "completed",
       invariant_details: phaseResults.invariant_check ?? null,
     })
-    .eq("id", runId);
+    .eq("id", runId)
+    .eq("status", "running")
+    .select("id");
+
+  if (finalizeError || !finalized || finalized.length === 0) {
+    logger.warn(
+      { runId, intendedStatus: status, error: finalizeError?.message ?? null },
+      "finalizeRun: el run ya no estaba 'running' (abortado/finalizado por otro proceso) — no se sobrescribe ni se notifica"
+    );
+    return { status: "aborted", phase_results: phaseResults };
+  }
+
+  // FD-07: marcar la última corrida realmente completada en pipeline_config (monitoreo),
+  // en vez de hacerlo en cada tick del cron aunque el run no se ejecute.
+  if (shouldRecordCompletion(status)) {
+    const { error: cfgError } = await supabase
+      .from("pipeline_config")
+      .update({ last_completed_at: new Date().toISOString() })
+      .eq("id", "singleton");
+    if (cfgError) {
+      logger.warn({ runId, error: cfgError.message }, "finalizeRun: no se pudo actualizar last_completed_at");
+    }
+  }
 
   await appendRunLog(runId, `Run finished with status=${status}`, status === "completed" ? "info" : "warn");
 
@@ -152,18 +188,37 @@ async function runPhase(
       throw new Error("Missing config_snapshot");
     }
 
+    // FD-01: predicado de abort throttled (una lectura DB cada ~3s, cacheada) para que
+    // las fases largas (enrich/refresh de ~3200 leads) dejen de tomar trabajo a mitad.
+    const shouldStop = makeAbortPredicate(runId);
+
     const summary = phase === "refresh"
-      ? await executeRefreshPhase(configSnapshot.phases.refresh, isDryRun)
+      ? await executeRefreshPhase(configSnapshot.phases.refresh, isDryRun, shouldStop)
       : phase === "discovery"
       ? await executeDiscoveryPhase(configSnapshot.phases.discovery, isDryRun)
       : phase === "enrich"
-      ? await executeEnrichPhase(configSnapshot.phases.enrich, isDryRun)
+      ? await executeEnrichPhase(configSnapshot.phases.enrich, isDryRun, shouldStop)
       : await executeScorePhase(configSnapshot.phases.score, isDryRun);
 
     if (summary.note) {
       await appendRunLog(runId, `Phase ${phase}: ${summary.note}`, "info");
     }
 
+    // N43: una fase con >5% de fallos no es 'ok' — antes las fases reportaban ok
+    // desacopladas del resultado real (run 55b3bcd9: 4 fases ok, 1317 sin score).
+    const failedItems = summary.failedItems ?? 0;
+    const totalItems = summary.itemsProcessed + failedItems;
+    const failureRatio = totalItems > 0 ? failedItems / totalItems : 0;
+    if (failureRatio > 0.05) {
+      await appendRunLog(runId, `Phase ${phase}: ${failedItems}/${totalItems} items failed`, "error");
+      return {
+        started_at: startedAt,
+        completed_at: new Date().toISOString(),
+        status: "failed",
+        items_processed: summary.itemsProcessed,
+        error: `failed_items=${failedItems}/${totalItems}`,
+      };
+    }
     return {
       started_at: startedAt,
       completed_at: new Date().toISOString(),
@@ -209,12 +264,31 @@ async function runInvariantCheck(runId: string, _isDryRun: boolean): Promise<Pha
     await appendRunLog(runId, `Invariant violated: ${passedSinScore} passed_filter leads without score`, "error");
   }
 
+  // N18/N37: re-validar el stock geo en cada run (el gate solo corre at-insert; sin esto
+  // cualquier endurecimiento futuro deja cohortes grandfathered indetectables). Solo
+  // warning — la limpieza es una decisión de datos, no un fallo del run.
+  let geoViolations: number | null = null;
+  try {
+    const { data: geoCount, error: geoError } = await supabase.rpc("count_pool_geo_violations");
+    if (!geoError && typeof geoCount === "number") {
+      geoViolations = geoCount;
+      if (geoCount > 0) {
+        await appendRunLog(runId, `Invariant warning: ${geoCount} pool leads with GPS outside Uruguay bbox`, "warn");
+      }
+    }
+  } catch {
+    // RPC ausente (migración no aplicada) → se omite el invariante geo.
+  }
+
   const result: PhaseResult = {
     started_at: startedAt,
     completed_at: new Date().toISOString(),
     status: passed ? "ok" : "failed",
   };
   if (!passed) result.error = `passed_sin_score=${passedSinScore}`;
+  if (geoViolations != null && geoViolations > 0) {
+    result.error = [result.error, `pool_geo_violations=${geoViolations}`].filter(Boolean).join("; ");
+  }
   return result;
 }
 
@@ -237,6 +311,24 @@ async function isAbortRequested(runId: string): Promise<boolean> {
   }
 
   return (data as { abort_requested?: boolean } | null)?.abort_requested === true;
+}
+
+/**
+ * FD-01: predicado de abort para pasar a los pools de fase. Throttlea la lectura DB
+ * (una vez cada `minIntervalMs`) y, una vez detectado el abort, lo recuerda (sticky) para
+ * que el corte sea inmediato y barato en el resto del lote.
+ */
+function makeAbortPredicate(runId: string, minIntervalMs = 3000): () => Promise<boolean> {
+  let lastCheck = 0;
+  let aborted = false;
+  return async () => {
+    if (aborted) return true;
+    const now = Date.now();
+    if (now - lastCheck < minIntervalMs) return false;
+    lastCheck = now;
+    aborted = await isAbortRequested(runId);
+    return aborted;
+  };
 }
 
 export async function transitionToPending(

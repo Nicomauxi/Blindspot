@@ -30,7 +30,8 @@ async function rebuildAll(
   minFraction: number
 ): Promise<void> {
   const log = getLogger();
-  const leads = await loadAllLeads();
+  // Ley 18.331: no usar nombres de personas físicas como corpus de vocabulario.
+  const leads = (await loadAllLeads()).filter((l) => !l.is_natural_person);
 
   const byNiche = new Map<string, Lead[]>();
   for (const lead of leads) {
@@ -61,7 +62,8 @@ async function rebuildForNiche(
     throw new Error("niche='all' is reserved for seeds and cannot be rebuilt via this command");
   }
   const log = getLogger();
-  const leads = await loadAllLeads();
+  // Ley 18.331: no usar nombres de personas físicas como corpus de vocabulario.
+  const leads = (await loadAllLeads()).filter((l) => !l.is_natural_person);
   const nicheLeads = leads.filter((l) => l.niche === niche);
 
   const wordCounts = computeNicheStopWords(nicheLeads, minCount, minFraction);

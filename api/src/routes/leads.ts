@@ -1,13 +1,18 @@
+import { getLogger } from "../../../src/shared/logger.js";
+import { passesLeadFilter } from "../services/lead-filter.js";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { getDb } from "../db/client.js";
 import { requireAuth, requireAdmin, getAuthUser, type AuthUser } from "../auth/middleware.js";
 import { createLLMProvider } from "../llm/factory.js";
+import { recordLlmUsage } from "../llm/usage-log.js";
 import { countLeadsByFilterSelection, type EnrichmentLeadFilterSelection } from "../../../src/storage/leads.js";
 import { expandNiche } from "../../../src/storage/niches.js";
 import { startFilterEnrichmentJob } from "../../../src/cli/commands/enrich.js";
 import { startReDiscoveryJob } from "../../../src/cli/commands/re-discover.js";
 import { summarizeFeedbackRows, computeFeedbackAdjustedConfidence } from "../../../src/modules/feedback/summary.js";
+import { loadSocialSnapshots } from "../../../src/storage/social-snapshots.js";
+import { deriveSocialMetrics } from "../../../src/modules/social-enrich/social-history.js";
 import {
   buildCommercialOfferings,
   buildCommercialOfferingsSummary,
@@ -33,6 +38,48 @@ const CONTACT_TIERS = ["A", "B", "C", "D", "X"] as const;
 type ContactTier = (typeof CONTACT_TIERS)[number];
 
 const FILTER_ENRICH_LIMIT = 250;
+// Tope de seguridad para scope=all (toda la colección filtrada) — evita encolar sin control.
+const FILTER_ENRICH_ALL_LIMIT = 10_000;
+const DEFAULT_MAX_ENRICH_THREADS = 4;
+
+// Acota la concurrencia pedida al tope configurado en Variables (max_enrich_threads).
+async function clampToMaxEnrichThreads(requested: number): Promise<number> {
+  try {
+    const { data } = await getDb()
+      .from("pipeline_config")
+      .select("max_enrich_threads")
+      .eq("id", "singleton")
+      .single();
+    const cap = typeof data?.max_enrich_threads === "number" ? data.max_enrich_threads : DEFAULT_MAX_ENRICH_THREADS;
+    return Math.max(1, Math.min(requested, cap));
+  } catch {
+    return Math.max(1, Math.min(requested, DEFAULT_MAX_ENRICH_THREADS));
+  }
+}
+
+// Settea en el env del proceso los knobs de velocidad configurados en Variables, para
+// que el job in-process los lea por llamada (http.ts getters / resolveEffectiveConcurrency).
+// Best-effort: si el config no responde, quedan el env actual o los defaults.
+async function applySpeedKnobsFromConfig(): Promise<void> {
+  try {
+    const { data } = await getDb()
+      .from("pipeline_config")
+      .select("fetch_timeout_ms, fetch_retries, enrich_heuristic_max_concurrency")
+      .eq("id", "singleton")
+      .single();
+    if (typeof data?.fetch_timeout_ms === "number") {
+      process.env["FETCH_TIMEOUT_MS"] = String(data.fetch_timeout_ms);
+    }
+    if (typeof data?.fetch_retries === "number") {
+      process.env["FETCH_RETRIES"] = String(data.fetch_retries);
+    }
+    if (typeof data?.enrich_heuristic_max_concurrency === "number") {
+      process.env["ENRICH_HEURISTIC_MAX_CONCURRENCY"] = String(data.enrich_heuristic_max_concurrency);
+    }
+  } catch {
+    /* mantiene env/defaults */
+  }
+}
 
 const enrichCollectionSchema = z.object({
   contact_tier: z.enum(CONTACT_TIERS).optional(),
@@ -50,13 +97,29 @@ const enrichCollectionSchema = z.object({
   mode: z.enum(["enrichment", "re_discovery"]).default("enrichment"),
   with_heuristic: z.boolean().default(true),
   concurrency: z.number().int().min(1).max(8).default(4),
+  // selection = comportamiento histórico (≤250); all = toda la colección filtrada (≤10.000).
+  scope: z.enum(["selection", "all"]).default("selection"),
+  // false = saltear frescos (resume); true = reprocesar todo.
+  force_refresh: z.boolean().default(false),
+  // Al completar el enrich, re-score encadenado sobre la misma colección.
+  rescore_on_complete: z.boolean().default(false),
 });
+
+const REJECTION_REASONS = ["no_pertenece_al_lead", "dato_desactualizado", "fuera_de_servicio", "otro"] as const;
 
 const leadFeedbackCreateSchema = z.object({
   field_key: z.string().trim().min(1).max(80),
   field_value: z.unknown().optional(),
   verdict: z.enum(["good", "bad"]),
   comment: z.string().trim().min(1).max(1000).optional(),
+  rejection_reason: z.enum(REJECTION_REASONS).optional(),
+  reassign_to_lead_id: z.string().uuid().optional(),
+});
+
+const favoriteContactsSchema = z.object({
+  favorite_contacts: z
+    .array(z.object({ kind: z.string().trim().min(1).max(40), value: z.string().trim().min(1).max(400) }))
+    .max(50),
 });
 
 const leadFeedbackListQuerySchema = z.object({
@@ -167,6 +230,26 @@ const listQuerySchema = z.object({
   niche: z.string().optional(),
   source: z.string().optional(),
   primary_offer: z.string().optional(),
+  // M3: filtrar pool vendible (offer != none) vs incompleto.
+  sellable: z
+    .enum(["true", "false"])
+    .optional()
+    .transform((v) => (v === undefined ? undefined : v === "true")),
+  // C1: filtrar el segmento caliente demanda-sin-web.
+  opportunity_no_web: z
+    .enum(["true", "false"])
+    .optional()
+    .transform((v) => (v === undefined ? undefined : v === "true")),
+  // Redes sociales: filtrar leads con perfil social REAL descubierto (FS-02: url IG, no solo tag).
+  has_social: z
+    .enum(["true", "false"])
+    .optional()
+    .transform((v) => (v === undefined ? undefined : v === "true")),
+  // FS-02: candidatos de discovery (tag ig-discovered) sin perfil resuelto aún.
+  has_social_candidate: z
+    .enum(["true", "false"])
+    .optional()
+    .transform((v) => (v === undefined ? undefined : v === "true")),
   commercial_offer_type: z.enum(["marketing", "software", "both", "unknown"]).optional(),
   q: z.string().optional(),
   location_key: z.string().trim().min(1).optional(),
@@ -302,10 +385,19 @@ function getLeadCommercialOfferings(lead: JsonRecord) {
 function getLeadCommercialSummary(lead: JsonRecord): CommercialOfferingsSummary {
   const existing = lead["commercial_offers_summary"];
   if (isRecord(existing)) {
+    const primary = (existing["primary_offer_type"] as CommercialOfferType | undefined) ?? "unknown";
+    const software = asNullableNumber(existing["software_score"]) ?? 0;
+    const marketing = asNullableNumber(existing["marketing_score"]) ?? 0;
+    // Salvaguarda: leads viejos pueden tener primary_offer_type no-unknown pero scores en 0
+    // (resumen persistido inconsistente). El filtro inclusivo por score los excluiría
+    // erróneamente; recalculamos desde la evidencia en ese caso.
+    if (primary !== "unknown" && software === 0 && marketing === 0) {
+      return buildCommercialOfferingsSummary(getLeadCommercialOfferings(lead));
+    }
     return {
-      primary_offer_type: (existing["primary_offer_type"] as CommercialOfferType | undefined) ?? "unknown",
-      software_score: asNullableNumber(existing["software_score"]) ?? 0,
-      marketing_score: asNullableNumber(existing["marketing_score"]) ?? 0,
+      primary_offer_type: primary,
+      software_score: software,
+      marketing_score: marketing,
       top_software_offer: asNullableString(existing["top_software_offer"]),
       top_marketing_offer: asNullableString(existing["top_marketing_offer"]),
       top_software_label: asNullableString(existing["top_software_label"]),
@@ -327,12 +419,33 @@ function getLeadSortMetric(lead: JsonRecord, sortBy: LeadSortBy): number | null 
   return null;
 }
 
+// Matching inclusivo por capacidad (no por etiqueta): filtrar por "marketing" debe incluir
+// a los leads de doble oferta (marketing+software). "both" exige ambas capacidades.
+export function commercialSummaryMatchesOffer(
+  summary: Pick<CommercialOfferingsSummary, "primary_offer_type" | "software_score" | "marketing_score">,
+  commercialOfferType: CommercialOfferType | undefined
+): boolean {
+  if (!commercialOfferType) return true;
+  switch (commercialOfferType) {
+    case "marketing":
+      return summary.marketing_score > 0;
+    case "software":
+      return summary.software_score > 0;
+    case "both":
+      return summary.marketing_score > 0 && summary.software_score > 0;
+    case "unknown":
+      return summary.primary_offer_type === "unknown";
+    default:
+      return false;
+  }
+}
+
 function matchesCommercialOfferType(
   lead: JsonRecord,
   commercialOfferType: CommercialOfferType | undefined
 ): boolean {
   if (!commercialOfferType) return true;
-  return getLeadCommercialSummary(lead).primary_offer_type === commercialOfferType;
+  return commercialSummaryMatchesOffer(getLeadCommercialSummary(lead), commercialOfferType);
 }
 
 function isDerivedCommercialSort(sortBy: LeadSortBy): boolean {
@@ -596,6 +709,36 @@ function scoreBreakdownValue(row: JsonRecord, key: string): string | null {
   if (direct) return direct;
   const breakdown = isRecord(row["score_breakdown"]) ? row["score_breakdown"] : null;
   return breakdown ? asNullableString(breakdown[key]) : null;
+}
+
+const OFFER_KEYS = ["web_nuevo", "rediseno", "marketing", "software", "catalogo", "contacto_directo"] as const;
+
+export interface SecondaryOfferResult {
+  secondary_offer: string | null;
+  secondary_offer_score: number | null;
+  offer_confidence: "high" | "medium" | "low" | null;
+}
+
+// C4: el primary_offer es un volado para el 61% del pool (2º a <5pts del 1º). Exponer
+// el 2º offer y una confianza basada en el gap permite al vendedor ver cuándo el offer
+// es claro y cuándo conviene ofrecer dos cosas.
+export function computeSecondaryOffer(subScores: Record<string, unknown> | null): SecondaryOfferResult {
+  const empty: SecondaryOfferResult = { secondary_offer: null, secondary_offer_score: null, offer_confidence: null };
+  if (!subScores) return empty;
+  const ranked = OFFER_KEYS
+    .map((k) => ({ offer: k, score: typeof subScores[k] === "number" ? (subScores[k] as number) : 0 }))
+    .filter((o) => o.score > 0)
+    .sort((a, b) => b.score - a.score);
+  if (ranked.length === 0) return empty;
+  const top = ranked[0]!;
+  const second = ranked[1] ?? null;
+  const gap = top.score - (second?.score ?? 0);
+  const confidence: SecondaryOfferResult["offer_confidence"] = gap >= 15 ? "high" : gap >= 6 ? "medium" : "low";
+  return {
+    secondary_offer: second?.offer ?? null,
+    secondary_offer_score: second?.score ?? null,
+    offer_confidence: confidence,
+  };
 }
 
 function asCorroboratingSources(value: unknown): CorroboratingSourceRecord[] {
@@ -940,6 +1083,36 @@ function normalizeLeadRow(row: JsonRecord): JsonRecord {
     canonical_fields: canonicalFields,
     search_vector: row["search_vector"] ?? null,
     sources_count: asNullableNumber(row["sources_count"]) ?? corroboratingSources.length,
+    // M3/D10: columnas derivadas de lead_dashboard para badges de UI.
+    sellable: asBooleanOrNull(row["sellable"]),
+    website_kind: asNullableString(row["website_kind"]),
+    // C1/B1: segmento "demanda sin web" + score demand-gap.
+    opportunity_no_web: asBooleanOrNull(row["opportunity_no_web"]),
+    demand_gap_score: asNullableNumber(row["demand_gap_score"]),
+    // Fase 0b: tamaño del negocio = valor de deal (eje ortogonal al score).
+    deal_value_tier: asNullableString(row["deal_value_tier"]),
+    // FS-07: ingreso mensual estimado crudo (para mostrar rango en UI).
+    deal_value_monthly_uyu: asNullableNumber(row["deal_value_monthly_uyu"]),
+    // FS-15: fuentes "reales" (sin signal-only como pedidosya) + primaria.
+    sources_count_real: asNullableNumber(row["sources_count_real"]),
+    // FS-13: email recomendado por calidad (de-prioriza rol/genérico). contact_email queda por compat.
+    best_contact_email: asNullableString(row["best_contact_email"]),
+    // Redes sociales para análisis (UI): presencia + métricas.
+    // FS-02: has_social ahora exige perfil IG real; has_social_candidate = solo tag de discovery.
+    has_social: asBooleanOrNull(row["has_social"]),
+    has_social_candidate: asBooleanOrNull(row["has_social_candidate"]),
+    // FS-19: plataforma con mejor presencia (instagram|facebook).
+    social_platform: asNullableString(row["social_platform"]),
+    social_instagram_url: asNullableString(row["social_instagram_url"]),
+    social_followers: asNullableNumber(row["social_followers"]),
+    social_audience_tier: asNullableString(row["social_audience_tier"]),
+    social_status: asNullableString(row["social_status"]),
+    // C4: 2º offer + confianza (gap top1-top2) para el 61% del pool donde el offer es un volado.
+    ...computeSecondaryOffer(
+      isRecord(row["score_breakdown"]) && isRecord(row["score_breakdown"]["sub_scores"])
+        ? (row["score_breakdown"]["sub_scores"] as Record<string, unknown>)
+        : null
+    ),
   };
 
   const fieldSources = buildFieldSources(normalized, canonicalFields, corroboratingSources);
@@ -955,6 +1128,29 @@ function normalizeLeadRow(row: JsonRecord): JsonRecord {
     commercial_offerings: commercialOfferings,
     commercial_offers_summary: buildCommercialOfferingsSummary(commercialOfferings),
   };
+}
+
+// N66: cache in-memory del brief LLM (clave lead_id:updated_at, TTL 24h, cap 500).
+const LEAD_BRIEF_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+const LEAD_BRIEF_CACHE_MAX = 500;
+const leadBriefCache = new Map<string, { at: number; value: unknown }>();
+
+function getCachedLeadBrief(key: string): unknown | null {
+  const entry = leadBriefCache.get(key);
+  if (!entry) return null;
+  if (Date.now() - entry.at > LEAD_BRIEF_CACHE_TTL_MS) {
+    leadBriefCache.delete(key);
+    return null;
+  }
+  return entry.value;
+}
+
+function setCachedLeadBrief(key: string, value: unknown): void {
+  if (leadBriefCache.size >= LEAD_BRIEF_CACHE_MAX) {
+    const oldest = leadBriefCache.keys().next().value;
+    if (oldest !== undefined) leadBriefCache.delete(oldest);
+  }
+  leadBriefCache.set(key, { at: Date.now(), value });
 }
 
 const ACTIVE_TRACKING_STATUSES = ["pending", "validation", "contact", "observed"] as const;
@@ -1003,9 +1199,19 @@ function redactContactContainer(value: unknown): unknown {
       key === "label" ||
       key === "role" ||
       key === "external_id" ||
-      key === "note"
+      key === "note" ||
+      // Metadatos de fusión canónica: no-PII (boolean / etiqueta de método).
+      key === "stale" ||
+      key === "method"
     ) {
       next[key] = entry;
+      continue;
+    }
+    // conflict_alternatives en un campo de contacto: cada alternativa lleva un `value`
+    // crudo (tel/email de la fuente perdedora) que DEBE redactarse para no-admin,
+    // preservando confidence/sources/source/method.
+    if (key === "conflict_alternatives" && Array.isArray(entry)) {
+      next[key] = entry.map((alt) => (isRecord(alt) ? { ...alt, value: redactContactValue(alt["value"]) } : alt));
       continue;
     }
     next[key] = isContactFieldKey(key) ? redactContactContainer(entry) : redactContactValue(entry);
@@ -1013,7 +1219,25 @@ function redactContactContainer(value: unknown): unknown {
   return next;
 }
 
+// N0.2: la redacción por NOMBRE de clave dejaba escapar PII embebida en strings bajo
+// claves no-contacto (last_change_diff.changes[].to, fetch_error, social_search.query,
+// attempted_url, final_url…). Complemento por VALOR: se enmascara cualquier email,
+// link de WhatsApp o teléfono UY dentro de cualquier string del subárbol.
+const EMAIL_IN_TEXT_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
+const WHATSAPP_LINK_RE = /(?:https?:\/\/)?(?:wa\.me|api\.whatsapp\.com|whatsapp\.com)\/[^\s"']*/gi;
+const UY_PHONE_IN_TEXT_RE = /\+?598[\s.()-]?\d(?:[\s.()-]?\d){6,}|\b09\d(?:[\s.-]?\d){6,7}\b/g;
+
+function maskContactPatternsInString(value: string): string {
+  return value
+    .replace(EMAIL_IN_TEXT_RE, "***")
+    .replace(WHATSAPP_LINK_RE, "***")
+    .replace(UY_PHONE_IN_TEXT_RE, "***");
+}
+
 function redactNestedContactData(value: unknown): unknown {
+  if (typeof value === "string") {
+    return maskContactPatternsInString(value);
+  }
   if (Array.isArray(value)) {
     return value.map((entry) => redactNestedContactData(entry));
   }
@@ -1036,6 +1260,9 @@ function redactContactFields(lead: JsonRecord): JsonRecord {
     phone:    lead["phone"]    != null ? "***" : null,
     whatsapp: lead["whatsapp"] != null ? "***" : null,
     email:    lead["email"]    != null ? "***" : null,
+    // N31: hay leads cuyo website es un email o un link wa.me — eso ES contacto.
+    website:
+      typeof lead["website"] === "string" ? maskContactPatternsInString(lead["website"]) : lead["website"],
     // Also redact field_sources so the UI doesn't leak values via evidence.
     field_sources: isRecord(lead["field_sources"])
       ? {
@@ -1055,12 +1282,18 @@ async function getCmActiveTrackedLeadIds(userId: string, leadIds: string[]): Pro
   if (leadIds.length === 0) return new Set();
 
   const db = getDb();
-  const { data } = await db
+  const { data, error } = await db
     .from("lead_tracking")
     .select("lead_id")
     .eq("owner_id", userId)
     .in("status", [...ACTIVE_TRACKING_STATUSES])
     .in("lead_id", leadIds);
+
+  // N114: el error se destructuraba al vacío — fallo silencioso. Set vacío = fail-closed
+  // (los contactos quedan redactados), pero ahora queda rastro.
+  if (error) {
+    getLogger().error({ err: error.message, userId }, "getCmActiveTrackedLeadIds query failed — contactos quedan redactados");
+  }
 
   return new Set(((data ?? []) as { lead_id: string }[]).map((r) => r.lead_id));
 }
@@ -1107,6 +1340,10 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
         niche,
         source,
         primary_offer,
+        sellable,
+        opportunity_no_web,
+        has_social,
+        has_social_candidate,
         commercial_offer_type,
         q,
         location_key,
@@ -1168,6 +1405,18 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
       }
       if (primary_offer) {
         query = query.eq("primary_offer", primary_offer);
+      }
+      if (sellable !== undefined) {
+        query = query.eq("sellable", sellable);
+      }
+      if (opportunity_no_web !== undefined) {
+        query = query.eq("opportunity_no_web", opportunity_no_web);
+      }
+      if (has_social !== undefined) {
+        query = query.eq("has_social", has_social);
+      }
+      if (has_social_candidate !== undefined) {
+        query = query.eq("has_social_candidate", has_social_candidate);
       }
       if (q) {
         query = query.textSearch("search_vector", q, { type: "plain", config: "spanish" });
@@ -1423,8 +1672,16 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
       const {
         contact_tier, prospect_score_gte, niche, source, primary_offer, q,
         missing_gps, missing_address, missing_phone, missing_whatsapp, missing_email, missing_website,
-        mode, with_heuristic, concurrency,
+        mode, with_heuristic, concurrency, scope, force_refresh, rescore_on_complete,
       } = parseResult.data;
+
+      // scope=all sólo aplica a enrichment (flujo gratis); re_discovery mantiene el tope chico.
+      if (scope === "all" && mode === "re_discovery") {
+        return reply.status(400).send({
+          error: "scope=all is not supported for re_discovery",
+          error_code: "scope_not_supported",
+        });
+      }
       const nicheExpanded = niche !== undefined ? await expandNiche(niche) : undefined;
       const filters: EnrichmentLeadFilterSelection = {
         ...(contact_tier !== undefined && { contact_tier }),
@@ -1457,25 +1714,36 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
         });
       }
 
-      if (leadCount > FILTER_ENRICH_LIMIT) {
+      const leadLimit = scope === "all" ? FILTER_ENRICH_ALL_LIMIT : FILTER_ENRICH_LIMIT;
+      if (leadCount > leadLimit) {
         return reply.status(400).send({
-          error: `Filtered collection exceeds ${FILTER_ENRICH_LIMIT} leads`,
+          error: `Filtered collection exceeds ${leadLimit} leads`,
           error_code: "lead_limit_exceeded",
-          details: { lead_count: leadCount, limit: FILTER_ENRICH_LIMIT },
+          details: { lead_count: leadCount, limit: leadLimit },
         });
       }
 
+      const effectiveConcurrency = await clampToMaxEnrichThreads(concurrency);
+
       if (mode === "re_discovery") {
-        const job = await startReDiscoveryJob({ filters, concurrency });
+        const job = await startReDiscoveryJob({ filters, concurrency: effectiveConcurrency });
         return reply.status(202).send({
-          data: { run_id: job.runId, lead_count: leadCount, filters, mode, concurrency },
+          data: { run_id: job.runId, lead_count: leadCount, filters, mode, concurrency: effectiveConcurrency },
         });
       }
+
+      await applySpeedKnobsFromConfig();
 
       const job = await startFilterEnrichmentJob({
         filters,
         withHeuristic: with_heuristic,
-        concurrency,
+        concurrency: effectiveConcurrency,
+        forceRefresh: force_refresh,
+        // El número elegido en la UI (ya clampado a max_enrich_threads) es el cap real
+        // del modo heurístico cuando el job corre in-process en la API.
+        heuristicConcurrency: effectiveConcurrency,
+        leadLimit,
+        rescoreOnComplete: rescore_on_complete,
       });
 
       return reply.status(202).send({
@@ -1485,7 +1753,10 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
           filters,
           mode,
           with_heuristic,
-          concurrency,
+          concurrency: effectiveConcurrency,
+          scope,
+          force_refresh,
+          rescore_on_complete,
         },
       });
     }
@@ -1538,6 +1809,37 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
     }
   );
 
+  // Histórico social: serie de seguidores + métricas derivadas (crecimiento, posts/mes, churn)
+  // por plataforma. Devuelve serie vacía si todavía no hay capturas acumuladas.
+  app.get(
+    "/leads/:id/social-history",
+    { preHandler: requireAuth },
+    async (request, reply) => {
+      const authUser = getAuthUser(request);
+      const { id } = request.params as { id: string };
+      if (!permissiveUuid.safeParse(id).success) {
+        return reply.status(404).send({ error: "Lead not found", error_code: "not_found" });
+      }
+      const lead = await loadAccessibleLeadForFeedback(authUser, id, false);
+      if (!lead) {
+        return reply.status(404).send({ error: "Lead not found", error_code: "not_found" });
+      }
+
+      try {
+        const byPlatform = await loadSocialSnapshots(id);
+        const nowIso = new Date().toISOString();
+        const platforms: Record<string, unknown> = {};
+        for (const [platform, snapshots] of Object.entries(byPlatform)) {
+          platforms[platform] = deriveSocialMetrics(snapshots, { nowIso });
+        }
+        return reply.status(200).send({ data: { lead_id: id, platforms }, meta: { platform_count: Object.keys(platforms).length } });
+      } catch (err) {
+        request.log.error({ err, leadId: id }, "social-history query error");
+        return reply.status(500).send({ error: "Database error", error_code: "db_error" });
+      }
+    }
+  );
+
   app.get(
     "/leads/:id/feedback-summary",
     { preHandler: requireAuth },
@@ -1575,6 +1877,10 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
         request.log.error({ error, leadId: id }, "lead feedback summary query error");
         return reply.status(500).send({ error: "Database error", error_code: "db_error" });
       }
+      // N104: si llegamos al cap, el resumen está truncado (faltan votos viejos).
+      if ((data ?? []).length === 1000) {
+        request.log.warn({ leadId: id }, "lead feedback summary truncated at 1000 rows");
+      }
 
       return reply.status(200).send({
         data: summarizeFeedbackRows((data ?? []) as Array<Record<string, unknown>>),
@@ -1611,6 +1917,9 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
       if (error) {
         request.log.error({ error, leadId: id }, "lead feedback adjusted confidence query error");
         return reply.status(500).send({ error: "Database error", error_code: "db_error" });
+      }
+      if ((data ?? []).length === 1000) {
+        request.log.warn({ leadId: id }, "lead feedback adjusted confidence truncated at 1000 rows");
       }
 
       const summary = summarizeFeedbackRows((data ?? []) as Array<Record<string, unknown>>);
@@ -1650,12 +1959,31 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
         return reply.status(404).send({ error: "Lead not found", error_code: "not_found" });
       }
 
+      // Reasignación: solo válida marcando "bad" + "no pertenece al lead", a un lead distinto que exista.
+      const reassignTo = parseResult.data.reassign_to_lead_id;
+      if (reassignTo) {
+        if (parseResult.data.verdict !== "bad" || parseResult.data.rejection_reason !== "no_pertenece_al_lead") {
+          return reply.status(400).send({ error: "Reassign requires verdict=bad and reason=no_pertenece_al_lead", error_code: "invalid_reassign" });
+        }
+        if (reassignTo === id) {
+          return reply.status(400).send({ error: "Cannot reassign to the same lead", error_code: "invalid_reassign_target" });
+        }
+        // Validar el destino respetando el RBAC del usuario (un CM no puede reasignar a
+        // leads fuera de su lead_filter — evita inferir existencia / apuntar fuera de scope).
+        const target = await loadAccessibleLeadForFeedback(authUser, reassignTo, false);
+        if (!target) {
+          return reply.status(400).send({ error: "Reassign target lead not found", error_code: "reassign_target_not_found" });
+        }
+      }
+
       const payload = {
         lead_id: id,
         field_key: parseResult.data.field_key,
         field_value: parseResult.data.field_value ?? null,
         verdict: parseResult.data.verdict,
         comment: parseResult.data.comment ?? null,
+        rejection_reason: parseResult.data.rejection_reason ?? null,
+        reassign_to_lead_id: reassignTo ?? null,
         actor_user_id: authUser.id,
         actor_role: authUser.role,
       };
@@ -1674,6 +2002,55 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
       });
 
       return reply.status(201).send({ data, lead_id: lead["id"] });
+    }
+  );
+
+  // Reemplazo total del array de contactos favoritos (idempotente por naturaleza).
+  app.patch(
+    "/leads/:id/favorite-contacts",
+    { preHandler: requireAuth },
+    async (request, reply) => {
+      const authUser = getAuthUser(request);
+      const { id } = request.params as { id: string };
+      if (!permissiveUuid.safeParse(id).success) {
+        return reply.status(404).send({ error: "Lead not found", error_code: "not_found" });
+      }
+      const parsed = favoriteContactsSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.status(400).send({ error: "Validation error", error_code: "validation_error", details: parsed.error.flatten().fieldErrors });
+      }
+      const lead = await loadAccessibleLeadForFeedback(authUser, id, false);
+      if (!lead) {
+        return reply.status(404).send({ error: "Lead not found", error_code: "not_found" });
+      }
+      // Un CM solo puede marcar favoritos en leads que está trabajando (con tracking activo),
+      // coherente con la redacción de contactos del detalle (no marca valores que no ve).
+      if (authUser.role === "cm") {
+        const { data: trackingRow } = await getDb()
+          .from("lead_tracking")
+          .select("id")
+          .eq("lead_id", id)
+          .eq("owner_id", authUser.id)
+          .in("status", [...ACTIVE_TRACKING_STATUSES])
+          .limit(1)
+          .maybeSingle();
+        if (!trackingRow) {
+          return reply.status(403).send({ error: "Lead sin seguimiento activo", error_code: "tracking_required" });
+        }
+      }
+      const markedAt = new Date().toISOString();
+      const favorites = parsed.data.favorite_contacts.map((c) => ({
+        kind: c.kind,
+        value: c.value,
+        marked_by: authUser.email ?? authUser.id,
+        marked_at: markedAt,
+      }));
+      const { error } = await getDb().from("leads").update({ favorite_contacts: favorites }).eq("id", id);
+      if (error) {
+        request.log.error({ error, leadId: id }, "favorite-contacts update error");
+        return reply.status(500).send({ error: "Database error", error_code: "db_error" });
+      }
+      return reply.status(200).send({ data: { lead_id: id, favorite_contacts: favorites } });
     }
   );
 
@@ -1746,6 +2123,13 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
         if (!trackingRow) {
           return reply.status(200).send({ data: redactContactFields(normalizedLead) });
         }
+      }
+
+      // favorite_contacts vive en la tabla leads (no en lead_dashboard): se adjunta aparte,
+      // solo para leads accesibles (después del gate de RBAC).
+      if (normalizedLead["favorite_contacts"] === undefined) {
+        const { data: favRow } = await db.from("leads").select("favorite_contacts").eq("id", id).maybeSingle();
+        normalizedLead["favorite_contacts"] = (favRow as { favorite_contacts?: unknown } | null)?.favorite_contacts ?? [];
       }
 
       return reply.status(200).send({ data: normalizedLead });
@@ -1859,6 +2243,15 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
         }
       }
 
+      // N66: cache server-side por lead+updated_at — cada apertura de ficha disparaba
+      // una llamada LLM billable nueva (50 fichas = 50 llamadas). Se invalida solo
+      // cuando el lead cambia (updated_at) o por TTL.
+      const briefCacheKey = `${id}:${String(normalizedLead["updated_at"] ?? "")}`;
+      const cached = getCachedLeadBrief(briefCacheKey);
+      if (cached) {
+        return reply.status(200).send({ data: cached, cached: true });
+      }
+
       const provider = createLLMProvider();
       const startedAt = Date.now();
       let result;
@@ -1920,8 +2313,9 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
             fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
           errorMessage = `primary:${primaryError}; fallback:${fallbackMessage}`;
           request.log.error({ fallbackErr }, "Template lead brief fallback error");
-          void Promise.resolve(
-            db.from("llm_usage_log").insert({
+          recordLlmUsage(
+            db,
+            {
               provider: provider.name,
               model: provider.model,
               operation: "lead_brief",
@@ -1934,12 +2328,9 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
               duration_ms: Date.now() - startedAt,
               success,
               error: errorMessage,
-            })
-          )
-            .then(({ error: logErr }) => {
-              if (logErr) request.log.warn({ logErr }, "llm_usage_log insert failed");
-            })
-            .catch((err: unknown) => request.log.warn({ err }, "audit log insert threw"));
+            },
+            request.log
+          );
           return reply.status(502).send({
             error: "Assistant brief unavailable",
             error_code: "assistant_unavailable",
@@ -1947,8 +2338,9 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
         }
       }
 
-      void Promise.resolve(
-        db.from("llm_usage_log").insert({
+      recordLlmUsage(
+        db,
+        {
           provider: result.provider ?? provider.name,
           model: result.model ?? provider.model,
           operation: "lead_brief",
@@ -1961,84 +2353,15 @@ export async function leadsRoutes(app: FastifyInstance): Promise<void> {
           duration_ms: Date.now() - startedAt,
           success,
           error: errorMessage,
-        })
-      )
-        .then(({ error: logErr }) => {
-          if (logErr) request.log.warn({ logErr }, "llm_usage_log insert failed");
-        })
-        .catch((err: unknown) => request.log.warn({ err }, "audit log insert threw"));
+        },
+        request.log
+      );
 
+      // Solo se cachea el resultado limpio — un fallback por error de Gemini debe
+      // poder reintentar con el provider real en la próxima vista.
+      if (errorMessage === null) setCachedLeadBrief(briefCacheKey, result);
       return reply.status(200).send({ data: result });
     }
   );
 }
 
-function passesLeadFilter(
-  lead: Record<string, unknown>,
-  filter: Record<string, unknown>
-): boolean {
-  const tierFilter = filter["contact_tier"];
-  if (Array.isArray(tierFilter) && tierFilter.length > 0) {
-    const leadTier = lead["contact_tier"] as string | undefined;
-    if (!leadTier || !tierFilter.includes(leadTier)) return false;
-  }
-
-  const primaryOffer = filter["primary_offer"];
-  if (typeof primaryOffer === "string" && primaryOffer) {
-    if (lead["primary_offer"] !== primaryOffer) return false;
-  } else if (Array.isArray(primaryOffer) && primaryOffer.length > 0) {
-    const leadOffer = lead["primary_offer"] as string | undefined;
-    if (!leadOffer || !primaryOffer.includes(leadOffer)) return false;
-  }
-
-  const nicheFilter = filter["niche"];
-  if (Array.isArray(nicheFilter) && nicheFilter.length > 0) {
-    const leadNiche = lead["niche"] as string | undefined;
-    if (!leadNiche || !nicheFilter.includes(leadNiche)) return false;
-  }
-
-  const sourceFilter = filter["source"];
-  if (Array.isArray(sourceFilter) && sourceFilter.length > 0) {
-    const leadSource = lead["source"] as string | undefined;
-    if (!leadSource || !sourceFilter.includes(leadSource)) return false;
-  }
-
-  if (filter["exclude_contacted"] === true && lead["contacted_at"] != null) {
-    return false;
-  }
-
-  if (
-    filter["exclude_franchises"] === true &&
-    Array.isArray(lead["tags"]) &&
-    (lead["tags"] as unknown[]).includes("franchise-detected")
-  ) {
-    return false;
-  }
-
-  const requireState = filter["require_inferred_state"];
-  if (isRecord(requireState)) {
-    const inferredState = isRecord(lead["inferred_state"]) ? lead["inferred_state"] : null;
-    const boolChecks = [
-      "has_delivery",
-      "has_pos",
-      "has_reservations",
-    ] as const;
-    for (const key of boolChecks) {
-      if (requireState[key] === true) {
-        const fieldValue = inferredState && isRecord(inferredState[key])
-          ? inferredState[key]["value"]
-          : null;
-        if (fieldValue !== true) return false;
-      }
-    }
-  }
-
-  const detectedSubNiche = filter["detected_sub_niche"];
-  if (Array.isArray(detectedSubNiche) && detectedSubNiche.length > 0) {
-    const companyData = isRecord(lead["lead_company_data"]) ? lead["lead_company_data"] : null;
-    const leadSubNiche = companyData ? asNullableString(companyData["detected_sub_niche"]) : null;
-    if (!leadSubNiche || !detectedSubNiche.includes(leadSubNiche)) return false;
-  }
-
-  return true;
-}

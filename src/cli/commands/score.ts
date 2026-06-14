@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { getLogger } from "../../shared/logger.js";
-import { loadLeadsByRunId, loadAllLeads, loadAllPassedLeads, updateLeadScore, upsertBuyerScores, tagDuplicates, tagFranchises } from "../../storage/leads.js";
+import { loadLeadsByRunId, loadAllLeads, loadAllPassedLeads, updateLeadScore, upsertBuyerScores, tagDuplicates, tagFranchises, propagateChainWebsites } from "../../storage/leads.js";
 import { loadRuntimeLists } from "../../storage/system-lists.js";
 import { createScoringRun, completeScoringRun, failRun, getRunById } from "../../storage/runs.js";
 import { scoreLead } from "../../modules/scoring/index.js";
@@ -38,7 +38,7 @@ interface RawScoreArgs {
   dryRun?: boolean;
 }
 
-function buildTopBottom(scored: Array<{ lead: Lead; prospectScore: number }>): {
+export function buildTopBottom(scored: Array<{ lead: Lead; prospectScore: number }>): {
   top_5: ProspectEntry[];
   bottom_5: ProspectEntry[];
 } {
@@ -91,7 +91,12 @@ async function scoreBuyerTypes(opts: { buyerType?: string; dryRun: boolean }): P
   log.info({ processed, dry_run: opts.dryRun }, "Buyer-type scoring complete");
 }
 
-export async function scoreCommand(rawArgs: RawScoreArgs): Promise<void> {
+export interface ScoreCommandResult {
+  leads_loaded: number;
+  leads_scored: number;
+}
+
+export async function scoreCommand(rawArgs: RawScoreArgs): Promise<ScoreCommandResult> {
   const log = getLogger();
 
   const parsed = ScoreArgsSchema.safeParse(rawArgs);
@@ -128,6 +133,8 @@ export async function scoreCommand(rawArgs: RawScoreArgs): Promise<void> {
 
   try {
     const scored: Array<{ lead: Lead; prospectScore: number }> = [];
+    let leadsLoaded = 0;
+    const warnings: string[] = [];
     const deliverySystemCostUyu = await getAdminServicePricing("delivery_system");
     const buyerScoreOpts = deliverySystemCostUyu != null ? { deliverySystemCostUyu } : {};
 
@@ -136,6 +143,7 @@ export async function scoreCommand(rawArgs: RawScoreArgs): Promise<void> {
         ? await loadAllLeads()
         : await loadLeadsByRunId(opts.run!);
 
+      leadsLoaded = leads.length;
       log.info({ total: leads.length }, "Loaded leads to score");
 
       for (let i = 0; i < leads.length; i++) {
@@ -174,9 +182,32 @@ export async function scoreCommand(rawArgs: RawScoreArgs): Promise<void> {
           ...lead,
           prospect_score: prospectScore,
         }));
-        await tagDuplicates(leadsWithScore);
-        const runtimeLists = await loadRuntimeLists();
-        await tagFranchises(leadsWithScore, runtimeLists.franchiseNames);
+
+        try {
+          await tagDuplicates(leadsWithScore);
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : String(err);
+          warnings.push(`duplicate_tagging: ${msg}`);
+          log.warn({ error: msg }, "Duplicate tagging failed after scoring; scores remain persisted");
+        }
+
+        try {
+          const runtimeLists = await loadRuntimeLists();
+          await tagFranchises(leadsWithScore, runtimeLists.franchiseNames);
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : String(err);
+          warnings.push(`franchise_tagging: ${msg}`);
+          log.warn({ error: msg }, "Franchise tagging failed after scoring; scores remain persisted");
+        }
+
+        try {
+          const propagated = await propagateChainWebsites(leadsWithScore);
+          if (propagated > 0) log.info({ propagated }, "Chain website propagation applied");
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : String(err);
+          warnings.push(`chain_website_propagation: ${msg}`);
+          log.warn({ error: msg }, "Chain website propagation failed after scoring; scores remain persisted");
+        }
       }
     }
 
@@ -196,6 +227,7 @@ export async function scoreCommand(rawArgs: RawScoreArgs): Promise<void> {
       duration_ms,
       top_5,
       bottom_5,
+      ...(warnings.length > 0 ? { warnings } : {}),
     };
 
     await completeScoringRun(scoringRun.id, stats);
@@ -208,6 +240,9 @@ export async function scoreCommand(rawArgs: RawScoreArgs): Promise<void> {
     if (top_5.length > 0) {
       log.info({ top_5 }, "Top prospects");
     }
+    // N43: devolver el trabajo REAL para que la fase score del pipeline pueda marcar
+    // partial/failed cuando lo procesado no coincide con lo cargado.
+    return { leads_loaded: leadsLoaded, leads_scored: scored.length };
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     await failRun(scoringRun.id, msg, Date.now() - startedAt);

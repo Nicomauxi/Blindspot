@@ -1,7 +1,9 @@
 import type { FastifyInstance } from "fastify";
+import { z } from "zod";
 import { getDb } from "../../db/client.js";
 import { requireAdmin } from "../../auth/middleware.js";
-import { buildMonitoringOverview } from "../../modules/monitoring/service.js";
+import { buildMonitoringOverview, listUnifiedRuns, UNIFIED_RUN_KINDS } from "../../modules/monitoring/service.js";
+import { buildResourceSnapshot } from "../../modules/monitoring/resources.js";
 
 const JOB_STATUSES = ["queued", "running", "completed", "failed"] as const;
 type JobStatus = typeof JOB_STATUSES[number];
@@ -13,6 +15,50 @@ export async function monitoringRoutes(app: FastifyInstance): Promise<void> {
       return reply.status(200).send({ data });
     } catch (err) {
       request.log.error({ err }, "Failed to build monitoring overview");
+      return reply.status(500).send({ error: "Database error", error_code: "db_error" });
+    }
+  });
+
+  app.get("/admin/monitoring/resources", { preHandler: requireAdmin }, async (request, reply) => {
+    try {
+      const data = await buildResourceSnapshot();
+      return reply.status(200).send({ data });
+    } catch (err) {
+      request.log.error({ err }, "Failed to build resource snapshot");
+      return reply.status(500).send({ error: "Resource snapshot error", error_code: "resources_error" });
+    }
+  });
+
+  // Lista unificada de runs (pipeline + enrichment/scoring/social + discovery), con
+  // filtro por tipo (?type=a,b) y límite. Incluye terminados — alimenta "Estado del run".
+  const runsQuerySchema = z.object({
+    type: z.string().trim().min(1).optional(),
+    limit: z.coerce.number().int().min(1).max(100).default(30),
+  });
+
+  app.get("/admin/monitoring/runs", { preHandler: requireAdmin }, async (request, reply) => {
+    const parsed = runsQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.status(400).send({
+        error: "Invalid query",
+        error_code: "invalid_query",
+        details: parsed.error.flatten().fieldErrors,
+      });
+    }
+    const types = parsed.data.type
+      ? parsed.data.type.split(",").map((t) => t.trim()).filter((t) => t.length > 0)
+      : undefined;
+    if (types && types.some((t) => !(UNIFIED_RUN_KINDS as readonly string[]).includes(t))) {
+      return reply.status(400).send({
+        error: `Unknown run type. Valid: ${UNIFIED_RUN_KINDS.join(", ")}`,
+        error_code: "invalid_run_type",
+      });
+    }
+    try {
+      const data = await listUnifiedRuns({ ...(types ? { types } : {}), limit: parsed.data.limit });
+      return reply.status(200).send({ data });
+    } catch (err) {
+      request.log.error({ err }, "Failed to list unified runs");
       return reply.status(500).send({ error: "Database error", error_code: "db_error" });
     }
   });

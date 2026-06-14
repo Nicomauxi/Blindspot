@@ -80,8 +80,26 @@ function leadToCsvRow(lead: Lead): CsvRow {
   };
 }
 
+// N100: los valores vienen de listados scrapeados (el atacante controla el nombre de
+// su propio negocio). Una celda que empieza con =, +, -, @ o TAB se evalúa como
+// fórmula en Excel/Sheets (papaparse NO la neutraliza) → prefijo apóstrofo, la
+// convención estándar para forzar texto plano.
+const FORMULA_PREFIX_RE = /^[=+\-@\t\r]/;
+
+function neutralizeFormula(value: string): string {
+  return FORMULA_PREFIX_RE.test(value) ? `'${value}` : value;
+}
+
+function neutralizeRow(row: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(row)) {
+    out[key] = neutralizeFormula(value);
+  }
+  return out;
+}
+
 export function generateCsv(leads: Lead[]): string {
-  const rows = leads.map(leadToCsvRow);
+  const rows = leads.map((lead) => neutralizeRow(leadToCsvRow(lead)));
   const csv = Papa.unparse({ fields: [...CSV_COLUMNS], data: rows }, { quotes: true, newline: "\r\n" });
   // UTF-8 BOM prefix for Excel compatibility
   return "﻿" + csv;

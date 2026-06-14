@@ -57,6 +57,24 @@ export const pipelineCommand = new Command("pipeline")
       process.exit(1);
     }
 
+    // N42: claim atómico pending→running (mismo CAS que el scheduler). Sin esto, el poll
+    // del scheduler embebido podía claimear el run en la ventana post-insert y AMBOS
+    // procesos ejecutaban las 4 fases sobre el mismo run.
+    const { data: claimed, error: claimError } = await supabase
+      .from("pipeline_runs")
+      .update({ status: "running", started_at: new Date().toISOString() })
+      .eq("id", runId)
+      .eq("status", "pending")
+      .select("id");
+
+    if (claimError || !claimed || claimed.length === 0) {
+      logger.error(
+        { runId, error: claimError?.message ?? null },
+        "El run ya fue claimeado por otro proceso (scheduler embebido) — no se ejecuta dos veces"
+      );
+      process.exit(1);
+    }
+
     const result = await executeRun(runData as PipelineRun);
 
     if (result.status === "completed") {

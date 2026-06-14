@@ -144,15 +144,15 @@ export default function CostsPage() {
             <>
               <div className="space-y-1">
                 <div className="flex justify-between text-xs text-gray-500">
-                  <span>Gastado: ${gp.budget_spent.toFixed(2)}</span>
-                  <span>Total: ${gp.budget_total.toFixed(2)}</span>
+                  <span>Gastado: ${(gp.budget_spent ?? 0).toFixed(2)}</span>
+                  <span>Total: ${(gp.budget_total ?? 0).toFixed(2)}</span>
                 </div>
                 <BudgetBar spent={gp.budget_spent} total={gp.budget_total} threshold={gp.alert_threshold} />
                 <div className="flex justify-between text-xs">
                   <span className={cn("font-medium", gp.over_alert ? "text-red-600" : "text-green-700")}>
-                    Restante: ${gp.budget_remaining.toFixed(2)}
+                    Restante: ${(gp.budget_remaining ?? 0).toFixed(2)}
                   </span>
-                  <span className="text-gray-400">Alerta en: ${gp.alert_threshold.toFixed(2)} · {gp.request_count} requests</span>
+                  <span className="text-gray-400">Alerta en: ${(gp.alert_threshold ?? 0).toFixed(2)} · {gp.request_count} requests</span>
                 </div>
               </div>
               {gp.over_alert && (

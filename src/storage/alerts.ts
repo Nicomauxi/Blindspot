@@ -73,41 +73,24 @@ export async function listAlerts(
 
   const archiveCutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
 
-  const broadcastQ = db
+  // N87: una sola query con OR + range — el merge en memoria de dos subqueries
+  // limitadas rompía la paginación (offset=20 con dos limit(20) dejaba alertas
+  // inalcanzables o duplicadas entre páginas).
+  let query = db
     .from("system_alerts")
     .select("*")
-    .is("target_user_id", null)
+    .or(`target_user_id.is.null,target_user_id.eq.${userId}`)
     .neq("status", "archived")
     .gte("created_at", archiveCutoff)
-    .order("created_at", { ascending: false })
-    .limit(limit);
-
-  const targetedQ = db
-    .from("system_alerts")
-    .select("*")
-    .eq("target_user_id", userId)
-    .neq("status", "archived")
-    .gte("created_at", archiveCutoff)
-    .order("created_at", { ascending: false })
-    .limit(limit);
+    .order("created_at", { ascending: false });
 
   if (params.status) {
-    broadcastQ.eq("status", params.status);
-    targetedQ.eq("status", params.status);
+    query = query.eq("status", params.status);
   }
 
-  const [broadcastRes, targetedRes] = await Promise.all([broadcastQ, targetedQ]);
-
-  if (broadcastRes.error) throw new Error(`listAlerts broadcast failed: ${broadcastRes.error.message}`);
-  if (targetedRes.error) throw new Error(`listAlerts targeted failed: ${targetedRes.error.message}`);
-
-  const combined = [
-    ...(broadcastRes.data ?? []) as SystemAlert[],
-    ...(targetedRes.data ?? []) as SystemAlert[],
-  ];
-
-  combined.sort((a, b) => b.created_at.localeCompare(a.created_at));
-  return combined.slice(offset, offset + limit);
+  const { data, error } = await query.range(offset, offset + limit - 1);
+  if (error) throw new Error(`listAlerts failed: ${error.message}`);
+  return (data ?? []) as SystemAlert[];
 }
 
 export async function getUnreadCount(userId: string): Promise<number> {
@@ -130,20 +113,25 @@ export async function getUnreadCount(userId: string): Promise<number> {
 
 export async function markAlertRead(alertId: string, userId: string): Promise<void> {
   const db = getSupabase();
+  // N93: solo alertas propias o broadcast — sin el filtro, un cm podía marcar/archivar
+  // alertas dirigidas a OTRO usuario adivinando IDs.
   const { error } = await db
     .from("system_alerts")
     .update({ status: "read", read_at: new Date().toISOString(), read_by: userId })
     .eq("id", alertId)
-    .eq("status", "pending");
+    .eq("status", "pending")
+    .or(`target_user_id.eq.${userId},target_user_id.is.null`);
   if (error) throw new Error(`markAlertRead failed: ${error.message}`);
 }
 
-export async function archiveAlert(alertId: string, _userId: string): Promise<void> {
+export async function archiveAlert(alertId: string, userId: string): Promise<void> {
   const db = getSupabase();
+  // N93: ídem markAlertRead — propiedad o broadcast.
   const { error } = await db
     .from("system_alerts")
     .update({ status: "archived" })
     .eq("id", alertId)
+    .or(`target_user_id.eq.${userId},target_user_id.is.null`)
     .neq("status", "archived");
   if (error) throw new Error(`archiveAlert failed: ${error.message}`);
 }

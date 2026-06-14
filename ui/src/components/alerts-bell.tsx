@@ -57,22 +57,32 @@ export function AlertsBell() {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [open]);
 
+  // N96: si la mutación falla (red/403/500) la alerta NO se quita ni baja el badge —
+  // antes el catch vacío dejaba el estado local mintiendo hasta el próximo reload.
   async function handleMarkRead(id: string) {
     if (!token) return;
-    await markAlertRead(token, id).catch(() => undefined);
-    setAlerts((prev) => prev.filter((a) => a.id !== id));
-    setCount((c) => Math.max(0, c - 1));
+    try {
+      await markAlertRead(token, id);
+      setAlerts((prev) => prev.filter((a) => a.id !== id));
+      setCount((c) => Math.max(0, c - 1));
+    } catch {
+      // la alerta sigue visible; el próximo poll de count re-sincroniza
+    }
   }
 
   async function handleArchive(id: string) {
     if (!token) return;
-    await archiveAlert(token, id).catch(() => undefined);
-    setAlerts((prev) => prev.filter((a) => a.id !== id));
-    setCount((c) => Math.max(0, c - 1));
+    try {
+      await archiveAlert(token, id);
+      setAlerts((prev) => prev.filter((a) => a.id !== id));
+      setCount((c) => Math.max(0, c - 1));
+    } catch {
+      // ídem handleMarkRead
+    }
   }
 
   return (
-    <div className="relative" ref={ref}>
+    <div className="relative z-30" ref={ref}>
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
@@ -90,7 +100,7 @@ export function AlertsBell() {
       </button>
 
       {open ? (
-        <div className="absolute right-0 top-full z-50 mt-2 w-80 rounded-2xl border border-slate-200 bg-white shadow-lg">
+        <div className="absolute right-0 top-full z-[70] mt-2 w-80 rounded-2xl border border-slate-200 bg-white shadow-2xl">
           <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100">
             <span className="text-sm font-semibold text-slate-800">Alertas pendientes</span>
             <span className="text-xs text-slate-400">{count} sin leer</span>

@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { Lead } from "../../src/shared/types.js";
 import { buildScoreEvalReport } from "../../src/modules/scoring/eval.js";
+import { buildScoreResultV3 } from "../../src/modules/scoring/v3.js";
+import { getScoringCalibrationConfig } from "../../src/modules/scoring/calibration-config.js";
 
 function makeLead(overrides: Partial<Lead> = {}): Lead {
   return {
@@ -73,7 +75,51 @@ function makeLead(overrides: Partial<Lead> = {}): Lead {
   };
 }
 
+function resolveActiveScenario() {
+  const calibration = getScoringCalibrationConfig();
+  const scenario = calibration.scenarios[calibration.default_scenario];
+  if (!scenario) throw new Error(`Missing scenario: ${calibration.default_scenario}`);
+  return { scenario, thresholds: scenario.preview_thresholds };
+}
+
 describe("buildScoreEvalReport", () => {
+  it("scores the candidate column with the production v3 model (FS-12a)", () => {
+    const { scenario, thresholds } = resolveActiveScenario();
+    const leads = [
+      makeLead({ id: "a", place_id: "pa", name: "Alpha", tags: ["no-website", "high-reviews-no-web"] }),
+      makeLead({ id: "b", place_id: "pb", name: "Bravo", source: "mintur", niche: "other", phone: "+59899111222", tags: [] }),
+    ];
+
+    const report = buildScoreEvalReport(leads, { topCount: 10, goldSetSize: 10, generatedAt: "2026-05-18T00:00:00.000Z" });
+
+    for (const lead of leads) {
+      const expected = buildScoreResultV3(lead, scenario, thresholds);
+      const row = report.comparisons.find((r) => r.leadId === lead.id);
+      expect(row?.v3Score).toBe(expected.prospect_score);
+    }
+  });
+
+  it("FS-22: digital_gap_weight es inerte en 0 y aditivo cuando es > 0", () => {
+    const { scenario, thresholds } = resolveActiveScenario();
+    const lead = makeLead({ id: "dg", place_id: "pdg", name: "Gap", tags: ["no-website", "high-reviews-no-web"] });
+    const inert = buildScoreResultV3(lead, { ...scenario, digital_gap_weight: 0 }, thresholds);
+    const weighted = buildScoreResultV3(lead, { ...scenario, digital_gap_weight: 0.15 }, thresholds);
+    expect(inert.score_breakdown?.digital_gap_bonus ?? 0).toBe(0);
+    expect(weighted.score_breakdown?.digital_gap_bonus ?? 0).toBeGreaterThan(0);
+    expect(weighted.prospect_score).toBeGreaterThanOrEqual(inert.prospect_score);
+  });
+
+  it("FS-22: el escenario activo mantiene digital_gap_weight en 0 (Camino B — no inflar prod)", () => {
+    const { scenario } = resolveActiveScenario();
+    expect(scenario.digital_gap_weight ?? 0).toBe(0);
+  });
+
+  it("derives the hot threshold from the active scenario, not a hardcoded 55 (FS-12a)", () => {
+    const { thresholds } = resolveActiveScenario();
+    // Active scenario hybrid_bounded_v32_candidate uses very_good_min=58, not 55.
+    expect(thresholds.very_good_min).toBe(58);
+  });
+
   it("forces tier X leads out of the hot bucket", () => {
     const lead = makeLead({
       tags: ["no-website", "high-reviews-no-web", "pixel-missing", "analytics-missing"],
@@ -87,8 +133,9 @@ describe("buildScoreEvalReport", () => {
     const report = buildScoreEvalReport([lead], { topCount: 10, goldSetSize: 10, generatedAt: "2026-05-18T00:00:00.000Z" });
 
     expect(report.criteria.tierXHot.count).toBe(0);
-    expect(report.comparisons[0]?.v2ContactTier).toBe("X");
-    expect(report.comparisons[0]?.v2Score).toBeLessThan(55);
+    expect(report.comparisons[0]?.v3ContactTier).toBe("X");
+    const { thresholds } = resolveActiveScenario();
+    expect(report.comparisons[0]?.v3Score).toBeLessThan(thresholds.very_good_min);
   });
 
   it("penalizes franchises and activates direct-contact scoring for phone-only leads", () => {
@@ -117,7 +164,7 @@ describe("buildScoreEvalReport", () => {
       source: "mintur",
       niche: "other",
       tags: [],
-      phone: "+59821234567",
+      phone: "+59891234567", // móvil: el contacto directo del dueño (F3.3 baja el peso del fijo)
       prospect_score: 10,
       prospect_score_v1: 10,
       digital_footprint: null,
@@ -133,10 +180,10 @@ describe("buildScoreEvalReport", () => {
     const independentRow = report.comparisons.find((row) => row.leadId === "independent");
     const contactOnlyRow = report.comparisons.find((row) => row.leadId === "contact-only");
 
-    expect(franchiseRow?.v2Score).toBeLessThan(independentRow?.v2Score ?? 0);
+    expect(franchiseRow?.v3Score).toBeLessThan(independentRow?.v3Score ?? 0);
     expect(franchiseRow?.reasonSummary).toContain("franchise penalty");
-    expect(contactOnlyRow?.v2PrimaryOffer).toBe("contacto_directo");
-    expect(contactOnlyRow?.v2Score).toBeGreaterThan(contactOnlyRow?.v1Score ?? 0);
+    expect(contactOnlyRow?.v3PrimaryOffer).toBe("contacto_directo");
+    expect(contactOnlyRow?.v3Score).toBeGreaterThan(contactOnlyRow?.v1Score ?? 0);
     expect(report.goldSetSeed.length).toBe(3);
   });
 });

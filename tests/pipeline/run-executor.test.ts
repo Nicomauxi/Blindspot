@@ -92,7 +92,7 @@ function makeRun(overrides: PipelineRun["overrides"] = null): PipelineRun {
   };
 }
 
-function buildPipelineRunTable(aborts: boolean[], invariantCount = 0) {
+function buildPipelineRunTable(aborts: boolean[], invariantCount = 0, finalizeMatches = true) {
   const updates: unknown[] = [];
 
   mockFrom.mockImplementation((table: string) => {
@@ -100,7 +100,14 @@ function buildPipelineRunTable(aborts: boolean[], invariantCount = 0) {
       return {
         update: vi.fn((payload: unknown) => {
           updates.push(payload);
-          return { eq: vi.fn().mockResolvedValue({ error: null }) };
+          // Chainable + thenable: soporta .eq() await directo y .eq().eq().select() (CAS N42).
+          const rows = finalizeMatches ? [{ id: "run-1" }] : [];
+          const result = { error: null, data: rows };
+          const chain: Record<string, unknown> = {};
+          chain["eq"] = vi.fn(() => chain);
+          chain["select"] = vi.fn(() => Promise.resolve(result));
+          chain["then"] = (resolve: (v: unknown) => unknown) => Promise.resolve(result).then(resolve);
+          return chain;
         }),
         select: vi.fn((columns: string) => {
           if (columns === "abort_requested") {
@@ -136,6 +143,13 @@ function buildPipelineRunTable(aborts: boolean[], invariantCount = 0) {
       };
     }
 
+    if (table === "pipeline_config") {
+      // FD-07: finalizeRun escribe last_completed_at acá cuando el run completa.
+      return {
+        update: vi.fn(() => ({ eq: vi.fn().mockResolvedValue({ error: null }) })),
+      };
+    }
+
     throw new Error(`Unexpected table ${table}`);
   });
 
@@ -162,7 +176,8 @@ describe("executeRun", () => {
     expect(result.status).toBe("completed");
     expect(mockExecuteRefreshPhase).toHaveBeenCalledWith(
       makeRun().config_snapshot!.phases.refresh,
-      true
+      true,
+      expect.any(Function) // FD-01: predicado de abort
     );
     expect(mockExecuteDiscoveryPhase).toHaveBeenCalledWith(
       makeRun().config_snapshot!.phases.discovery,
@@ -170,7 +185,8 @@ describe("executeRun", () => {
     );
     expect(mockExecuteEnrichPhase).toHaveBeenCalledWith(
       makeRun().config_snapshot!.phases.enrich,
-      true
+      true,
+      expect.any(Function) // FD-01: predicado de abort
     );
     expect(mockExecuteScorePhase).toHaveBeenCalledWith(
       makeRun().config_snapshot!.phases.score,
@@ -218,5 +234,62 @@ describe("executeRun", () => {
         error: "passed_sin_score=3",
       })
     );
+  });
+});
+
+describe("finalizeRun CAS (N42)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockAppendRunLog.mockResolvedValue(undefined);
+    mockLoadWebhookConfig.mockResolvedValue({ url: null, secret: null, events: [] });
+    mockNotifyWebhook.mockResolvedValue("not_configured");
+    mockExecuteRefreshPhase.mockResolvedValue({ itemsProcessed: 2 });
+    mockExecuteDiscoveryPhase.mockResolvedValue({ itemsProcessed: 1 });
+    mockExecuteEnrichPhase.mockResolvedValue({ itemsProcessed: 5 });
+    mockExecuteScorePhase.mockResolvedValue({ itemsProcessed: 5 });
+  });
+
+  it("NO resucita un run que ya no está 'running' (p.ej. aborted por crash-recovery)", async () => {
+    buildPipelineRunTable([false, false, false, false, false, false, false, false], 0, false);
+
+    const result = await executeRun(makeRun({ dry_run: true }));
+
+    // El CAS no matcheó (status ≠ running): no se notifica como completado.
+    expect(result.status).toBe("aborted");
+    expect(mockNotifyWebhook).not.toHaveBeenCalled();
+  });
+});
+
+describe("N4.2/N43: fases con fallos reales no reportan ok", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockAppendRunLog.mockResolvedValue(undefined);
+    mockLoadWebhookConfig.mockResolvedValue({ url: null, secret: null, events: [] });
+    mockNotifyWebhook.mockResolvedValue("not_configured");
+    mockExecuteRefreshPhase.mockResolvedValue({ itemsProcessed: 2 });
+    mockExecuteDiscoveryPhase.mockResolvedValue({ itemsProcessed: 1 });
+    mockExecuteScorePhase.mockResolvedValue({ itemsProcessed: 5 });
+  });
+
+  it("una fase con >5% de ítems fallidos marca failed → run partial", async () => {
+    mockExecuteEnrichPhase.mockResolvedValue({ itemsProcessed: 50, failedItems: 50 });
+    buildPipelineRunTable([false, false, false, false, false, false, false, false], 0);
+
+    const result = await executeRun(makeRun());
+
+    expect(result.status).toBe("partial");
+    expect(result.phase_results.enrich).toMatchObject({
+      status: "failed",
+      error: "failed_items=50/100",
+    });
+  });
+
+  it("fallos ≤5% siguen siendo ok", async () => {
+    mockExecuteEnrichPhase.mockResolvedValue({ itemsProcessed: 100, failedItems: 2 });
+    buildPipelineRunTable([false, false, false, false, false, false, false, false], 0);
+
+    const result = await executeRun(makeRun());
+
+    expect(result.status).toBe("completed");
   });
 });

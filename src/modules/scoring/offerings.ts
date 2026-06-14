@@ -37,6 +37,7 @@ const OFFER_LABELS: Record<string, string> = {
   software: "Sistema de gestión",
   catalogo: "Catálogo digital",
   marketing: "Marketing y redes sociales",
+  contacto_directo: "Contacto directo",
 };
 
 const OFFER_DESCRIPTIONS: Record<string, string> = {
@@ -45,6 +46,7 @@ const OFFER_DESCRIPTIONS: Record<string, string> = {
   software: "Hay oportunidades para digitalizar la gestión operativa del negocio.",
   catalogo: "El negocio puede mejorar cómo presenta sus productos o servicios en línea.",
   marketing: "El negocio tiene presencia web pero carece de estrategia en redes sociales.",
+  contacto_directo: "El negocio no tiene presencia digital detectada pero es contactable directamente. Buen candidato para una primera presencia online.",
 };
 
 function confidenceFromScore(score: number): "high" | "medium" | "low" {
@@ -103,6 +105,19 @@ function buildCatalogoSignals(
   return signals;
 }
 
+// N1.7: el contacto_directo no se renderizaba → 470/584 leads mostraban "Sin señal".
+// Aplica a leads sin presencia digital pero contactables (tier B/C, sin assets digitales).
+function buildContactoDirectoSignals(tags: string[]): CommercialSignal[] {
+  const signals: CommercialSignal[] = [{ label: "Sin presencia digital detectada", weight: "high" }];
+  if (hasTag(tags, "mobile-phone") || hasTag(tags, "landline-phone")) {
+    signals.push({ label: "Contactable por teléfono", weight: "medium" });
+  }
+  if (hasTag(tags, "whatsapp-confirmed") || hasTag(tags, "whatsapp-derived")) {
+    signals.push({ label: "Contactable por WhatsApp", weight: "medium" });
+  }
+  return signals;
+}
+
 function buildMarketingSignals(tags: string[]): CommercialSignal[] {
   const signals: CommercialSignal[] = [];
   if (hasTag(tags, "web-only-no-social")) signals.push({ label: "Sin presencia en redes sociales", weight: "high" });
@@ -119,6 +134,45 @@ function buildMarketingSignals(tags: string[]): CommercialSignal[] {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+const SIGNAL_WEIGHT_RANK: Record<CommercialSignal["weight"], number> = { high: 3, medium: 2, low: 1 };
+
+// M2: la señal concreta más fuerte observada en el lead para una oferta dada.
+// Reutiliza los mismos builders que alimentan las offerings de la UI, para que el
+// pitch_hook cite evidencia real (no una plantilla genérica por tipo de oferta).
+export function topSignalForOffer(
+  offerId: string,
+  tags: string[],
+  digitalFootprint: Record<string, unknown> | null
+): CommercialSignal | null {
+  let signals: CommercialSignal[];
+  switch (offerId) {
+    case "web_nuevo":
+      signals = buildWebNuevoSignals(tags);
+      break;
+    case "rediseno":
+      signals = buildRedisenoSignals(tags);
+      break;
+    case "software":
+      signals = buildSoftwareSignals(tags);
+      break;
+    case "catalogo":
+      signals = buildCatalogoSignals(tags, digitalFootprint);
+      break;
+    case "marketing":
+      signals = buildMarketingSignals(tags);
+      break;
+    case "contacto_directo":
+      signals = buildContactoDirectoSignals(tags);
+      break;
+    default:
+      signals = [];
+  }
+  if (signals.length === 0) return null;
+  return signals.reduce((best, s) =>
+    SIGNAL_WEIGHT_RANK[s.weight] > SIGNAL_WEIGHT_RANK[best.weight] ? s : best
+  );
 }
 
 function extractSubScore(subScores: Record<string, unknown>, key: string): number {
@@ -156,12 +210,18 @@ export function buildCommercialOfferings(
   const getScore = (key: string): number =>
     subScoresRaw ? extractSubScore(subScoresRaw, key) : 0;
 
-  const softwareOfferings: CommercialOffering[] = [
+  const softwareCandidates: CommercialOffering[] = [
     makeOffering("web_nuevo", getScore("web_nuevo"), buildWebNuevoSignals(tags)),
     makeOffering("rediseno", getScore("rediseno"), buildRedisenoSignals(tags)),
     makeOffering("software", getScore("software"), buildSoftwareSignals(tags)),
     makeOffering("catalogo", getScore("catalogo"), buildCatalogoSignals(tags, digitalFootprint)),
-  ]
+  ];
+  // contacto_directo solo se renderiza cuando su sub-score está activo (tier B/C sin assets). N1.7.
+  const contactoScore = getScore("contacto_directo");
+  if (contactoScore > 0) {
+    softwareCandidates.push(makeOffering("contacto_directo", contactoScore, buildContactoDirectoSignals(tags)));
+  }
+  const softwareOfferings: CommercialOffering[] = softwareCandidates
     .filter((o) => o.score > 0 || o.signals.length > 0)
     .sort((a, b) => b.score - a.score);
 

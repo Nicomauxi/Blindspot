@@ -130,8 +130,8 @@ export default function ImportsPage() {
       title="Importación"
       description="Cargá XLS de lugares y zonas, revisá preview antes de insertar y dejá el catálogo listo para Discovery y filtros geográficos."
       actions={
-        <Link href="/admin/discovery" className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50">
-          Volver a Discovery
+        <Link href="/admin/operations" className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50">
+          Volver a Operaciones
         </Link>
       }
     >

@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
-import { read as xlsxRead, utils as xlsxUtils } from "xlsx";
+// N70: migrado de xlsx@0.18 (CVEs prototype pollution/ReDoS sin fix en npm) a exceljs.
+import ExcelJS from "exceljs";
 import { getDb } from "../../db/client.js";
 import { getAuthUser, requireAdmin } from "../../auth/middleware.js";
 import {
@@ -62,22 +63,47 @@ function isXlsxUpload(mime: string, filename: string): boolean {
   );
 }
 
-function parseWorkbookRows(buffer: Buffer): Record<string, unknown>[] {
-  const workbook = xlsxRead(buffer, { type: "buffer" });
-  const sheetName = workbook.SheetNames.includes("places") ? "places" : workbook.SheetNames[0];
-  if (!sheetName) {
+async function parseWorkbookRows(buffer: Buffer): Promise<Record<string, unknown>[]> {
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(buffer as unknown as ArrayBuffer);
+
+  const sheet = workbook.getWorksheet("places") ?? workbook.worksheets[0];
+  if (!sheet || sheet.rowCount === 0) {
     throw new Error("empty_workbook");
   }
 
-  const sheet = workbook.Sheets[sheetName];
-  if (!sheet) {
-    throw new Error("empty_workbook");
-  }
-
-  return xlsxUtils.sheet_to_json<Record<string, unknown>>(sheet, {
-    defval: null,
-    raw: false,
+  // Fila 1 = headers (mismo contrato que sheet_to_json con defval:null, raw:false).
+  const headers: string[] = [];
+  sheet.getRow(1).eachCell({ includeEmpty: true }, (cell, col) => {
+    headers[col - 1] = String(cell.value ?? "").trim();
   });
+
+  const rows: Record<string, unknown>[] = [];
+  for (let r = 2; r <= sheet.rowCount; r++) {
+    const row = sheet.getRow(r);
+    const record: Record<string, unknown> = {};
+    let hasValue = false;
+    headers.forEach((header, idx) => {
+      if (!header) return;
+      const cell = row.getCell(idx + 1);
+      const value = cell.value;
+      let text: string | null = null;
+      if (value !== null && value !== undefined) {
+        if (typeof value === "object" && "text" in (value as Record<string, unknown>)) {
+          text = String((value as { text: unknown }).text);
+        } else if (typeof value === "object" && "result" in (value as Record<string, unknown>)) {
+          text = String((value as { result: unknown }).result ?? "");
+        } else {
+          text = String(value);
+        }
+        if (text.trim() === "") text = null;
+      }
+      if (text !== null) hasValue = true;
+      record[header] = text;
+    });
+    if (hasValue) rows.push(record);
+  }
+  return rows;
 }
 
 async function findExistingLocationKeys(locationKeys: string[]): Promise<Set<string>> {
@@ -98,7 +124,7 @@ async function findExistingLocationKeys(locationKeys: string[]): Promise<Set<str
 }
 
 async function buildImportPreview(filename: string, buffer: Buffer): Promise<ImportPreviewPayload> {
-  const rows = parseWorkbookRows(buffer);
+  const rows = await parseWorkbookRows(buffer);
 
   if (rows.length === 0) {
     throw new Error("empty_sheet");

@@ -154,6 +154,18 @@ describe("nameSimilarity", () => {
   it("returns >= 0.85 for names with minor punctuation variation", () => {
     expect(nameSimilarity("El Farolito Bar", "El Farolito, Bar")).toBeGreaterThanOrEqual(0.85);
   });
+
+  it("F2.5: matchea cuando un nombre es subconjunto del otro (MULTICAR ⊆ Multicar Automotora)", () => {
+    expect(nameSimilarity("MULTICAR", "Multicar Automotora")).toBeGreaterThanOrEqual(0.85);
+  });
+
+  it("F2.5: insensible al orden de palabras", () => {
+    expect(nameSimilarity("Juan Perez Automotora", "Automotora Juan Perez")).toBeGreaterThanOrEqual(0.85);
+  });
+
+  it("F2.5: NO infla nombres que comparten un solo token pero difieren (Farmacia San Jose ≠ Farmacia Central)", () => {
+    expect(nameSimilarity("Farmacia San Jose", "Farmacia Central")).toBeLessThan(0.85);
+  });
 });
 
 // ─── findCrossSourceMatch ─────────────────────────────────────────────────────
@@ -197,12 +209,36 @@ describe("findCrossSourceMatch", () => {
   });
 
   it("respects a custom lower threshold (0.30 matches more distant names)", () => {
-    // "la palma" (8) vs "la palma restaurante" (20): levenshtein=12, sim=1-12/20=0.4
-    // At default 0.85 → no match; at 0.30 → matches
+    // Par NO-subconjunto, moderadamente similar: "La Palma" vs "La Pampa" (sim≈0.75).
+    // (Un subconjunto como "La Palma" ⊆ "La Palma Restaurante" ahora matchea al 0.85 — F2.5.)
     const candidate = makeCandidate({ name: "La Palma", source: "mintur" });
-    const lead = makeLead({ name: "La Palma Restaurante", source: "google_places" });
+    const lead = makeLead({ name: "La Pampa", source: "google_places" });
     expect(findCrossSourceMatch(candidate, [lead])).toBeNull();
     expect(findCrossSourceMatch(candidate, [lead], 0.30)).toBe(lead);
+  });
+
+  it("F2.5: 'La Palma' (mintur) corrobora 'La Palma Restaurante' (google) al umbral default", () => {
+    const candidate = makeCandidate({ name: "La Palma", source: "mintur" });
+    const lead = makeLead({ name: "La Palma Restaurante", source: "google_places" });
+    expect(findCrossSourceMatch(candidate, [lead])).toBe(lead);
+  });
+
+  it("IT-05: 'Farmacia' vs 'Farmacia Central' SIN geo NO fusiona (subconjunto genérico)", () => {
+    const candidate = makeCandidate({ name: "Farmacia", source: "mintur" });
+    const lead = makeLead({ name: "Farmacia Central", source: "google_places" });
+    expect(findCrossSourceMatch(candidate, [lead])).toBeNull();
+  });
+
+  it("IT-05: 'Farmacia' vs 'Farmacia Central' CON dirección compatible SÍ fusiona", () => {
+    const candidate = makeCandidate({ name: "Farmacia", source: "mintur", address: "Av Italia 2500, Montevideo" });
+    const lead = makeLead({ name: "Farmacia Central", source: "google_places", address: "Av Italia 2500, Montevideo" });
+    expect(findCrossSourceMatch(candidate, [lead])).toBe(lead);
+  });
+
+  it("IT-05: un subconjunto DISTINTIVO ('Kiosco' es genérico, 'La Palma' no) sigue fusionando sin geo", () => {
+    const candidate = makeCandidate({ name: "La Palma", source: "mintur" });
+    const lead = makeLead({ name: "La Palma Restaurante", source: "google_places" });
+    expect(findCrossSourceMatch(candidate, [lead])).toBe(lead);
   });
 
   it("returns the lead with higher prospect_score on similarity tie", () => {
@@ -253,6 +289,24 @@ describe("findCrossSourceMatch", () => {
       name: "La Palma",
       source: "google_places",
       niche: "restaurant",
+    });
+
+    expect(findCrossSourceMatch(candidate, [lead])).toBe(lead);
+  });
+
+  it("allows wildcard niche compatibility for miem_dei other against a typed lead", () => {
+    // El DEI trae niche genérico (other, del CIIU sin mapeo): no debe bloquear la
+    // corroboración por niche, igual que mintur/imm_habilitaciones. Sin esto se
+    // duplicarían negocios que ya existen como otro source.
+    const candidate = makeCandidate({
+      name: "Panaderia Godoy",
+      source: "miem_dei",
+      niche: "other",
+    });
+    const lead = makeLead({
+      name: "Panaderia Godoy",
+      source: "google_places",
+      niche: "bakery",
     });
 
     expect(findCrossSourceMatch(candidate, [lead])).toBe(lead);
@@ -314,6 +368,80 @@ describe("findCrossSourceMatch", () => {
     const lead = makeLead({ name: "Farmacia del Centro", source: "google_places" });
     expect(findCrossSourceMatch(candidate, [lead])).toBeNull();
   });
+
+  // ─── matching de direcciones con abreviaciones (casos reales del corpus) ──────
+
+  it("matchea calle abreviada de prócer: Rivera 784 ↔ Gral. Fructuoso Rivera 784 (Celisano)", () => {
+    const candidate = makeCandidate({
+      name: "Celisano",
+      source: "miem_dei",
+      address: "Rivera 784, SALTO, SALTO",
+    });
+    const lead = makeLead({
+      name: "Celisano",
+      source: "google_places",
+      address: "Gral. Fructuoso Rivera 784, 50000 Salto, Departamento de Salto, Uruguay",
+    });
+    expect(findCrossSourceMatch(candidate, [lead])).toBe(lead);
+  });
+
+  it("matchea Av. ↔ Avenida con misma puerta (Alberto's, L.A. de Herrera 1144)", () => {
+    const candidate = makeCandidate({
+      name: "Alberto's",
+      source: "osm",
+      address: "Avenida Luis Alberto de Herrera, 1144, Montevideo",
+    });
+    const lead = makeLead({
+      name: "Alberto's",
+      source: "google_places",
+      address: "Av. Luis Alberto de Herrera 1144, 11300 Montevideo, Departamento de Montevideo, Uruguay",
+    });
+    expect(findCrossSourceMatch(candidate, [lead])).toBe(lead);
+  });
+
+  it("matchea ruido de comas/acentos con misma calle+puerta (Decano, Orinoco 4943)", () => {
+    const candidate = makeCandidate({
+      name: "Decano",
+      source: "osm",
+      address: "Orinoco, 4943, Montevideo",
+    });
+    const lead = makeLead({
+      name: "Decano",
+      source: "google_places",
+      address: "Orinoco 4943, 11400 Montevideo, Departamento de Montevideo, Uruguay",
+    });
+    expect(findCrossSourceMatch(candidate, [lead])).toBe(lead);
+  });
+
+  it("NO colapsa sucursales de cadena: misma calle, distinta puerta (bloqueo de puerta)", () => {
+    // Patrón Devoto/Disco: mismo nombre, misma ciudad, MISMA calle pero puerta distinta
+    // ⇒ son sucursales diferentes, no deben fusionarse.
+    const candidate = makeCandidate({
+      name: "Farmacia X",
+      source: "yelu",
+      address: "Gral. Fructuoso Rivera 784, Montevideo",
+    });
+    const lead = makeLead({
+      name: "Farmacia X",
+      source: "google_places",
+      address: "Av. Gral Rivera 4502, 11400 Montevideo, Departamento de Montevideo, Uruguay",
+    });
+    expect(findCrossSourceMatch(candidate, [lead])).toBeNull();
+  });
+
+  it("NO matchea calles distintas con misma puerta y mismo nombre (Rivera 784 ↔ Mercedes 784)", () => {
+    const candidate = makeCandidate({
+      name: "Kiosco Central",
+      source: "yelu",
+      address: "Rivera 784, Salto",
+    });
+    const lead = makeLead({
+      name: "Kiosco Central",
+      source: "google_places",
+      address: "Mercedes 784, 50000 Salto, Departamento de Salto, Uruguay",
+    });
+    expect(findCrossSourceMatch(candidate, [lead])).toBeNull();
+  });
 });
 
 describe("isFranchise", () => {
@@ -337,5 +465,20 @@ describe("isFranchise", () => {
 
   it("returns false for empty franchise set", () => {
     expect(isFranchise("Abitab", new Set())).toBe(false);
+  });
+
+  it("F2.7: nombre corto exige match casi exacto (COT no matchea CPS/CNS)", () => {
+    const shortFranchises = new Set(["COT", "OCA"]);
+    expect(isFranchise("CPS", shortFranchises)).toBe(false);
+    expect(isFranchise("CNS", shortFranchises)).toBe(false);
+    expect(isFranchise("COT", shortFranchises)).toBe(true); // exacto sí
+  });
+
+  it("F2.7: 'ABITO' no matchea 'Abitab' (distancia 2 con franquicia corta)", () => {
+    expect(isFranchise("ABITO", franchises)).toBe(false);
+  });
+
+  it("F2.7: 'Farmashop 1' matchea 'Farmashop' (sucursal numerada)", () => {
+    expect(isFranchise("Farmashop 1", new Set(["Farmashop"]))).toBe(true);
   });
 });

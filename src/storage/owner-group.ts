@@ -1,16 +1,24 @@
 import { randomUUID } from "crypto";
 import { getSupabase } from "../shared/supabase.js";
+import { classifyUruguayPhone } from "../shared/phone.js";
 
 interface LeadRow {
   id: string;
   canonical_fields: Record<string, unknown> | null;
   owner_group_id: string | null;
+  phone: string | null;
 }
 
 export interface OwnerGroupResult {
   groups_created: number;
   leads_assigned: number;
 }
+
+const PAGE_SIZE = 1000;
+
+// Una señal compartida por más de este número de leads se considera genérica
+// (móvil de agencia/gestor) y NO funda un grupo de dueño. F1.1.
+const GENERIC_SIGNAL_THRESHOLD = 5;
 
 function canonicalPhone(fields: Record<string, unknown> | null): string | null {
   if (!fields) return null;
@@ -22,53 +30,61 @@ function canonicalPhone(fields: Record<string, unknown> | null): string | null {
   return null;
 }
 
-function canonicalEmail(fields: Record<string, unknown> | null): string | null {
-  if (!fields) return null;
-  const raw = fields["email"];
-  if (typeof raw === "string") return raw;
-  if (raw && typeof raw === "object" && "value" in raw && typeof (raw as Record<string, unknown>)["value"] === "string") {
-    return (raw as Record<string, unknown>)["value"] as string;
+/**
+ * Clave de dueño: SOLO el móvil propio normalizado es señal fuerte (F1.1).
+ * Fijos (gestor/oficina), teléfonos basura y emails (gestor/contador) se comparten
+ * entre negocios ajenos y producían sobre-fusión, así que NO fundan grupo por sí solos.
+ * Se prioriza el móvil de `canonical_fields`; si falta, se usa la columna `phone`
+ * (la mayoría de los leads —p.ej. DEI— guardan el teléfono ahí, no en canonical_fields).
+ */
+function ownerKey(lead: LeadRow): string | null {
+  const candidate = canonicalPhone(lead.canonical_fields) ?? lead.phone;
+  if (!candidate) return null;
+  const classified = classifyUruguayPhone(candidate);
+  if (classified.type !== "mobile" || !classified.normalized) return null;
+  return classified.normalized;
+}
+
+async function loadEnrichedLeads(db: ReturnType<typeof getSupabase>): Promise<LeadRow[]> {
+  const leads: LeadRow[] = [];
+  // Paginar para superar el max_rows (1000) de PostgREST — antes procesaba <45%. N8.1.
+  for (let from = 0; ; from += PAGE_SIZE) {
+    const to = from + PAGE_SIZE - 1;
+    const { data, error } = await db
+      .from("leads")
+      .select("id, canonical_fields, owner_group_id, phone")
+      .not("canonical_fields", "is", null)
+      .range(from, to);
+
+    if (error) throw new Error(`Failed to load leads for owner grouping: ${error.message}`);
+
+    const batch = (data ?? []) as LeadRow[];
+    leads.push(...batch);
+    if (batch.length < PAGE_SIZE) break;
   }
-  return null;
+  return leads;
 }
 
 export async function detectOwnerGroups(): Promise<OwnerGroupResult> {
   const db = getSupabase();
+  const leads = await loadEnrichedLeads(db);
 
-  const { data, error } = await db
-    .from("leads")
-    .select("id, canonical_fields, owner_group_id")
-    .not("canonical_fields", "is", null);
-
-  if (error || !data) return { groups_created: 0, leads_assigned: 0 };
-
-  const leads = data as LeadRow[];
-
-  // Build index: signal → list of leads
+  // Index: señal fuerte (móvil propio) → leads que la comparten.
   const phoneIndex = new Map<string, LeadRow[]>();
-  const emailIndex = new Map<string, LeadRow[]>();
-
   for (const lead of leads) {
-    const phone = canonicalPhone(lead.canonical_fields);
-    if (phone) {
-      const bucket = phoneIndex.get(phone) ?? [];
-      bucket.push(lead);
-      phoneIndex.set(phone, bucket);
-    }
-    const email = canonicalEmail(lead.canonical_fields);
-    if (email) {
-      const bucket = emailIndex.get(email) ?? [];
-      bucket.push(lead);
-      emailIndex.set(email, bucket);
-    }
+    const key = ownerKey(lead);
+    if (!key) continue;
+    const bucket = phoneIndex.get(key) ?? [];
+    bucket.push(lead);
+    phoneIndex.set(key, bucket);
   }
 
-  // Assign groups: for each bucket with 2+ leads, pick or create a group UUID
-  // Track which leads need updates
+  // Asignar grupos: bucket con 2+ leads y por debajo del umbral genérico.
   const toUpdate = new Map<string, string>(); // lead_id → group_uuid
 
   function assignGroup(bucket: LeadRow[]): void {
     if (bucket.length < 2) return;
+    if (bucket.length > GENERIC_SIGNAL_THRESHOLD) return; // móvil de agencia/gestor
     const existing = bucket.find((l) => l.owner_group_id)?.owner_group_id ?? randomUUID();
     for (const lead of bucket) {
       if (!lead.owner_group_id) {
@@ -78,11 +94,10 @@ export async function detectOwnerGroups(): Promise<OwnerGroupResult> {
   }
 
   for (const bucket of phoneIndex.values()) assignGroup(bucket);
-  for (const bucket of emailIndex.values()) assignGroup(bucket);
 
   if (toUpdate.size === 0) return { groups_created: 0, leads_assigned: 0 };
 
-  // Group by target group_uuid to issue fewer UPDATE calls
+  // Agrupar por group_uuid destino para emitir menos UPDATEs.
   const byGroup = new Map<string, string[]>();
   for (const [leadId, groupId] of toUpdate) {
     const bucket = byGroup.get(groupId) ?? [];

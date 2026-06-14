@@ -217,9 +217,11 @@ export async function pipelineRoutes(app: FastifyInstance): Promise<void> {
 
     // Notify core via pg_notify (best-effort — core also polls)
     try {
-      await db.rpc("pg_notify_pipeline_trigger", { run_id: (run as { id: string }).id });
-    } catch {
-      // pg_notify via RPC may not exist — core will pick it up via polling
+      const { error: notifyError } = await db.rpc("pg_notify_pipeline_trigger", { run_id: (run as { id: string }).id });
+      // N44: loguear (no tragar) — el RPC no existía y el path estaba muerto en silencio.
+      if (notifyError) request.log.warn({ error: notifyError }, "pg_notify_pipeline_trigger failed — core lo toma por polling");
+    } catch (err) {
+      request.log.warn({ err }, "pg_notify_pipeline_trigger threw — core lo toma por polling");
     }
 
     return reply.status(202).send({
@@ -261,10 +263,15 @@ export async function pipelineRoutes(app: FastifyInstance): Promise<void> {
   // POST /pipeline/abort — admin only
   app.post("/pipeline/abort", { preHandler: requireAdmin }, async (request, reply) => {
     const db = getDb();
+    // N45: priorizar el run 'running' (orden por status desc: running > pending) —
+    // sin ORDER BY, con un running + un pending Postgres devolvía fila arbitraria y
+    // el admin podía 'abortar' el pending mientras el running seguía intacto.
     const { data: activeRun } = await db
       .from("pipeline_runs")
-      .select("id")
+      .select("id, status")
       .in("status", [...ACTIVE_RUN_STATUSES])
+      .order("status", { ascending: false })
+      .order("created_at", { ascending: true })
       .limit(1)
       .maybeSingle();
 

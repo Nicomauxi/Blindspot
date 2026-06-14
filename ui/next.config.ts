@@ -8,14 +8,17 @@ function normalizeAllowedOrigin(value: string): string {
   }
 
   try {
-    return new URL(trimmed).host;
+    return new URL(trimmed).hostname;
   } catch {
-    return trimmed.replace(/^https?:\/\//, "").replace(/\/$/, "");
+    try {
+      return new URL("http://" + trimmed.replace(/\/$/, "")).hostname;
+    } catch {
+      return trimmed.replace(/^https?:\/\//, "").replace(/\/$/, "").split(":")[0] ?? "";
+    }
   }
 }
 
 function resolveAllowedDevOrigins(): string[] {
-  const devPort = process.env["PORT"]?.trim() || "3000";
   const appOrigin = normalizeAllowedOrigin(process.env["NEXT_PUBLIC_APP_URL"] ?? "");
   const envValue = process.env["NEXT_ALLOWED_DEV_ORIGINS"] ?? process.env["NEXT_ALLOWED_DEV_HOSTS"] ?? "";
   const configuredOrigins = envValue
@@ -26,10 +29,10 @@ function resolveAllowedDevOrigins(): string[] {
   const detectedLanOrigins = Object.values(os.networkInterfaces())
     .flatMap((entries) => entries ?? [])
     .filter((entry): entry is os.NetworkInterfaceInfo => Boolean(entry) && entry.family === "IPv4" && !entry.internal)
-    .map((entry) => `${entry.address}:${devPort}`);
+    .map((entry) => entry.address);
 
   return Array.from(
-    new Set([`localhost:${devPort}`, `127.0.0.1:${devPort}`, appOrigin, ...configuredOrigins, ...detectedLanOrigins].filter(Boolean))
+    new Set(["localhost", "127.0.0.1", appOrigin, ...configuredOrigins, ...detectedLanOrigins].filter(Boolean))
   );
 }
 

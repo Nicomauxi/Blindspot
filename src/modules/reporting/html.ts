@@ -5,6 +5,13 @@ import type { RunMeta } from "./types.js";
 import { DASHBOARD_TPL } from "./templates.js";
 
 Handlebars.registerHelper("eq", (a: unknown, b: unknown) => a === b);
+// N101: el website es dato scrapeado — solo http(s) puede ir a un href (un valor
+// javascript:/data: almacenado ejecutaría en el reporte del operador).
+Handlebars.registerHelper("safeUrl", (value: unknown) => {
+  if (typeof value !== "string") return "";
+  const trimmed = value.trim();
+  return /^https?:\/\//i.test(trimmed) ? trimmed : "";
+});
 
 const compiledDashboard = Handlebars.compile(DASHBOARD_TPL);
 

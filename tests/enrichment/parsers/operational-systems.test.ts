@@ -94,8 +94,21 @@ describe("parseOperationalSystems", () => {
     `;
     const result = parseOperationalSystems(html);
     expect(result.class_booking_platforms).toEqual(["mindbody.io"]);
-    expect(result.catalog_keywords).toEqual(expect.arrayContaining(["catálogo", "0km", "usados", "kilometraje"]));
+    // FS-10: solo la palabra "catálogo" cuenta; stock/0km/usados/kilometraje NO.
+    expect(result.catalog_keywords).toEqual(["catálogo"]);
     expect(result.contact_form).toBe(true);
+  });
+
+  it("FS-10: términos genéricos (stock/0km/usados/kilometraje) SIN catálogo navegable NO cuentan", () => {
+    const html = `<html><body>
+      <p>Tenemos amplio stock de usados 0km con kilometraje certificado.</p>
+    </body></html>`;
+    expect(parseOperationalSystems(html).catalog_keywords).toEqual([]);
+  });
+
+  it("FS-10: una ruta /catalogo cuenta como catálogo navegable real", () => {
+    const html = `<html><body><a href="/catalogo/autos?pagina=2">Ver vehículos</a></body></html>`;
+    expect(parseOperationalSystems(html).catalog_keywords.length).toBeGreaterThan(0);
   });
 
   it("returns empty signals for plain HTML", () => {
@@ -123,6 +136,22 @@ describe("parseOperationalSystems", () => {
     expect(parseOperationalSystems(html).ecommerce_platforms).toEqual(
       expect.arrayContaining(["mercadopago.com/integrations"])
     );
+  });
+
+  it("detecta pasarelas de pago locales UY (dLocal/Plexo/Scanntech/Abitab) como ecommerce", () => {
+    const html = `<html><body>
+      <script src="https://js.dlocalgo.com/sdk.js"></script>
+      <a href="https://checkout.plexo.com.uy/pay/abc">Pagar con Plexo</a>
+      <a href="https://pagos.scanntech.com/checkout">Scanntech</a>
+      <a href="https://www.abitab.com.uy/pago">Pagá en Abitab</a>
+    </body></html>`;
+    const result = parseOperationalSystems(html).ecommerce_platforms;
+    expect(result).toEqual(expect.arrayContaining(["dlocalgo", "plexo.com.uy", "scanntech.com", "abitab.com.uy"]));
+  });
+
+  it("no marca ecommerce si no hay pasarela (sitio informativo)", () => {
+    const html = `<html><body><a href="/nosotros">Nosotros</a></body></html>`;
+    expect(parseOperationalSystems(html).ecommerce_platforms).toEqual([]);
   });
 
   it("detects WhatsApp Business link as whatsapp_web_link", () => {

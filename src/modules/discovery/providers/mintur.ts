@@ -1,3 +1,4 @@
+import { stableBusinessId } from "../stable-id.js";
 import { fetch, Agent } from "undici";
 import type {
   IDiscoveryProvider,
@@ -47,7 +48,8 @@ export function isBlank(value: string | null | undefined): boolean {
 
 export function parsePhone(telefono: string): string | null {
   if (isBlank(telefono)) return null;
-  const tokens = telefono.split(/\s*[-,|]\s*/);
+  // N85: separador unificado con DEI (incluye '/'): '2916 1234 / 2916 5678'.
+  const tokens = telefono.split(/\s*[-,/|]\s*/);
   const first = tokens.find((t) => !isBlank(t));
   return first?.trim() ?? null;
 }
@@ -75,7 +77,9 @@ export function mapRecord(record: MINTURRecord): DiscoveryCandidate {
     .join(", ");
   return {
     source: SOURCE,
-    external_id: String(record._id),
+    // N82: id derivado del negocio (operador+dirección+localidad) — el _id del
+    // datastore CKAN cambia al republicarse el dataset.
+    external_id: stableBusinessId([record.Operador, record.Direccion, record.Localidad]),
     source_confidence: SOURCE_CONFIDENCE,
     name: record.Operador,
     address: address || null,
@@ -113,7 +117,9 @@ async function fetchAllRecords(filters: string | null): Promise<MINTURRecord[]> 
     const data = await fetchPage(params);
     records.push(...data.result.records);
 
-    if (records.length >= data.result.total) break;
+    // N83: si una página vuelve vacía (total inflado/datastore inconsistente), cortar —
+    // sin esto el loop quedaba infinito pidiendo páginas vacías (igual que dei.ts).
+    if (records.length >= data.result.total || data.result.records.length === 0) break;
     offset += PAGE_SIZE;
   }
 

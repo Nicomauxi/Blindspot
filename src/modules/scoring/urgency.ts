@@ -1,16 +1,18 @@
 import type { Lead } from "../../shared/types.js";
 import type { UrgencySignal } from "./types.js";
+import { computeSocialSignal } from "./social-signal.js";
+import { stripDiacritics } from "../discovery/location.js";
 
 const OUTDATED_YEAR_THRESHOLD = 2020;
-const RECENTLY_DISCOVERED_DAYS = 90;
 const GROWING_REVIEW_THRESHOLD = 20;
 const GROWING_RATING_MIN = 4.0;
-const TOURIST_NICHES = new Set(["restaurant", "hospedaje"]);
+// N01: unificado con urgency-profile.ts — 'hospedaje' no existe como niche (0 leads), el real es 'accommodation'.
+const TOURIST_NICHES = new Set(["restaurant", "accommodation"]);
 const TOURIST_ZONES = [
   "punta del este",
   "rocha",
   "cabo polonio",
-  "piriápolis",
+  "piriapolis",
   "barra de valizas",
 ];
 
@@ -28,7 +30,7 @@ export function computeUrgencySignal(lead: Lead): UrgencySignal {
 
   // Alta urgencia: zona turística estacional
   const niche = lead.niche ?? "other";
-  const address = (lead.address ?? "").toLowerCase();
+  const address = stripDiacritics(lead.address ?? "").toLowerCase();
   if (
     TOURIST_NICHES.has(niche) &&
     TOURIST_ZONES.some((z) => address.includes(z))
@@ -36,14 +38,8 @@ export function computeUrgencySignal(lead: Lead): UrgencySignal {
     highSignals.push("tourist_zone_seasonal");
   }
 
-  // Media urgencia: negocio nuevo en el radar
-  if (lead.created_at) {
-    const daysSince =
-      (Date.now() - new Date(lead.created_at).getTime()) / 86_400_000;
-    if (daysSince < RECENTLY_DISCOVERED_DAYS) {
-      mediumSignals.push("recently_discovered");
-    }
-  }
+  // N01: 'recently_discovered' eliminado — era frescura del DATO, no urgencia del
+  // negocio, y degeneraba la señal (97,3% medium). La frescura vive en freshness_signal.
 
   // Media urgencia: negocio joven en crecimiento
   const reviewCount = lead.review_count;
@@ -55,6 +51,11 @@ export function computeUrgencySignal(lead: Lead): UrgencySignal {
     rating >= GROWING_RATING_MIN
   ) {
     mediumSignals.push("growing_business");
+  }
+
+  // F1: presencia social ACTIVA = negocio operando y alcanzable ahora → urgency media.
+  if (computeSocialSignal(lead).active) {
+    mediumSignals.push("social_activa");
   }
 
   if (highSignals.length > 0) return "high";

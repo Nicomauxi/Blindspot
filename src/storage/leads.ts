@@ -5,13 +5,15 @@ import { calculateContactReliability } from "../modules/scoring/confidence.js";
 import type { BuyerTypeScore, ScoreResult } from "../modules/scoring/types.js";
 import { normalizeUruguayMobile } from "../modules/enrichment/parsers/whatsapp.js";
 import { MAX_CONTACT_EMAILS } from "../modules/enrichment/index.js";
+import { isWebsiteGenuinelyMissing } from "../modules/enrichment/fetch-error.js";
 import {
   appendEnrichmentChange,
   createEnrichmentDiff,
   hasCriticalEnrichmentChange,
 } from "../modules/enrichment/change-detection.js";
 import { isFranchise, normalizeName } from "../modules/discovery/deduplication.js";
-import { classifyUruguayPhone } from "../shared/phone.js";
+import { computeChainWebsitePropagations } from "../modules/discovery/chain-website-propagation.js";
+import { canonicalUruguayPhoneKey, classifyUruguayPhone } from "../shared/phone.js";
 import { scoreLead } from "../modules/scoring/index.js";
 import { computeAllBuyerScores } from "../modules/scoring/buyer-types.js";
 import { getAdminServicePricing } from "./service-pricing.js";
@@ -24,6 +26,9 @@ const DUPLICATE_TAG = "possible-duplicate";
 const DUPLICATE_SECONDARY_TAG = "duplicate-secondary";
 const FRANCHISE_TAG = "franchise-detected";
 const SIGNIFICANT_CHANGE_TAG = "state-changed-significant";
+const TAG_UPDATE_BATCH_SIZE = 25;
+const TAG_UPDATE_MAX_RETRIES = 3;
+const TAG_UPDATE_RETRY_BASE_MS = 150;
 const FALLBACK_BLOCKED_EMAIL_DOMAINS = new Set([
   "thinkit.com.uy",
   "smartserv.com.uy",
@@ -92,14 +97,11 @@ function normalizeStoredWhatsapp(value: string | null): string | null {
 }
 
 function normalizeIdentityPhone(value: string | null): string | null {
-  const mobile = normalizeStoredWhatsapp(value);
-  if (mobile) return mobile;
-  const digits = (value ?? "").replace(/\D/g, "");
-  if (digits.length === 0) return null;
-  if (digits.startsWith("598")) return `+${digits}`;
-  if (digits.length === 8 && /^[29]/.test(digits)) return `+598${digits}`;
-  if (digits.length === 9 && digits.startsWith("0")) return `+598${digits.slice(1)}`;
-  return digits;
+  // IT-06: la lógica manual descartaba fijos del interior (prefijo 3/4: `/^[29]/`),
+  // sesgando el dedup justo donde hay menos cobertura. Delegamos en la clave canónica
+  // (shared/phone), que cubre móvil + fijo Montevideo + fijo interior, y devolvemos E.164.
+  const national = canonicalUruguayPhoneKey(value);
+  return national ? `+598${national}` : null;
 }
 
 function normalizeIdentityUrl(value: string | null | undefined): string | null {
@@ -200,38 +202,137 @@ export function detectDuplicates(
   return duplicates;
 }
 
-export async function tagDuplicates(leads: Lead[]): Promise<void> {
-  const groups = detectDuplicates(leads);
-  if (groups.size === 0) return;
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
 
+interface LeadTagUpdate {
+  id: string;
+  tags: string[];
+  /** F5.1: los duplicate-secondary se fuerzan fuera del pool. */
+  passed_filter?: boolean;
+  rejection_reasons?: string[];
+}
+
+async function updateLeadTagsWithRetry(
+  id: string,
+  tags: string[],
+  label: string,
+  extra: { passed_filter?: boolean | undefined; rejection_reasons?: string[] | undefined } = {}
+): Promise<{ id: string; error: Error | null }> {
   const db = getSupabase();
+  const payload: Record<string, unknown> = { tags };
+  if (extra.passed_filter !== undefined) payload.passed_filter = extra.passed_filter;
+  if (extra.rejection_reasons !== undefined) payload.rejection_reasons = extra.rejection_reasons;
 
-  // Build update plans first, then execute concurrently.
-  // tagDuplicates' inputs typically have unique tag sets per lead, so we cannot
-  // batch with `.in(...).update(...)`. Concurrent updates avoid the N+1 latency.
-  const updates: Array<{ id: string; tags: string[] }> = [];
+  for (let attempt = 1; attempt <= TAG_UPDATE_MAX_RETRIES; attempt++) {
+    try {
+      const { error } = await db.from("leads").update(payload).eq("id", id);
+      if (!error) return { id, error: null };
+
+      const message = error.message ?? `${label} update failed`;
+      if (attempt === TAG_UPDATE_MAX_RETRIES) {
+        return { id, error: new Error(message) };
+      }
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (attempt === TAG_UPDATE_MAX_RETRIES) {
+        return { id, error: new Error(message) };
+      }
+    }
+
+    await sleep(TAG_UPDATE_RETRY_BASE_MS * attempt);
+  }
+
+  return { id, error: new Error(`${label} update failed`) };
+}
+
+async function runLeadTagUpdates(
+  updates: LeadTagUpdate[],
+  label: string
+): Promise<void> {
+  const failures: Array<{ id: string; error: Error }> = [];
+
+  for (let offset = 0; offset < updates.length; offset += TAG_UPDATE_BATCH_SIZE) {
+    const batch = updates.slice(offset, offset + TAG_UPDATE_BATCH_SIZE);
+    const results = await Promise.all(
+      batch.map(({ id, tags, passed_filter, rejection_reasons }) =>
+        updateLeadTagsWithRetry(id, tags, label, { passed_filter, rejection_reasons })
+      )
+    );
+
+    for (const result of results) {
+      if (result.error) failures.push({ id: result.id, error: result.error });
+    }
+  }
+
+  if (failures.length > 0) {
+    const summary = failures.map((f) => `${f.id}: ${f.error.message}`).join("; ");
+    throw new Error(`${label} failed for ${failures.length} lead(s): ${summary}`);
+  }
+}
+
+// F5.1: el secundario de un grupo de duplicados no es un negocio distinto — queda
+// fuera del pool (passed_filter=false) con la razón explícita, además del tag.
+export function buildDuplicateTagUpdates(groups: Map<string, Lead[]>): LeadTagUpdate[] {
+  const updates: LeadTagUpdate[] = [];
   for (const group of groups.values()) {
     for (let i = 0; i < group.length; i++) {
       const lead = group[i]!;
       const tagSet = new Set(lead.tags);
       tagSet.add(DUPLICATE_TAG);
-      if (i > 0) tagSet.add(DUPLICATE_SECONDARY_TAG);
-      updates.push({ id: lead.id, tags: Array.from(tagSet) });
+      if (i === 0) {
+        // El primario de HOY puede arrastrar un duplicate-secondary de un run viejo
+        // (ej. fue rescatado por corroboración) — se limpia para no contradecir su rol.
+        tagSet.delete(DUPLICATE_SECONDARY_TAG);
+        updates.push({ id: lead.id, tags: Array.from(tagSet) });
+        continue;
+      }
+      tagSet.add(DUPLICATE_SECONDARY_TAG);
+      const reasons = new Set(lead.rejection_reasons);
+      reasons.add(DUPLICATE_SECONDARY_TAG);
+      updates.push({
+        id: lead.id,
+        tags: Array.from(tagSet),
+        passed_filter: false,
+        rejection_reasons: Array.from(reasons),
+      });
     }
   }
+  return updates;
+}
 
-  const results = await Promise.all(
-    updates.map(async ({ id, tags }) => {
-      const { error } = await db.from("leads").update({ tags }).eq("id", id);
-      return { id, error };
-    })
+export async function tagDuplicates(leads: Lead[]): Promise<void> {
+  const groups = detectDuplicates(leads);
+  if (groups.size === 0) return;
+
+  // Build update plans first, then execute in bounded batches with retries.
+  // The full scoring flow can touch thousands of rows; unbounded Promise.all()
+  // against PostgREST causes transient fetch failures under load.
+  await runLeadTagUpdates(buildDuplicateTagUpdates(groups), "tagDuplicates");
+}
+
+// B2: propaga el dominio de empresa a fichas del mismo negocio sin web (regla segura:
+// solo dominio real dominante, nunca redes sociales). Paso de mantenimiento cross-lead
+// (como tagDuplicates) — antes solo existía como backfill manual; ahora corre en cada
+// scoring --all, así el caso "Tienda Inglesa" (ficha sin web del mismo negocio) no recurre.
+export async function propagateChainWebsites(leads: Lead[]): Promise<number> {
+  const propagations = computeChainWebsitePropagations(
+    leads.map((l) => ({ id: l.id, name: l.name, website: l.website, address: l.address }))
   );
+  if (propagations.length === 0) return 0;
 
-  const failed = results.filter((r) => r.error);
-  if (failed.length > 0) {
-    const summary = failed.map((f) => `${f.id}: ${f.error?.message}`).join("; ");
-    throw new Error(`tagDuplicates failed for ${failed.length} lead(s): ${summary}`);
+  const db = getSupabase();
+  let applied = 0;
+  for (const p of propagations) {
+    const { error } = await db.from("leads").update({ website: p.website }).eq("id", p.id);
+    if (error) {
+      getLogger().warn({ leadId: p.id, error: error.message }, "propagateChainWebsites: update falló");
+      continue;
+    }
+    applied++;
   }
+  return applied;
 }
 
 export async function tagFranchises(
@@ -240,34 +341,22 @@ export async function tagFranchises(
 ): Promise<void> {
   if (leads.length === 0) return;
 
-  const addressesByName = new Map<string, Set<string>>();
-  for (const lead of leads) {
-    const norm = normalizeName(lead.name);
-    const addrs = addressesByName.get(norm) ?? new Set<string>();
-    addrs.add((lead.address ?? "").trim().toLowerCase());
-    addressesByName.set(norm, addrs);
-  }
-
-  const db = getSupabase();
+  // F2.7: SOLO la lista curada franchise_names marca franquicia. La vieja heurística
+  // "mismo nombre en ≥3 direcciones" producía falsos positivos (mutualistas, agencias,
+  // nombres comunes de PYME) que les ponían penalización de scoring y bloqueaban su
+  // fusión. La detección de sucursales para el merge-guard vive aparte (franchiseSafeToMerge,
+  // por puerta/GPS), no acá.
   const failures: Array<{ leadId: string; message: string }> = [];
 
   for (const lead of leads) {
     if (lead.tags.includes(FRANCHISE_TAG)) continue;
-
-    const byList      = isFranchise(lead.name, franchiseNames);
-    const norm        = normalizeName(lead.name);
-    const byHeuristic = (addressesByName.get(norm)?.size ?? 0) >= 3;
-
-    if (!byList && !byHeuristic) continue;
+    if (!isFranchise(lead.name, franchiseNames)) continue;
 
     const tags = [...lead.tags, FRANCHISE_TAG];
-    const { error } = await db
-      .from("leads")
-      .update({ tags })
-      .eq("id", lead.id);
+    const result = await updateLeadTagsWithRetry(lead.id, tags, "tagFranchises");
 
-    if (error) {
-      failures.push({ leadId: lead.id, message: error.message });
+    if (result.error) {
+      failures.push({ leadId: lead.id, message: result.error.message });
     }
   }
 
@@ -289,6 +378,14 @@ export function cleanupMergedTagsForEnrichment(
   if (set.has("ig-confirmed")) set.delete("ig-heuristic");
   if (set.has("whatsapp-derived")) set.delete("whatsapp-missing");
   if (set.has("whatsapp-confirmed")) set.delete("whatsapp-missing");
+
+  // site-unreachable solo sobrevive si el último fetch confirma ausencia genuina (404/410).
+  // Un re-fetch exitoso o un error transitorio (403/timeout/5xx) limpian el tag stale.
+  // Antes el tag persistía del run anterior y dejaba 324 sitios operativos como "caídos".
+  const fetchError = (footprint as { fetch_error?: string } | undefined)?.fetch_error;
+  if (footprint && !isWebsiteGenuinelyMissing(fetchError)) {
+    set.delete("site-unreachable");
+  }
 
   const contactEmails = Array.isArray(footprint?.contact_emails)
     ? footprint.contact_emails.filter((email) => email.trim().length > 0)
@@ -836,7 +933,14 @@ export async function updateLeadSocialSearch(
   leadId: string,
   socialSearch: SocialSearch,
   newTags: string[],
-  whatsappFromSocial: string | null
+  whatsappFromSocial: string | null,
+  socialActivity?: import("../modules/social-enrich/social-activity.js").SocialActivitySnapshot,
+  // canonical_fields ya fusionados con la fuente social (P1/P3). Si se provee, se persisten
+  // y se usan para tags/reliability; si no, se conservan los actuales.
+  socialCanonical?: Record<string, unknown> | null,
+  // N90: merge sobre el canonical FRESCO re-leído acá adentro — el snapshot del
+  // pipeline podía revertir campos canónicos escritos por reconcile/refresh en el medio.
+  socialCanonicalFn?: (freshCanonical: Lead["canonical_fields"]) => Record<string, unknown> | null
 ): Promise<void> {
   const db = getSupabase();
   const { data: current, error: fetchErr } = await db
@@ -853,11 +957,13 @@ export async function updateLeadSocialSearch(
     ? {
         ...currentFootprint,
         social_search: socialSearch,
+        ...(socialActivity !== undefined ? { social_activity: socialActivity } : {}),
         ...(contactEmails !== undefined ? { contact_emails: contactEmails } : {}),
       }
     : {
         fetched_at: fetchedAt,
         social_search: socialSearch,
+        ...(socialActivity !== undefined ? { social_activity: socialActivity } : {}),
         ...(contactEmails !== undefined ? { contact_emails: contactEmails } : {}),
       };
   const currentTags: string[] = Array.isArray(current?.tags) ? (current?.tags as string[]) : [];
@@ -871,7 +977,14 @@ export async function updateLeadSocialSearch(
     mergedTags.push("whatsapp-derived");
   }
   const currentPhone = (current?.phone as string | null) ?? null;
-  const canonicalFields = (current?.canonical_fields as Lead["canonical_fields"]) ?? null;
+  const freshCanonical = (current?.canonical_fields as Lead["canonical_fields"]) ?? null;
+  const mergedSocialCanonical = socialCanonicalFn
+    ? socialCanonicalFn(freshCanonical)
+    : socialCanonical;
+  const canonicalFields =
+    mergedSocialCanonical !== undefined && mergedSocialCanonical !== null
+      ? (mergedSocialCanonical as Lead["canonical_fields"])
+      : freshCanonical;
   const finalTags = dedupeTags(
     mergeClassificationTags(mergedTags, currentPhone, canonicalFields, footprint)
   );
@@ -892,6 +1005,9 @@ export async function updateLeadSocialSearch(
       contact_reliability_score,
       tags: finalTags,
       whatsapp: mergedWhatsapp,
+      ...(socialCanonical !== undefined && socialCanonical !== null
+        ? { canonical_fields: socialCanonical }
+        : {}),
     })
     .eq("id", leadId);
   if (error) throw new Error(`Failed to update social search for lead ${leadId}: ${error.message}`);
@@ -899,7 +1015,7 @@ export async function updateLeadSocialSearch(
 
 export async function updateLeadSocialEnrichStatus(
   leadId: string,
-  status: "ok" | "blocked"
+  status: "ok" | "blocked" | "no_data"
 ): Promise<void> {
   const db = getSupabase();
   const { data: current, error: fetchErr } = await db
@@ -1040,45 +1156,83 @@ export async function countLeadsByFilterSelection(filters: EnrichmentLeadFilterS
   return count ?? 0;
 }
 
+// Supabase capa cada respuesta a max-rows (1000): la query de ids se pagina con range().
+const FILTER_IDS_PAGE_SIZE = 1000;
+// Un .in() con cientos de UUIDs rompe el límite de URL de PostgREST: se trae por lotes.
+const FILTER_LEADS_ID_CHUNK = 200;
+
 export async function loadLeadsByFilterSelection(
   filters: EnrichmentLeadFilterSelection,
   opts: { passedOnly?: boolean; limit?: number } = { passedOnly: true, limit: 250 }
 ): Promise<Lead[]> {
-  let dashboardQuery = getSupabase().from("lead_dashboard").select("id").order("created_at", { ascending: false });
+  const cap = opts.limit ?? 250;
 
-  if (filters.contact_tier) dashboardQuery = dashboardQuery.eq("contact_tier", filters.contact_tier);
-  if (filters.prospect_score_gte != null) dashboardQuery = dashboardQuery.gte("prospect_score", filters.prospect_score_gte);
-  if (filters.niche_expanded && filters.niche_expanded.length > 0) {
-    dashboardQuery = dashboardQuery.in("niche", filters.niche_expanded);
-  } else if (filters.niche) {
-    dashboardQuery = dashboardQuery.eq("niche", filters.niche);
+  const buildDashboardQuery = () => {
+    let dashboardQuery = getSupabase().from("lead_dashboard").select("id").order("created_at", { ascending: false });
+    if (filters.contact_tier) dashboardQuery = dashboardQuery.eq("contact_tier", filters.contact_tier);
+    if (filters.prospect_score_gte != null) dashboardQuery = dashboardQuery.gte("prospect_score", filters.prospect_score_gte);
+    if (filters.niche_expanded && filters.niche_expanded.length > 0) {
+      dashboardQuery = dashboardQuery.in("niche", filters.niche_expanded);
+    } else if (filters.niche) {
+      dashboardQuery = dashboardQuery.eq("niche", filters.niche);
+    }
+    if (filters.source) dashboardQuery = dashboardQuery.eq("source", filters.source);
+    if (filters.primary_offer) dashboardQuery = dashboardQuery.eq("primary_offer", filters.primary_offer);
+    if (filters.q) dashboardQuery = dashboardQuery.textSearch("search_vector", filters.q, { type: "plain", config: "spanish" });
+    return applyMissingFilters(dashboardQuery, filters);
+  };
+
+  const ids: string[] = [];
+  for (let from = 0; ids.length < cap; from += FILTER_IDS_PAGE_SIZE) {
+    const to = Math.min(from + FILTER_IDS_PAGE_SIZE, cap) - 1;
+    const { data: dashboardRows, error: dashboardError } = await buildDashboardQuery().range(from, to);
+    if (dashboardError) throw new Error(`Failed to load lead ids for filters: ${dashboardError.message}`);
+    const batch = (dashboardRows ?? [])
+      .map((row) => (row as { id?: string }).id)
+      .filter((value): value is string => typeof value === "string" && value.length > 0);
+    ids.push(...batch);
+    if (batch.length < to - from + 1) break;
   }
-  if (filters.source) dashboardQuery = dashboardQuery.eq("source", filters.source);
-  if (filters.primary_offer) dashboardQuery = dashboardQuery.eq("primary_offer", filters.primary_offer);
-  if (filters.q) dashboardQuery = dashboardQuery.textSearch("search_vector", filters.q, { type: "plain", config: "spanish" });
-  dashboardQuery = applyMissingFilters(dashboardQuery, filters);
-  if (opts.limit) dashboardQuery = dashboardQuery.limit(opts.limit);
-
-  const { data: dashboardRows, error: dashboardError } = await dashboardQuery;
-  if (dashboardError) throw new Error(`Failed to load lead ids for filters: ${dashboardError.message}`);
-
-  const ids = (dashboardRows ?? [])
-    .map((row) => (row as { id?: string }).id)
-    .filter((value): value is string => typeof value === "string" && value.length > 0);
 
   if (ids.length === 0) return [];
 
-  let query = getSupabase()
-    .from("leads")
-    .select("*")
-    .in("id", ids)
-    .order("name")
-    .limit(ids.length);
-  if (opts.passedOnly) query = query.eq("passed_filter", true);
+  const leads: Lead[] = [];
+  for (let i = 0; i < ids.length; i += FILTER_LEADS_ID_CHUNK) {
+    const chunk = ids.slice(i, i + FILTER_LEADS_ID_CHUNK);
+    let query = getSupabase()
+      .from("leads")
+      .select("*")
+      .in("id", chunk)
+      .order("name")
+      .limit(chunk.length);
+    if (opts.passedOnly) query = query.eq("passed_filter", true);
 
-  const { data, error } = await query;
-  if (error) throw new Error(`Failed to load leads for filters: ${error.message}`);
-  return (data ?? []) as Lead[];
+    const { data, error } = await query;
+    if (error) throw new Error(`Failed to load leads for filters: ${error.message}`);
+    leads.push(...((data ?? []) as Lead[]));
+  }
+
+  // Orden global por nombre (cada lote viene ordenado, pero entre lotes no).
+  return leads.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+// Carga leads puntuales por id en lotes (mismo motivo que FILTER_LEADS_ID_CHUNK:
+// un .in() gigante rompe el límite de URL). Usado por el re-score encadenado.
+export async function loadLeadsByIds(ids: string[]): Promise<Lead[]> {
+  if (ids.length === 0) return [];
+  const db = getSupabase();
+  const leads: Lead[] = [];
+  for (let i = 0; i < ids.length; i += FILTER_LEADS_ID_CHUNK) {
+    const chunk = ids.slice(i, i + FILTER_LEADS_ID_CHUNK);
+    const { data, error } = await db
+      .from("leads")
+      .select("*")
+      .in("id", chunk)
+      .limit(chunk.length);
+    if (error) throw new Error(`Failed to load leads by ids: ${error.message}`);
+    leads.push(...((data ?? []) as Lead[]));
+  }
+  return leads;
 }
 
 export async function loadLeadsBySource(
@@ -1125,6 +1279,29 @@ export async function loadAllPassedLeads(): Promise<Lead[]> {
       .range(from, to);
 
     if (error) throw new Error(`Failed to load all passed leads: ${error.message}`);
+    const batch = (data ?? []) as Lead[];
+    leads.push(...batch);
+    if (batch.length < pageSize) break;
+  }
+
+  return leads;
+}
+
+export async function loadLeadsByScoringVersion(scoringVersion: number): Promise<Lead[]> {
+  const db = getSupabase();
+  const pageSize = 1000;
+  const leads: Lead[] = [];
+
+  for (let from = 0; ; from += pageSize) {
+    const to = from + pageSize - 1;
+    const { data, error } = await db
+      .from("leads")
+      .select("*")
+      .eq("scoring_version", scoringVersion)
+      .order("name")
+      .range(from, to);
+
+    if (error) throw new Error(`Failed to load leads for scoring_version=${scoringVersion}: ${error.message}`);
     const batch = (data ?? []) as Lead[];
     leads.push(...batch);
     if (batch.length < pageSize) break;
@@ -1195,6 +1372,13 @@ export interface GooglePlacesRefreshInput {
 
 export interface GooglePlacesRefreshResult {
   fields_updated: string[];
+}
+
+// Fase 2: setear el website de un lead descubierto vía Serper (query unificada). Update
+// puntual; la vista lead_dashboard recalcula website_kind/sellable/opportunity_no_web sola.
+export async function updateLeadWebsite(leadId: string, website: string): Promise<void> {
+  const { error } = await getSupabase().from("leads").update({ website }).eq("id", leadId);
+  if (error) throw new Error(`updateLeadWebsite failed: ${error.message}`);
 }
 
 export async function applyGooglePlacesRefresh(

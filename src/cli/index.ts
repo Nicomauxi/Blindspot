@@ -6,6 +6,8 @@ import { enrichCommand } from "./commands/enrich.js";
 import { heuristicRefreshCommand } from "./commands/heuristic-refresh.js";
 import { scoreCommand } from "./commands/score.js";
 import { scoreEvalCommand } from "./commands/score-eval.js";
+import { scoreSimulateCommand } from "./commands/score-simulate.js";
+import { scoreRolloutV3Command } from "./commands/score-rollout-v3.js";
 import { reportCommand } from "./commands/report.js";
 import { leadsListCommand } from "./commands/leads-list.js";
 import { vocabularyCommand } from "./commands/vocabulary.js";
@@ -133,6 +135,82 @@ program
   });
 
 program
+  .command("enrich-unified")
+  .description("Fase 2: 1 query Serper por lead → website propio + IG/FB + reviews-meta. Budget-gated + multi-key.")
+  .option("--run <uuid>", "Solo leads de este run")
+  .option("--all", "Pool sin website real", false)
+  .option("--limit <number>", "Máx leads (mejor prospect_score primero)")
+  .option("--concurrency <number>", "Workers en paralelo", "4")
+  .option("--max-queries <number>", "Tope de queries Serper para este run")
+  .option("--no-searxng-fallback", "Desactivar el fallback al motor lento (SearXNG) cuando Serper se agota")
+  .action(async (opts: { run?: string; all?: boolean; limit?: string; concurrency?: string; maxQueries?: string; searxngFallback?: boolean }) => {
+    const { runUnifiedEnrich } = await import("./../modules/social-enrich/unified-enrich-run.js");
+    const stats = await runUnifiedEnrich({
+      ...(opts.run ? { run: opts.run } : { all: true }),
+      ...(opts.limit ? { limit: Number(opts.limit) } : {}),
+      concurrency: Number(opts.concurrency ?? "4"),
+      ...(opts.maxQueries ? { maxQueries: Number(opts.maxQueries) } : {}),
+      searxngFallback: opts.searxngFallback ?? true, // commander setea false con --no-searxng-fallback
+    });
+    console.log(`\nEnrich unificado: ${stats.found_website} websites / ${stats.found_instagram} IG (${stats.found_metrics} c/métricas) / ${stats.found_review_meta} reviews-meta / ${stats.no_match} sin match · ${stats.candidates} candidatos`);
+    console.log(`💳 Serper: ${stats.serper_queries_used} queries${stats.serper_stopped ? ` — agotado (${stats.serper_stopped})` : ""}${stats.fallback_searxng > 0 ? ` · fallback SearXNG: ${stats.fallback_found}/${stats.fallback_searxng}` : ""} · ${(stats.elapsed_ms / 1000).toFixed(1)}s`);
+  });
+
+program
+  .command("social-discover")
+  .description("F1: descubre IG/FB de leads digital-dark vía SearXNG (gratis). Concurrente + instrumentado.")
+  .option("--run <uuid>", "Solo leads de este run")
+  .option("--all", "Todos los leads del pool digital-dark", false)
+  .option("--limit <number>", "Máx leads a procesar (mejor prospect_score primero)")
+  // Default 4: con IG+FB en paralelo por lead, son ~8 requests concurrentes a SearXNG
+  // (sweet spot medido; más allá el upstream rate-limita y baja el hit-rate).
+  .option("--concurrency <number>", "Workers en paralelo (×2 queries c/u)", "4")
+  .option("--throttle-ms <number>", "Delay entre IG y FB por lead (0 = paralelo)", "0")
+  .option("--with-metrics", "Pasada integrada: tras descubrir el perfil, extraer followers/liveness (señal de scoring)", false)
+  .option("--serper-fallback", "Serper: 2da query dirigida si q1 no trae métricas (más créditos)", false)
+  .option("--max-queries <number>", "Tope de queries Serper para este run (corta al alcanzarlo)")
+  .action(async (opts: { run?: string; all?: boolean; limit?: string; concurrency?: string; throttleMs?: string; withMetrics?: boolean; serperFallback?: boolean; maxQueries?: string }) => {
+    const { runSocialDiscovery } = await import("./../modules/social-enrich/social-discover-run.js");
+    const stats = await runSocialDiscovery({
+      ...(opts.run ? { run: opts.run } : { all: true }),
+      ...(opts.limit ? { limit: Number(opts.limit) } : {}),
+      concurrency: Number(opts.concurrency ?? "4"),
+      throttleMs: Number(opts.throttleMs ?? "0"),
+      withMetrics: opts.withMetrics ?? false,
+      serperFallback: opts.serperFallback ?? false,
+      ...(opts.maxQueries ? { maxQueries: Number(opts.maxQueries) } : {}),
+    });
+    console.log(`\nSocial discover: ${stats.found_any} con perfil (${stats.found_instagram} IG / ${stats.found_facebook} FB) / ${stats.no_match} sin match / ${stats.candidates} candidatos`);
+    if (opts.withMetrics) {
+      console.log(`   métricas: ${stats.found_metrics} con followers/liveness / ${stats.found_url_no_metrics} perfil sin métricas públicas`);
+    }
+    console.log(`💳 Serper: ${stats.serper_queries_used} queries usadas${stats.serper_stopped ? ` — DETENIDO (${stats.serper_stopped})` : ""}${stats.skipped_no_budget > 0 ? ` · ${stats.skipped_no_budget} salteados sin budget` : ""}`);
+    console.log(`⏱  throughput: ${stats.leads_per_sec} leads/seg · ${(stats.elapsed_ms / 1000).toFixed(1)}s · concurrency=${opts.concurrency ?? "4"}`);
+  });
+
+program
+  .command("ig-snippet-enrich")
+  .description("Enrich IG metrics + liveness via search snippet (free, $0). Default provider: self-hosted SearXNG (SEARXNG_URL).")
+  .option("--run <uuid>", "Enrich leads of this run")
+  .option("--all", "Enrich all passed leads with a selected Instagram URL", false)
+  .option("--limit <number>", "Max leads to process (best prospect_score first)")
+  .option("--throttle-ms <number>", "Delay between queries (anti rate-limit, por worker)", "1500")
+  .option("--concurrency <number>", "Workers en paralelo (F1: SearXNG aguanta ~8)", "1")
+  .option("--retry-no-data", "Re-query leads previously marked no_data", false)
+  .action(async (opts: { run?: string; all?: boolean; limit?: string; throttleMs?: string; concurrency?: string; retryNoData?: boolean }) => {
+    const { runIgSnippetEnrich } = await import("./../modules/social-enrich/ig-snippet-enrich.js");
+    const stats = await runIgSnippetEnrich({
+      ...(opts.run ? { run: opts.run } : { all: true }),
+      ...(opts.limit ? { limit: Number(opts.limit) } : {}),
+      throttleMs: Number(opts.throttleMs ?? "1500"),
+      concurrency: Number(opts.concurrency ?? "1"),
+      retryNoData: opts.retryNoData ?? false,
+    });
+    console.log(`\nIG snippet enrich: ${stats.enriched} enriquecidos / ${stats.no_snippet} sin métricas / ${stats.skipped_resolved} ya resueltos / ${stats.skipped_no_url} sin URL${stats.aborted_provider_down ? " — ABORTADO (proveedor caído)" : ""}`);
+    console.log(`⏱  throughput: ${stats.leads_per_sec} leads/seg · ${(stats.elapsed_ms / 1000).toFixed(1)}s · concurrency=${opts.concurrency ?? "1"}`);
+  });
+
+program
   .command("score")
   .description("Score leads by computing business_quality, digital_gap, and prospect scores")
   .option("--run <uuid>", "Score leads of this discovery/enrichment run")
@@ -165,6 +243,44 @@ program
       ...(opts.outputDir ? { outputDir: opts.outputDir } : {}),
       top: opts.top,
       goldSetSize: opts.goldSetSize,
+    });
+  });
+
+
+program
+  .command("score-simulate")
+  .description("Simulate scoring calibration scenarios against the current scoring_version=2 cohort without persisting changes")
+  .option("--scenario <name>", "Only run one calibration scenario")
+  .option("--output-dir <path>", "Output directory (default: ./reports/scoring-calibration/<timestamp>/)")
+  .option("--gold-set <path>", "CSV with reviewed gold-set labels")
+  .option("--gold-set-size <number>", "Seed size for gold-set candidate export", "80")
+  .action(async (opts: { scenario?: string; outputDir?: string; goldSet?: string; goldSetSize: string }) => {
+    await scoreSimulateCommand({
+      ...(opts.scenario ? { scenario: opts.scenario } : {}),
+      ...(opts.outputDir ? { outputDir: opts.outputDir } : {}),
+      ...(opts.goldSet ? { goldSet: opts.goldSet } : {}),
+      goldSetSize: opts.goldSetSize,
+    });
+  });
+
+program
+  .command("score-rollout-v3")
+  .description("Persist a calibrated scoring v3 scenario for a selected scoring cohort")
+  .requiredOption("--scenario <name>", "Calibration scenario to persist")
+  .option("--snapshot-label <label>", "Snapshot label for rollback backup")
+  .option("--output-dir <path>", "Output directory (default: ./reports/score-rollout-v3/<snapshot>/)")
+  .option("--from-version <number>", "Only rescore leads currently on this scoring_version", "2")
+  // N102: dry-run por DEFAULT — antes reescribía los scores de todo el pool sin
+  // confirmación. Persistir exige --apply explícito.
+  .option("--apply", "Persist DB writes (sin esta flag corre en dry-run)", false)
+  .option("--dry-run", "(deprecado: es el default) Simulate the rollout without persisting DB writes", false)
+  .action(async (opts: { scenario: string; snapshotLabel?: string; outputDir?: string; fromVersion: string; dryRun?: boolean; apply?: boolean }) => {
+    await scoreRolloutV3Command({
+      scenario: opts.scenario,
+      ...(opts.snapshotLabel ? { snapshotLabel: opts.snapshotLabel } : {}),
+      ...(opts.outputDir ? { outputDir: opts.outputDir } : {}),
+      fromVersion: Number(opts.fromVersion),
+      dryRun: opts.apply !== true,
     });
   });
 

@@ -20,6 +20,15 @@ import { randomBetween } from "../../shared/scraping.js";
 import { openSocialEnrichBrowser } from "./browser.js";
 import { extractFacebookProfile } from "./facebook.js";
 import { extractInstagramProfile } from "./instagram.js";
+import {
+  buildSocialActivitySnapshot,
+  facebookProfile,
+  instagramProfile,
+  type SocialActivityProfile,
+} from "./social-activity.js";
+import { parseSocialDescription } from "./description-parse.js";
+import { mergeSocialIntoCanonical, type SocialCanonicalInput } from "./social-canonical.js";
+import { recordSocialSnapshots } from "../../storage/social-snapshots.js";
 
 export interface SocialEnrichOptions {
   run?: string;
@@ -60,10 +69,14 @@ function selectedHeuristicUrl(lead: Lead, platform: "facebook" | "instagram"): s
   return candidate?.url ?? null;
 }
 
-function hasHeuristicTag(lead: Lead): boolean {
+// Un lead es candidato a social-enrich si pasó el filtro y tiene una red para medir:
+// sea por tag heurístico, o porque ya hay una URL FB/IG seleccionada (cubre los leads que
+// tienen candidata pero nunca fueron medidos — antes quedaban fuera por gating de tag).
+function hasSocialCandidate(lead: Lead): boolean {
   if (!lead.passed_filter) return false;
   const tags = new Set(lead.tags);
-  return tags.has("fb-heuristic") || tags.has("ig-heuristic");
+  if (tags.has("fb-heuristic") || tags.has("ig-heuristic")) return true;
+  return selectedHeuristicUrl(lead, "facebook") !== null || selectedHeuristicUrl(lead, "instagram") !== null;
 }
 
 function tagsForResult(
@@ -95,14 +108,31 @@ function isBlockedError(err: unknown): boolean {
   return BLOCKED_SIGNALS.some((s) => msg.includes(s));
 }
 
+// El browser compartido puede morir a mitad de run (crash de chromium, SIGTERM al process
+// group). En ese caso todo intento posterior falla igual: hay que abortar limpio, no crashear.
+const BROWSER_CLOSED_SIGNALS = ["has been closed", "target closed", "browser closed"];
+
+function isBrowserClosedError(err: unknown): boolean {
+  const msg = (err instanceof Error ? err.message : String(err)).toLowerCase();
+  return BROWSER_CLOSED_SIGNALS.some((s) => msg.includes(s));
+}
+
+interface ProcessLeadResult {
+  processed: boolean;
+  error: boolean;
+  blocked: boolean;
+  browserDead: boolean;
+}
+
 async function processLead(
   lead: Lead,
   context: Awaited<ReturnType<typeof openSocialEnrichBrowser>>["context"],
   sleepFn: (ms: number) => Promise<void>
-): Promise<{ processed: boolean; error: boolean; blocked: boolean }> {
+): Promise<ProcessLeadResult> {
   const scrapingCfg = getScrapingConfig();
-  const page = await context.newPage();
+  let page: Awaited<ReturnType<typeof context.newPage>> | null = null;
   try {
+    page = await context.newPage();
     const facebookUrl = selectedHeuristicUrl(lead, "facebook");
     const instagramUrl = selectedHeuristicUrl(lead, "instagram");
 
@@ -118,27 +148,77 @@ async function processLead(
       ? await extractInstagramProfile(page, instagramUrl, lead)
       : null;
 
+    const ranAt = new Date().toISOString();
     const socialSearch: PlaywrightSocialSearch = {
-      ran_at: new Date().toISOString(),
+      ran_at: ranAt,
       source: "playwright",
       facebook,
       instagram,
     };
     const derived = tagsForResult(facebook, instagram);
-    await updateLeadSocialSearch(lead.id, socialSearch, derived.tags, derived.whatsapp);
+
+    // Tracking de actividad/audiencia social desde el og:description público.
+    const activityProfiles: SocialActivityProfile[] = [];
+    if (instagram) activityProfiles.push(instagramProfile(instagram.url, instagram.bio));
+    if (facebook) activityProfiles.push(facebookProfile(facebook.url, facebook.description));
+    const hasWebsite =
+      Boolean(lead.website) ||
+      Boolean(lead.digital_footprint?.heuristic_discovery?.selected.website?.url);
+    const socialActivity =
+      activityProfiles.length > 0
+        ? buildSocialActivitySnapshot(activityProfiles, { ranAt, hasWebsite })
+        : undefined;
+
+    // P1/P3: parsear la descripción social (tel/email/web) y fusionarla a canonical_fields
+    // como fuente ponderada por actividad. Best-effort: si algo falla no rompe el enrich.
+    let socialCanonical: Record<string, unknown> | null | undefined;
+    const canonicalInputsForMerge: SocialCanonicalInput[] = [];
+    try {
+      const canonicalInputs: SocialCanonicalInput[] = canonicalInputsForMerge;
+      if (instagram) {
+        const parsed = await parseSocialDescription(instagram.bio, "instagram");
+        canonicalInputs.push({ profile: instagramProfile(instagram.url, instagram.bio), parsed, recencyDays: null });
+      }
+      if (facebook) {
+        const parsed = await parseSocialDescription(facebook.description, "facebook");
+        canonicalInputs.push({ profile: facebookProfile(facebook.url, facebook.description), parsed, recencyDays: null });
+      }
+      if (canonicalInputs.length > 0) {
+        socialCanonical = mergeSocialIntoCanonical(lead, canonicalInputs) ?? undefined;
+      }
+    } catch (parseErr) {
+      getLogger().warn({ leadId: lead.id, err: String(parseErr) }, "social description parse failed");
+    }
+
+    // N90: el merge final corre sobre el canonical fresco re-leído en el storage.
+    const socialCanonicalFn =
+      socialCanonical !== undefined && socialCanonical !== null && canonicalInputsForMerge.length > 0
+        ? (fresh: Lead["canonical_fields"]) =>
+            mergeSocialIntoCanonical({ ...lead, canonical_fields: fresh }, canonicalInputsForMerge)
+        : undefined;
+    await updateLeadSocialSearch(lead.id, socialSearch, derived.tags, derived.whatsapp, socialActivity, socialCanonical, socialCanonicalFn);
+
+    // Histórico append-only (best-effort): solo inserta si cambió el estado/audiencia/conteos.
+    if (activityProfiles.length > 0) {
+      await recordSocialSnapshots(lead.id, activityProfiles, ranAt).catch(() => undefined);
+    }
     await updateLeadSocialEnrichStatus(lead.id, "ok");
-    return { processed: true, error: false, blocked: false };
+    return { processed: true, error: false, blocked: false, browserDead: false };
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
+    if (isBrowserClosedError(err)) {
+      getLogger().warn({ leadId: lead.id, err: msg }, "social enrich browser closed for lead");
+      return { processed: false, error: true, blocked: false, browserDead: true };
+    }
     if (isBlockedError(err)) {
       getLogger().warn({ leadId: lead.id }, "social enrich blocked for lead");
       await updateLeadSocialEnrichStatus(lead.id, "blocked").catch(() => {});
-      return { processed: false, error: false, blocked: true };
+      return { processed: false, error: false, blocked: true, browserDead: false };
     }
     getLogger().warn({ leadId: lead.id, err: msg }, "social enrich failed for lead");
-    return { processed: false, error: true, blocked: false };
+    return { processed: false, error: true, blocked: false, browserDead: false };
   } finally {
-    await page.close();
+    if (page) await page.close().catch(() => undefined);
   }
 }
 
@@ -146,7 +226,7 @@ export async function runSocialEnrich(opts: SocialEnrichOptions): Promise<Social
   const log = getLogger();
   const limitCount = opts.limit ?? DEFAULT_LIMIT;
   const loaded = opts.run ? await loadLeadsByRunId(opts.run) : await loadAllLeads();
-  const candidates = loaded.filter(hasHeuristicTag);
+  const candidates = loaded.filter(hasSocialCandidate);
   const freshSkipped = opts.force
     ? []
     : candidates.filter((lead) => isFreshPlaywrightSearch(lead));
@@ -173,12 +253,21 @@ export async function runSocialEnrich(opts: SocialEnrichOptions): Promise<Social
   let processed = 0;
   let errors = 0;
   let blocked = 0;
+  let browserDead = false;
   try {
     const limit = pLimit(getConcurrency());
     await Promise.all(
       selected.map((lead) =>
         limit(async () => {
+          if (browserDead) {
+            errors += 1;
+            return;
+          }
           const result = await processLead(lead, session.context, sleepFn);
+          if (result.browserDead && !browserDead) {
+            browserDead = true;
+            log.error({ leadId: lead.id }, "social enrich browser died; aborting remaining leads");
+          }
           if (result.processed) processed += 1;
           if (result.error) errors += 1;
           if (result.blocked) blocked += 1;
@@ -187,7 +276,7 @@ export async function runSocialEnrich(opts: SocialEnrichOptions): Promise<Social
     );
   } finally {
     try { await session.context.close(); } catch { /* ignore */ }
-    await session.browser.close();
+    try { await session.browser.close(); } catch { /* ignore */ }
   }
 
   log.info({ processed, errors, blocked, socialDelayMs: scrapingCfg.social_delay_ms }, "Social enrich complete");

@@ -58,7 +58,7 @@ export async function scoreEvalCommand(rawArgs: RawScoreEvalArgs): Promise<void>
     ["summary.json", artifacts.summaryJson],
     ["lead-deltas.csv", artifacts.leadDeltasCsv],
     ["top-v1.csv", artifacts.topV1Csv],
-    ["top-v2.csv", artifacts.topV2Csv],
+    ["top-v3.csv", artifacts.topV3Csv],
     ["top-50-comparison.csv", artifacts.topComparisonCsv],
     ["distribution-by-source.csv", artifacts.bySourceCsv],
     ["distribution-by-niche.csv", artifacts.byNicheCsv],
@@ -86,7 +86,7 @@ export async function scoreEvalCommand(rawArgs: RawScoreEvalArgs): Promise<void>
   console.log(`Reporte: ${outDir}`);
   console.log(`Tier X >= 55: ${report.criteria.tierXHot.count}`);
   console.log(`Score 100: ${(report.criteria.cappedAt100.percent ?? 0).toFixed(2)}%`);
-  console.log(`Avg franquicias: ${(report.criteria.franchiseAverage.avgV2 ?? 0).toFixed(1)}`);
-  console.log(`Avg car_dealer contactables: ${(report.criteria.carDealerContactableAverage.avgV2 ?? 0).toFixed(1)}`);
+  console.log(`Avg franquicias: ${(report.criteria.franchiseAverage.avgV3 ?? 0).toFixed(1)}`);
+  console.log(`Avg car_dealer contactables: ${(report.criteria.carDealerContactableAverage.avgV3 ?? 0).toFixed(1)}`);
   console.log(`Gold set seed: ${join(outDir, "gold-set.seed.csv")}`);
 }

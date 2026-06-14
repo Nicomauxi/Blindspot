@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { estimateCostUsd } from "./pricing.js";
 import type {
   LeadAssistantBrief,
   LeadAssistantRequest,
@@ -10,9 +11,6 @@ import {
   buildCommercialAssistantPrompt,
   parseCommercialAssistant,
 } from "./lead-assistant.js";
-
-const GEMINI_COST_PER_1K_IN = 0.000125;
-const GEMINI_COST_PER_1K_OUT = 0.000375;
 
 const geminiResponseSchema = z.object({
   candidates: z
@@ -61,6 +59,8 @@ export class GeminiProvider implements LLMProvider {
     const response = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      // N80: sin timeout, un Gemini colgado bloqueaba la request del asistente.
+      signal: AbortSignal.timeout(20_000),
       body: JSON.stringify({
         contents: [{ parts: [{ text: prompt }] }],
         generationConfig: { maxOutputTokens, temperature: 0.7 },
@@ -81,7 +81,7 @@ export class GeminiProvider implements LLMProvider {
     const text = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ?? "";
     const tokensIn = data.usageMetadata?.promptTokenCount ?? 0;
     const tokensOut = data.usageMetadata?.candidatesTokenCount ?? 0;
-    const cost = (tokensIn / 1000) * GEMINI_COST_PER_1K_IN + (tokensOut / 1000) * GEMINI_COST_PER_1K_OUT;
+    const cost = estimateCostUsd(this.model, tokensIn, tokensOut);
 
     return { text, tokensIn, tokensOut, cost };
   }

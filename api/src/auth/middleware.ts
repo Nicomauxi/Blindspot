@@ -27,7 +27,7 @@ export async function requireAuth(
   const db = getDb();
   const { data: user, error } = await db
     .from("users")
-    .select("id, email, role, lead_filter, active")
+    .select("id, email, role, lead_filter, active, token_version")
     .eq("id", request.user.user_id)
     .single();
 
@@ -37,6 +37,14 @@ export async function requireAuth(
 
   if (!user.active) {
     return reply.status(401).send({ error: "Account inactive", error_code: "account_inactive" });
+  }
+
+  // N71: revocación server-side — un token firmado con un tv viejo deja de valer
+  // cuando se incrementa users.token_version. Tokens legacy (sin tv) valen como tv=0.
+  const tokenVersion = ((user as Record<string, unknown>)["token_version"] as number | null) ?? 0;
+  const payloadTv = (request.user as { tv?: number }).tv ?? 0;
+  if (tokenVersion !== payloadTv) {
+    return reply.status(401).send({ error: "Token revoked", error_code: "token_revoked" });
   }
 
   (request as FastifyRequest & { authUser: AuthUser }).authUser = {

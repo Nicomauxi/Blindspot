@@ -76,6 +76,40 @@ describe("scoreLead systems_gap", () => {
     ]);
   });
 
+  it("FS-08: WhatsApp presente (wa.me link) evita whatsapp_business_missing, no el chat widget", () => {
+    const conWa = scoreLead(
+      makeLead({
+        digital_footprint: {
+          fetched_at: "2026-01-01T00:00:00.000Z",
+          operational_systems: ops({ whatsapp_web_link: true }),
+        },
+      })
+    );
+    expect(conWa.score_breakdown.systems_gap.rules.map((r) => r.name)).not.toContain(
+      "whatsapp_business_missing"
+    );
+
+    // Un chat widget SaaS (canal distinto) NO debe contar como WhatsApp.
+    const soloWidget = scoreLead(
+      makeLead({
+        digital_footprint: {
+          fetched_at: "2026-01-01T00:00:00.000Z",
+          operational_systems: ops({ chat_widget: true }),
+        },
+      })
+    );
+    expect(soloWidget.score_breakdown.systems_gap.rules.map((r) => r.name)).toContain(
+      "whatsapp_business_missing"
+    );
+  });
+
+  it("FS-08: lead.whatsapp seteado evita el gap", () => {
+    const result = scoreLead(makeLead({ whatsapp: "+59899111222" }));
+    expect(result.score_breakdown.systems_gap.rules.map((r) => r.name)).not.toContain(
+      "whatsapp_business_missing"
+    );
+  });
+
   it("hairdresser with booking avoids booking and dependent WhatsApp gaps", () => {
     const result = scoreLead(
       makeLead({

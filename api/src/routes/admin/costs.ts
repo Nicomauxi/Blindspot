@@ -1,3 +1,4 @@
+import { fetchAllRows } from "../../services/fetch-all-rows.js";
 import type { FastifyInstance } from "fastify";
 import { getDb } from "../../db/client.js";
 import { requireAdmin } from "../../auth/middleware.js";
@@ -86,12 +87,17 @@ function buildMonthKeys(now = new Date(), count = 12): string[] {
   return keys;
 }
 
+
+
 export async function costsRoutes(app: FastifyInstance): Promise<void> {
   app.get("/admin/costs/overview", { preHandler: requireAdmin }, async (request, reply) => {
     const db = getDb();
     const { month, start, end } = parseMonthRange((request.query as CostQuery | undefined)?.month);
     try {
-    const [configRes, llmRes, runsRes, leadsRes] = await Promise.all([
+    // N77: el rango del mes va en SQL con paginación range() — la ventana latest-N
+    // filtrada en JS subreportaba meses pasados hasta un 88% ($8.26 vs $68.11 en mayo)
+    // y PostgREST capa a max_rows=1000 cualquier limit mayor.
+    const [configRes, llmAll, runsAll, leadsAll] = await Promise.all([
       db
         .from("pipeline_config")
         .select(
@@ -99,22 +105,34 @@ export async function costsRoutes(app: FastifyInstance): Promise<void> {
         )
         .limit(1)
         .single(),
-      db
-        .from("llm_usage_log")
-        .select("provider, lead_id, total_tokens, cost_usd, created_at")
-        .order("created_at", { ascending: false })
-        .limit(5000),
-      db
-        .from("runs")
-        .select("id, niche, location, status, stats, finished_at")
-        .eq("status", "completed")
-        .order("finished_at", { ascending: false })
-        .limit(200),
-      db
-        .from("leads")
-        .select("id, name, source, first_seen_run_id, created_at, prospect_score")
-        .order("created_at", { ascending: false })
-        .limit(5000),
+      fetchAllRows<LlmUsageRow>((from, to) =>
+        db
+          .from("llm_usage_log")
+          .select("provider, lead_id, total_tokens, cost_usd, created_at")
+          .gte("created_at", start.toISOString())
+          .lt("created_at", end.toISOString())
+          .order("created_at", { ascending: false })
+          .range(from, to)
+      ),
+      fetchAllRows<CostRun>((from, to) =>
+        db
+          .from("runs")
+          .select("id, niche, location, status, stats, finished_at")
+          .eq("status", "completed")
+          .gte("finished_at", start.toISOString())
+          .lt("finished_at", end.toISOString())
+          .order("finished_at", { ascending: false })
+          .range(from, to)
+      ),
+      fetchAllRows<CostLead>((from, to) =>
+        db
+          .from("leads")
+          .select("id, name, source, first_seen_run_id, created_at, prospect_score")
+          .gte("created_at", start.toISOString())
+          .lt("created_at", end.toISOString())
+          .order("created_at", { ascending: false })
+          .range(from, to)
+      ),
     ]);
 
     const config = configRes.data as {
@@ -125,13 +143,9 @@ export async function costsRoutes(app: FastifyInstance): Promise<void> {
       backup_monthly_cost_usd: number;
     } | null;
 
-    const llmRows = (llmRes.data ?? []) as LlmUsageRow[];
-    const runs = (runsRes.data ?? []) as CostRun[];
-    const leads = (leadsRes.data ?? []) as CostLead[];
-
-    const llmRowsInMonth = llmRows.filter((row) => isWithinRange(row.created_at, start, end));
-    const runsInMonth = runs.filter((run) => isWithinRange(run.finished_at, start, end));
-    const leadsInMonth = leads.filter((lead) => isWithinRange(lead.created_at, start, end));
+    const llmRowsInMonth = llmAll;
+    const runsInMonth = runsAll;
+    const leadsInMonth = leadsAll;
 
     const llmByProvider = new Map<
       string,
@@ -303,38 +317,50 @@ export async function costsRoutes(app: FastifyInstance): Promise<void> {
 
   app.get("/admin/costs/history", { preHandler: requireAdmin }, async (request, reply) => {
     const db = getDb();
+    const historyNow = new Date();
+    const historyStart = new Date(Date.UTC(historyNow.getUTCFullYear(), historyNow.getUTCMonth() - 11, 1));
     try {
-    const [configRes, llmRes, runsRes, leadsRes] = await Promise.all([
+    // N77: rango de 12 meses en SQL con paginación — el limit(500) erosionaba el histórico.
+    const [configRes, llmAll, runsAll, leadsAll] = await Promise.all([
       db
         .from("pipeline_config")
         .select("infra_monthly_cost_usd, backup_monthly_cost_usd")
         .limit(1)
         .single(),
-      db
-        .from("llm_usage_log")
-        .select("provider, lead_id, total_tokens, cost_usd, created_at")
-        .order("created_at", { ascending: false })
-        .limit(5000),
-      db
-        .from("runs")
-        .select("id, niche, location, status, stats, finished_at")
-        .eq("status", "completed")
-        .order("finished_at", { ascending: false })
-        .limit(500),
-      db
-        .from("leads")
-        .select("id, name, source, first_seen_run_id, created_at, prospect_score")
-        .order("created_at", { ascending: false })
-        .limit(5000),
+      fetchAllRows<LlmUsageRow>((from, to) =>
+        db
+          .from("llm_usage_log")
+          .select("provider, lead_id, total_tokens, cost_usd, created_at")
+          .gte("created_at", historyStart.toISOString())
+          .order("created_at", { ascending: false })
+          .range(from, to)
+      ),
+      fetchAllRows<CostRun>((from, to) =>
+        db
+          .from("runs")
+          .select("id, niche, location, status, stats, finished_at")
+          .eq("status", "completed")
+          .gte("finished_at", historyStart.toISOString())
+          .order("finished_at", { ascending: false })
+          .range(from, to)
+      ),
+      fetchAllRows<CostLead>((from, to) =>
+        db
+          .from("leads")
+          .select("id, name, source, first_seen_run_id, created_at, prospect_score")
+          .gte("created_at", historyStart.toISOString())
+          .order("created_at", { ascending: false })
+          .range(from, to)
+      ),
     ]);
 
     const config = configRes.data as {
       infra_monthly_cost_usd: number;
       backup_monthly_cost_usd: number;
     } | null;
-    const llmRows = (llmRes.data ?? []) as LlmUsageRow[];
-    const runs = (runsRes.data ?? []) as CostRun[];
-    const leads = (leadsRes.data ?? []) as CostLead[];
+    const llmRows = llmAll;
+    const runs = runsAll;
+    const leads = leadsAll;
     const monthKeys = buildMonthKeys(new Date(), 12);
     const trackedMonths = new Set(monthKeys);
 

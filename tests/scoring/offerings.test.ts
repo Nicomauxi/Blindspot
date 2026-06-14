@@ -135,3 +135,18 @@ describe("buildCommercialOfferings — excludes zero offerings", () => {
     expect(result.software).toHaveLength(0);
   });
 });
+
+describe("buildCommercialOfferings — contacto_directo (N1.7)", () => {
+  it("renderiza contacto_directo cuando es el único sub-score (no 'Sin señal')", () => {
+    const result = buildCommercialOfferings(["mobile-phone"], scoreBreakdown({ contacto_directo: 30 }), null);
+    const offer = result.software.find((o) => o.id === "contacto_directo");
+    expect(offer).toBeDefined();
+    expect(offer?.label).toBe("Contacto directo");
+    expect(result.has_data).toBe(true);
+  });
+
+  it("NO renderiza contacto_directo cuando su score es 0", () => {
+    const result = buildCommercialOfferings([], scoreBreakdown({ contacto_directo: 0 }), null);
+    expect(result.software.find((o) => o.id === "contacto_directo")).toBeUndefined();
+  });
+});

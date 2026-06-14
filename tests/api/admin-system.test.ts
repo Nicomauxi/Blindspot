@@ -161,6 +161,8 @@ describe("GET/POST /api/v1/admin/system/*", () => {
 
   it("restarts core in production and writes audit log first", async () => {
     process.env["NODE_ENV"] = "production";
+    // N72: producción exige secret fuerte.
+    process.env["API_JWT_SECRET"] = "a-strong-jwt-secret-for-production-tests-0123456789";
     execFileMock.mockImplementation((command: string, args: string[], _options: object, callback: (error: Error | null, stdout: string, stderr: string) => void) => {
       expect(command).toBe("pm2");
       if (args[0] === "jlist") {

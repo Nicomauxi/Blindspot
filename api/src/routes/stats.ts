@@ -1,3 +1,5 @@
+import { fetchAllRows } from "../services/fetch-all-rows.js";
+import { passesLeadFilter } from "../services/lead-filter.js";
 import type { FastifyInstance } from "fastify";
 import { getDb } from "../db/client.js";
 import { requireAuth, getAuthUser } from "../auth/middleware.js";
@@ -48,19 +50,26 @@ export async function statsRoutes(app: FastifyInstance): Promise<void> {
       query = query.eq("user_id", authUser.id);
     }
 
-    const { data } = await query;
+    const { data, error } = await query;
+    if (error) {
+      request.log.error({ error }, "stats outreach query failed");
+      return reply.status(500).send({ error: "Database error", error_code: "db_error" });
+    }
     return reply.status(200).send({ data: data ?? [] });
   });
 
   // GET /stats/pipeline — pipeline runs summary
-  app.get("/stats/pipeline", { preHandler: requireAuth }, async (_request, reply) => {
+  app.get("/stats/pipeline", { preHandler: requireAuth }, async (request, reply) => {
     const db = getDb();
-    const { data } = await db
+    const { data, error } = await db
       .from("pipeline_runs")
       .select("status, created_at, completed_at")
       .order("created_at", { ascending: false })
       .limit(10);
-
+    if (error) {
+      request.log.error({ error }, "stats pipeline query failed");
+      return reply.status(500).send({ error: "Database error", error_code: "db_error" });
+    }
     return reply.status(200).send({ data: data ?? [] });
   });
 
@@ -70,13 +79,26 @@ export async function statsRoutes(app: FastifyInstance): Promise<void> {
     const db = getDb();
     const view = authUser.role === "cm" ? "lead_dashboard" : "leads";
 
-    const [nicheRes, tierRes, sourceRes] = await Promise.all([
-      db.from(view).select("niche, prospect_score, contact_tier"),
-      db.from(view).select("contact_tier, prospect_score").not("contact_tier", "is", null),
-      db.from(view).select("source, prospect_score").not("source", "is", null),
-    ]);
-
     type Row = { niche: string | null; prospect_score: number | null; contact_tier: string | null; source?: string };
+
+    // N92: paginar con range (PostgREST capa a 1000 → los agregados estaban
+    // subcontados ~1000/5593) y traer las columnas que el lead_filter del cm necesita.
+    const allRows = await fetchAllRows<Row & Record<string, unknown>>((from, to) =>
+      db
+        .from(view)
+        .select("niche, prospect_score, contact_tier, source, primary_offer, contacted_at, tags, inferred_state, lead_company_data")
+        .range(from, to)
+    );
+
+    // N92: un cm solo ve la distribución de SU segmento (mismo gate que GET /leads).
+    const scopedRows =
+      authUser.role === "cm" && authUser.lead_filter
+        ? allRows.filter((row) => passesLeadFilter(row, authUser.lead_filter as Record<string, unknown>))
+        : allRows;
+
+    const nicheRes = { data: scopedRows };
+    const tierRes = { data: scopedRows.filter((r) => r.contact_tier != null) };
+    const sourceRes = { data: scopedRows.filter((r) => r.source != null) };
 
     function aggregate(rows: Row[], key: keyof Row) {
       const map: Record<string, { count: number; total_score: number; count_scored: number }> = {};

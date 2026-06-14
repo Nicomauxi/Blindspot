@@ -65,6 +65,7 @@ function makeUpdateChain(error: null | { message: string } = null) {
   chain.update = vi.fn().mockReturnValue(chain);
   chain.eq = vi.fn().mockReturnValue(chain);
   chain.neq = vi.fn().mockReturnValue(chain);
+  chain.or = vi.fn().mockReturnValue(chain); // N93: ownership en mark/archive
   return chain as { update: ReturnType<typeof vi.fn> };
 }
 

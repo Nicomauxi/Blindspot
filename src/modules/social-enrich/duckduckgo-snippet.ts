@@ -1,0 +1,185 @@
+// Métricas + liveness de IG vía el snippet de DuckDuckGo (gratis, $0). Desde julio 2025 IG
+// indexa cuentas profesionales en buscadores: la query `site:instagram.com/<handle>` devuelve
+// "X Followers, Y Following, Z Posts - <bio>" en el snippet del resultado. No toca la API de IG
+// (no aplica el ToS de Meta); el riesgo es el ToS del buscador y su rate-limit/anti-bot.
+//
+// IMPORTANTE: DuckDuckGo aplica anti-bot agresivo a IPs de datacenter (devuelve un "anomaly"
+// modal). En IP residencial con throttle funciona; acá degradamos con gracia: si detectamos el
+// anti-bot o no hay snippet, devolvemos null y el pipeline sigue sin métricas (no rompe nada).
+import { parseSocialCount } from "./social-activity.js";
+import type { SocialProfileData } from "./social-fusion.js";
+
+const LITE_ENDPOINT = "https://lite.duckduckgo.com/lite/";
+const HTML_ENDPOINT = "https://html.duckduckgo.com/html/";
+import { BROWSER_USER_AGENT as UA } from "../../shared/user-agents.js";
+const DDG_SNIPPET_TIMEOUT_MS = 8000; // F4.3
+
+export function isAntiBot(html: string): boolean {
+  return /anomaly-modal|unfortunately, bots use duckduckgo too|challenge/i.test(html);
+}
+
+// Extrae los textos de snippet del HTML de resultados de DDG (html y lite tienen markup distinto).
+export function extractSnippets(html: string): string[] {
+  const out: string[] = [];
+  // Variante html.duckduckgo.com: <a class="result__snippet" ...>texto</a>
+  const reHtml = /class="result__snippet"[^>]*>([\s\S]*?)<\/a>/gi;
+  // Variante lite: el snippet va en <td class="result-snippet">texto</td>
+  const reLite = /class="result-snippet"[^>]*>([\s\S]*?)<\/td>/gi;
+  for (const re of [reHtml, reLite]) {
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(html)) !== null) {
+      const text = m[1]!.replace(/<[^>]*>/g, "").replace(/&amp;/g, "&").replace(/&#x27;|&#39;/g, "'").replace(/&quot;/g, '"').replace(/\s+/g, " ").trim();
+      if (text) out.push(text);
+    }
+  }
+  return out;
+}
+
+// Parsea "X Followers, Y Following, Z Posts - <bio>" → SocialProfileData. El conteo soporta
+// K/M/mil (reusa parseSocialCount). La bio es lo que sigue al primer " - " (best-effort: el
+// snippet suele truncarla). Devuelve null si no hay al menos una métrica reconocible.
+export function parseInstagramSnippet(snippet: string, username: string): SocialProfileData | null {
+  const grab = (label: RegExp): number | null => {
+    const m = snippet.match(label);
+    return m ? parseSocialCount(m[1]) : null;
+  };
+  const followers = grab(/([\d.,]+\s*[KMB]?)\s+Followers/i) ?? grab(/([\d.,]+\s*[KMB]?)\s+seguidores/i);
+  const following = grab(/([\d.,]+\s*[KMB]?)\s+Following/i) ?? grab(/([\d.,]+\s*[KMB]?)\s+sigui/i);
+  const posts = grab(/([\d.,]+\s*[KMB]?)\s+Posts/i) ?? grab(/([\d.,]+\s*[KMB]?)\s+publicaciones/i);
+
+  if (followers == null && following == null && posts == null) return null;
+
+  // Bio: texto tras el primer " - " (formato típico del og:description que DDG copia).
+  let biography: string | null = null;
+  const dashIdx = snippet.indexOf(" - ");
+  if (dashIdx >= 0) {
+    let after = snippet.slice(dashIdx + 3).trim();
+    // Quitar prefijos boilerplate del og:description de IG.
+    after = after.replace(/^See Instagram photos and videos from\s+/i, "");
+    const onIg = after.match(/on Instagram:\s*["']?(.+?)["']?$/i);
+    if (onIg) after = onIg[1]!.trim();
+    biography = after.length > 0 ? after : null;
+  }
+
+  return {
+    username,
+    name: null,
+    biography,
+    followers_count: followers,
+    follows_count: following,
+    media_count: posts,
+    website: null,
+    recent_media: [], // el snippet no trae timestamps → liveness fino no disponible por esta vía
+  };
+}
+
+// Extrae actividad reciente de snippets de POSTS ("30 likes, 4 comments - handle on
+// September 25, 2025: caption"). Da LIVENESS (fecha) + engagement, que para cuentas chicas
+// uruguayas Google SÍ muestra aunque NO muestre el follower count del perfil.
+const POST_SNIPPET_RE = /([\d.,]+)\s+likes?,\s+([\d.,]+)\s+comments?\s+-\s+([\w.]+)\s+on\s+([A-Z][a-z]+\.?\s+\d{1,2},\s*\d{4})/i;
+
+export function extractRecentMedia(
+  snippets: string[],
+  username: string
+): SocialProfileData["recent_media"] {
+  const media: SocialProfileData["recent_media"] = [];
+  for (const snippet of snippets) {
+    const m = snippet.match(POST_SNIPPET_RE);
+    if (!m) continue;
+    if (m[3]!.toLowerCase().replace(/[^a-z0-9]/g, "") !== username.toLowerCase().replace(/[^a-z0-9]/g, "")) continue;
+    const parsedDate = new Date(m[4]!.replace(/\./g, ""));
+    const timestamp = Number.isNaN(parsedDate.getTime()) ? null : parsedDate.toISOString();
+    const captionIdx = snippet.indexOf(":");
+    media.push({
+      caption: captionIdx >= 0 ? snippet.slice(captionIdx + 1).trim().slice(0, 280) : null,
+      timestamp,
+      like_count: parseSocialCount(m[1]!),
+      comments_count: parseSocialCount(m[2]!),
+    });
+  }
+  return media;
+}
+
+// Parser RICO: combina followers (cuando Google los muestra) + recent_media (liveness +
+// engagement, presente para la mayoría de las cuentas). Devuelve null solo si NO hay nada
+// útil. Maximiza la data por query (objetivo del path Serper).
+export function parseInstagramProfileRich(
+  snippets: string[],
+  username: string
+): SocialProfileData | null {
+  const base = pickProfileFromSnippets(snippets, username); // followers/following/posts + bio
+  const recent = extractRecentMedia(snippets, username);
+  if (!base && recent.length === 0) return null;
+  if (base) return recent.length > 0 ? { ...base, recent_media: recent } : base;
+  // Sin followers pero con actividad: perfil "vivo" sin audience_tier.
+  return {
+    username,
+    name: null,
+    biography: null,
+    followers_count: null,
+    follows_count: null,
+    media_count: null,
+    website: null,
+    recent_media: recent,
+  };
+}
+
+// N50: el buscador devuelve también snippets de OTROS perfiles (la query site: no es
+// exacta). Solo cuenta un snippet que mencione el handle como token completo
+// ('@arco ' sí; '@arcohanna' NO contiene el handle 'arco').
+export function snippetMentionsUsername(snippet: string, username: string): boolean {
+  const escaped = username.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  if (new RegExp(`(^|[^\\w.])@?${escaped}([^\\w.]|$)`, "i").test(snippet)) return true;
+  // Snippets que nombran el negocio sin @handle ('… - Panadería Godoy'): el nombre
+  // compactado contiene al handle. Solo para handles largos (≥6) — un handle corto
+  // sería substring accidental de otro ('arco' ⊂ 'arcohanna').
+  if (username.length < 6) return false;
+  const compacted = snippet
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+  return compacted.includes(username.toLowerCase().replace(/[^a-z0-9]/g, ""));
+}
+
+// Filtra candidatos de snippet y devuelve el primer perfil parseable. Source-agnostic:
+// lo reusan el adapter de DuckDuckGo (HTML) y el de SearXNG (JSON results[].content).
+export function pickProfileFromSnippets(snippets: string[], username: string): SocialProfileData | null {
+  for (const snippet of snippets) {
+    if (!/instagram/i.test(snippet) && !/Followers|seguidores/i.test(snippet)) continue;
+    if (!snippetMentionsUsername(snippet, username)) continue;
+    const parsed = parseInstagramSnippet(snippet, username);
+    if (parsed) return parsed;
+  }
+  return null;
+}
+
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+// Consulta DDG por el perfil y devuelve el SocialProfileData, o null si bloqueo/sin datos.
+// Degradación graciosa: nunca lanza por anti-bot/red — el caller sigue sin métricas.
+export async function fetchInstagramSnippet(
+  username: string,
+  opts: { throttleMs?: number; fetchImpl?: typeof fetch } = {}
+): Promise<SocialProfileData | null> {
+  const doFetch = opts.fetchImpl ?? fetch;
+  if (opts.throttleMs && opts.throttleMs > 0) await sleep(opts.throttleMs);
+  const query = `site:instagram.com/${username}`;
+  for (const endpoint of [LITE_ENDPOINT, HTML_ENDPOINT]) {
+    try {
+      const url = `${endpoint}?q=${encodeURIComponent(query)}`;
+      // F4.3: timeout para no colgar el enrich si el endpoint no responde (patrón de http.ts).
+      const res = await doFetch(url, {
+        headers: { "User-Agent": UA, Accept: "text/html" },
+        signal: AbortSignal.timeout(DDG_SNIPPET_TIMEOUT_MS),
+      });
+      const html = await res.text();
+      if (isAntiBot(html)) continue; // probar el otro endpoint; si ambos bloquean → null
+      const found = pickProfileFromSnippets(extractSnippets(html), username);
+      if (found) return found;
+    } catch {
+      // red/timeout → probar siguiente endpoint o degradar a null
+    }
+  }
+  return null;
+}

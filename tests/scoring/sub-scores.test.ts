@@ -227,8 +227,8 @@ describe("score_catalogo", () => {
     expect(calculateSubScores(l, 0).catalogo).toBe(0);
   });
 
-  it("hours-missing-on-web tag adds +3 even without ops", () => {
-    expect(calculateSubScores(lead({ tags: ["hours-missing-on-web"] }), 0).catalogo).toBe(3);
+  it("hours-missing-on-web tag adds +3 even without ops (rubro con catálogo)", () => {
+    expect(calculateSubScores(lead({ niche: "grocery", tags: ["hours-missing-on-web"] }), 0).catalogo).toBe(3);
   });
 
   it("restaurant with all missing ops → 60 (ecommerce+menu_links+menu_keywords)", () => {
@@ -265,9 +265,19 @@ describe("score_catalogo", () => {
     expect(calculateSubScores(l, 0).catalogo).toBe(45); // 25+20
   });
 
-  it("other niche → no niche bonus (25+20 only)", () => {
+  it("F3.5: rubro de servicio (gym) → catalogo 0 (no aplica catálogo/ecommerce)", () => {
     const l = lead({ niche: "gym", digital_footprint: withOps({}) });
-    expect(calculateSubScores(l, 0).catalogo).toBe(45); // 25+20
+    expect(calculateSubScores(l, 0).catalogo).toBe(0);
+  });
+
+  it("F3.5: niche 'other' → catalogo 0 (no se puede confirmar rubro de producto)", () => {
+    const l = lead({ niche: "other", digital_footprint: withOps({}) });
+    expect(calculateSubScores(l, 0).catalogo).toBe(0);
+  });
+
+  it("rubro de comercio (grocery) sin ops de catálogo → 45 (25+20)", () => {
+    const l = lead({ niche: "grocery", digital_footprint: withOps({}) });
+    expect(calculateSubScores(l, 0).catalogo).toBe(45);
   });
 
   it("hours-missing-on-web + restaurant all missing → 63", () => {

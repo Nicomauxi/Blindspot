@@ -4,16 +4,15 @@ import { AdminPageLayout } from "@/components/admin-shell";
 import { CollapsibleSection } from "@/components/collapsible-section";
 import { PipelineSection } from "@/components/operations/pipeline-section";
 import { MonitoringSection } from "@/components/operations/monitoring-section";
-import { EnrichmentSection } from "@/components/operations/enrichment-section";
 import { VariablesSection } from "@/components/operations/variables-section";
-import { ProcessesSection } from "@/components/operations/processes-section";
+import { DiscoveryOps } from "@/components/operations/discovery-ops";
 
 export default function OperationsPage() {
   return (
     <AdminPageLayout
       eyebrow="Operaciones"
       title="Operaciones"
-      description="Pipeline y monitoreo del sistema en una sola pantalla. Expandí o colapsá cada sección según lo que necesitás ver."
+      description="Hub único de operación: pipeline, generación de procesos, discovery, variables y monitoreo."
     >
       <CollapsibleSection
         title="Pipeline"
@@ -25,29 +24,13 @@ export default function OperationsPage() {
         <PipelineSection />
       </CollapsibleSection>
 
-      <CollapsibleSection
-        title="Enrichment de colección"
-        description="Lanzá enrichment sobre un subconjunto de leads filtrado. Sin límite de búsqueda forzado por la vista de Leads."
-        id="enrichment"
-        storageKey="ops-enrichment-open"
-        defaultOpen={false}
-      >
-        <EnrichmentSection />
-      </CollapsibleSection>
-
-      <CollapsibleSection
-        title="Procesos"
-        description="Métricas en vivo de CPU y memoria por proceso. Actualización automática cada 3 s."
-        id="processes"
-        storageKey="ops-processes-open"
-        defaultOpen={false}
-      >
-        <ProcessesSection />
-      </CollapsibleSection>
+      {/* Generar Procesos + Discovery · contexto y mapa: salen de un único componente
+          porque comparten estado (el mapa y las recomendaciones prefillean el composer). */}
+      <DiscoveryOps />
 
       <CollapsibleSection
         title="Variables"
-        description="Variables runtime del pipeline: cron, budget, webhook y concurrencia."
+        description="Gobernanza de recursos del core: concurrencia, caps de CPU/RAM y velocidad de enrichment."
         id="variables"
         storageKey="ops-variables-open"
         defaultOpen={false}
@@ -57,7 +40,7 @@ export default function OperationsPage() {
 
       <CollapsibleSection
         title="Monitoreo"
-        description="Estado operativo del sistema: procesos, runs, backups, costos y logs recientes."
+        description="Recursos de la PC, procesos del sistema, estado de runs, backups, costos y logs recientes."
         id="monitoring"
         storageKey="ops-monitoring-open"
         defaultOpen

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import pLimit from "p-limit";
+import { runAdaptivePool } from "../../shared/resource-pool.js";
 import { getLogger } from "../../shared/logger.js";
 import {
   createEnrichmentRun,
@@ -27,6 +27,7 @@ import {
   retroactiveEmailCleanup,
 } from "../../storage/system-lists.js";
 import type { AllRuntime } from "../../storage/system-lists.js";
+import { rescoreLeadsChained } from "./rescore-chain.js";
 import type { EnrichmentRunStats, Run } from "../../shared/types.js";
 
 const UUID_RE =
@@ -75,6 +76,8 @@ interface RawEnrichArgs {
   withHeuristic: boolean | string;
   concurrency: string | number;
   all?: boolean | string;
+  // FD-01: abort cooperativo desde el scheduler (no pasa por el parse Zod, es un callback).
+  shouldStop?: () => boolean | Promise<boolean>;
 }
 
 interface EnrichExecutionOptions {
@@ -85,6 +88,31 @@ interface EnrichExecutionOptions {
   forceRefresh: boolean;
   withHeuristic: boolean;
   concurrency: number;
+  // Cap heurístico explícito (UI/API). Si falta, rige ENRICH_HEURISTIC_MAX_CONCURRENCY.
+  heuristicConcurrency?: number;
+  // Tope de leads en modo filter. Default 250 (selección); scope=all lo sube desde la API.
+  filterLimit?: number;
+  // Al completar el enrich, re-score encadenado sobre los mismos leads (run dependiente).
+  rescoreOnComplete?: boolean;
+  // FD-01: abort cooperativo — el pool deja de tomar leads cuando esto devuelve true.
+  shouldStop?: () => boolean | Promise<boolean>;
+}
+
+const FILTER_MODE_DEFAULT_LIMIT = 250;
+
+// El modo heurístico dispara muchos sub-requests por lead, por eso se capa la concurrencia.
+// El cap puede venir explícito (heuristicConcurrency, desde la UI) o por env
+// (ENRICH_HEURISTIC_MAX_CONCURRENCY, default 2) para reprocesos por CLI.
+export function resolveEffectiveConcurrency(opts: {
+  withHeuristic: boolean;
+  concurrency: number;
+  heuristicConcurrency?: number;
+}): number {
+  if (!opts.withHeuristic) return opts.concurrency;
+  const cap =
+    opts.heuristicConcurrency ??
+    Math.max(1, Number(process.env["ENRICH_HEURISTIC_MAX_CONCURRENCY"] ?? "2"));
+  return Math.min(opts.concurrency, cap);
 }
 
 function normalizeFilterSelection(
@@ -211,9 +239,7 @@ async function executeEnrichmentRun(
 ): Promise<EnrichCommandResult> {
   const log = getLogger();
   const startedAt = Date.now();
-  const effectiveConcurrency = options.withHeuristic
-    ? Math.min(options.concurrency, 2)
-    : options.concurrency;
+  const effectiveConcurrency = resolveEffectiveConcurrency(options);
 
   try {
     const runtime = await loadAllRuntime();
@@ -223,7 +249,10 @@ async function executeEnrichmentRun(
         : options.mode === "source"
           ? await loadLeadsBySource(options.source!, { passedOnly: true })
           : options.mode === "filter"
-            ? await loadLeadsByFilterSelection(options.filters ?? {}, { passedOnly: true, limit: 250 })
+            ? await loadLeadsByFilterSelection(options.filters ?? {}, {
+                passedOnly: true,
+                limit: options.filterLimit ?? FILTER_MODE_DEFAULT_LIMIT,
+              })
             : await loadAllPassedLeads();
     log.info({ count: leads.length, mode: options.mode }, "Leads loaded");
 
@@ -267,7 +296,6 @@ async function executeEnrichmentRun(
     }
     log.info({ niches: uniqueNiches.length }, "vocabulary loaded for enrichment run");
 
-    const limit = pLimit(effectiveConcurrency);
     const total = leads.length;
     let done = 0;
 
@@ -280,9 +308,11 @@ async function executeEnrichmentRun(
     let leads_processed = 0;
     let significant_changes = 0;
 
-    await Promise.all(
-      leads.map((lead) =>
-        limit(async () => {
+    // Concurrencia ADAPTATIVA a los recursos: usa hasta effectiveConcurrency hilos cuando hay
+    // holgura y baja a 1 si la RAM libre < 5GB o el CPU libre < 30% (no crashear la PC).
+    await runAdaptivePool(
+      leads,
+      async (lead) => {
           try {
             const extraStopWords = lead.niche
               ? (nicheStopWords.get(lead.niche) ?? new Set<string>())
@@ -363,8 +393,13 @@ async function executeEnrichmentRun(
               log.warn({ leadId: lead.id, err: pipelineMsg }, "pipeline_errors insert failed");
             }
           }
-        })
-      )
+      },
+      {
+        maxConcurrency: effectiveConcurrency,
+        minFreeRamGB: 5,
+        minFreeCpuPct: 30,
+        ...(options.shouldStop ? { shouldStop: options.shouldStop } : {}),
+      }
     );
 
     const duration_ms = Date.now() - startedAt;
@@ -413,6 +448,18 @@ async function executeEnrichmentRun(
       }
     }
     printSummary(enrichRun.id, stats);
+
+    // Re-score encadenado (best-effort): el run de enrich ya quedó completado;
+    // un fallo acá se loguea pero no lo invalida.
+    if (options.rescoreOnComplete && leads.length > 0) {
+      try {
+        await rescoreLeadsChained(enrichRun, leads.map((l) => l.id));
+      } catch (chainErr: unknown) {
+        const chainMsg = chainErr instanceof Error ? chainErr.message : String(chainErr);
+        log.warn({ runId: enrichRun.id, err: chainMsg }, "chained re-score failed — enrich run remains completed");
+      }
+    }
+
     return { runId: enrichRun.id, stats };
   } catch (err: unknown) {
     const duration_ms = Date.now() - startedAt;
@@ -428,6 +475,9 @@ export async function startFilterEnrichmentJob(params: {
   withHeuristic: boolean;
   concurrency: number;
   forceRefresh?: boolean;
+  heuristicConcurrency?: number;
+  leadLimit?: number;
+  rescoreOnComplete?: boolean;
 }): Promise<{ runId: string }> {
   const enrichRun = await createEnrichmentRun({
     mode: "filter",
@@ -443,6 +493,11 @@ export async function startFilterEnrichmentJob(params: {
     forceRefresh: params.forceRefresh ?? false,
     withHeuristic: params.withHeuristic,
     concurrency: params.concurrency,
+    ...(params.heuristicConcurrency !== undefined
+      ? { heuristicConcurrency: params.heuristicConcurrency }
+      : {}),
+    ...(params.leadLimit !== undefined ? { filterLimit: params.leadLimit } : {}),
+    ...(params.rescoreOnComplete !== undefined ? { rescoreOnComplete: params.rescoreOnComplete } : {}),
   }, enrichRun).catch((err) => {
     const log = getLogger();
     log.error({ runId: enrichRun.id, err: err instanceof Error ? err.message : String(err) }, "Background filter enrichment failed");
@@ -521,6 +576,9 @@ export async function enrichCommand(rawArgs: RawEnrichArgs): Promise<EnrichComma
               withHeuristic: opts.withHeuristic,
               concurrency: opts.concurrency,
             };
+
+  // FD-01: el callback de abort no pasa por Zod; lo adjuntamos tras construir las opciones.
+  if (rawArgs.shouldStop) executionOptions.shouldStop = rawArgs.shouldStop;
 
   const enrichRun = await createEnrichmentRun(executionOptions);
   log.info({ runId: enrichRun.id }, "Enrichment run created");

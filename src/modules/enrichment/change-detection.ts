@@ -1,4 +1,5 @@
 import type { DigitalFootprint, InferredState } from "../../shared/types.js";
+import { isRealWebsiteUrl } from "../../shared/website.js";
 
 export type EnrichmentChangeSignificance = "critical" | "high" | "low";
 
@@ -17,14 +18,16 @@ export interface EnrichmentDiff {
 
 function hasWebsite(footprint: DigitalFootprint | null): boolean {
   if (!footprint) return false;
+  const selectedUrl = footprint.heuristic_discovery?.selected.website?.url ?? null;
   if (footprint.skipped === true) {
-    return footprint.heuristic_discovery?.selected.website != null;
+    // FS-01: a skipped footprint "has a website" only if a real (non-social) one
+    // was discovered — a social profile/link-in-bio does not count.
+    return isRealWebsiteUrl(selectedUrl);
   }
-  return Boolean(
-    footprint.final_url ||
-    footprint.attempted_url ||
-    footprint.heuristic_discovery?.selected.website?.url
-  );
+  // FS-01: a merely attempted URL (especially a social one whose fetch failed) is
+  // NOT evidence of an own website. Require a real, non-social final_url or a real
+  // heuristic-selected site, so we never emit a false "consiguió web" alert.
+  return isRealWebsiteUrl(footprint.final_url) || isRealWebsiteUrl(selectedUrl);
 }
 
 function firstContactEmail(footprint: DigitalFootprint | null): string | null {

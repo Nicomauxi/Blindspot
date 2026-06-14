@@ -20,6 +20,7 @@ export async function enrichTipoOperadorCommand(args: EnrichTipoOperadorArgs): P
     .from("leads")
     .select("id, source_data, lead_company_data")
     .eq("source", "mintur")
+    .eq("passed_filter", true) // Ley 18.331: no enriquecer leads fuera del pool (incl. personas físicas)
     .is("lead_company_data->>'tipo_operador'", null)
     .limit(5000);
 

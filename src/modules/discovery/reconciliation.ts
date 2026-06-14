@@ -1,5 +1,8 @@
 import { findCrossSourceMatch, nameSimilarity, normalizeName } from "./deduplication.js";
+import { extractAddressCity, haversineMeters, normalizeAddress, parseLeadGps } from "./geo-text.js";
+import { parseStreetAddress, streetAddressesMatch } from "./street-address.js";
 import type { CorroboratingSource, DiscoveryCandidate, Lead } from "../../shared/types.js";
+import { canonicalUruguayPhoneKey } from "../../shared/phone.js";
 
 export interface RetroactiveMatch {
   primary: Lead;
@@ -31,109 +34,6 @@ export interface RetroactiveReconciliationPlan {
   email_conflicts: number;
 }
 
-function parseLeadGps(gps: Lead["gps"]): { lat: number; lng: number } | null {
-  if (!gps) return null;
-
-  if (typeof gps === "string") {
-    const match = gps.match(/POINT\((-?\d+(?:\.\d+)?) (-?\d+(?:\.\d+)?)\)/);
-    if (match) {
-      return {
-        lng: Number(match[1]),
-        lat: Number(match[2]),
-      };
-    }
-  }
-
-  if (typeof gps === "object") {
-    const record = gps as Record<string, unknown>;
-    const coordinates = record["coordinates"];
-    if (
-      Array.isArray(coordinates) &&
-      coordinates.length >= 2 &&
-      typeof coordinates[0] === "number" &&
-      typeof coordinates[1] === "number"
-    ) {
-      return { lng: coordinates[0], lat: coordinates[1] };
-    }
-
-    if (typeof record["lat"] === "number" && typeof record["lng"] === "number") {
-      return { lat: record["lat"], lng: record["lng"] };
-    }
-
-    if (typeof record["latitude"] === "number" && typeof record["longitude"] === "number") {
-      return { lat: record["latitude"], lng: record["longitude"] };
-    }
-  }
-
-  return null;
-}
-
-function haversineMeters(
-  a: { lat: number; lng: number },
-  b: { lat: number; lng: number }
-): number {
-  const earthRadiusMeters = 6371000;
-  const toRadians = (degrees: number): number => (degrees * Math.PI) / 180;
-  const dLat = toRadians(b.lat - a.lat);
-  const dLng = toRadians(b.lng - a.lng);
-  const lat1 = toRadians(a.lat);
-  const lat2 = toRadians(b.lat);
-
-  const sinLat = Math.sin(dLat / 2);
-  const sinLng = Math.sin(dLng / 2);
-  const h = sinLat * sinLat + Math.cos(lat1) * Math.cos(lat2) * sinLng * sinLng;
-
-  return 2 * earthRadiusMeters * Math.asin(Math.sqrt(h));
-}
-
-function normalizeAddress(value: string | null | undefined): string | null {
-  if (!value) return null;
-  const normalized = value
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")
-    .replace(/\b(avenida|av|calle|ruta|km|kilometro|numero|nro|esquina)\b/g, " ")
-    .replace(/[^a-z0-9,]+/g, " ")
-    .replace(/\s*,\s*/g, ", ")
-    .replace(/\s+/g, " ")
-    .trim();
-  return normalized.length > 0 ? normalized : null;
-}
-
-function extractAddressCity(value: string | null | undefined): string | null {
-  const normalized = normalizeAddress(value);
-  if (!normalized) return null;
-
-  const parts = normalized.split(",").map((part) => part.trim()).filter(Boolean);
-  if (parts.length > 1) return parts[parts.length - 1] ?? null;
-
-  const cityHints = [
-    "montevideo",
-    "maldonado",
-    "punta del este",
-    "punta del diablo",
-    "la barra",
-    "atlantida",
-    "ciudad de la costa",
-    "colonia",
-    "piriapolis",
-    "salto",
-    "rocha",
-    "canelones",
-    "paysandu",
-    "rivera",
-    "tacuarembo",
-    "minas",
-    "mercedes",
-  ];
-
-  for (const hint of cityHints) {
-    if (normalized.includes(hint)) return hint;
-  }
-
-  return null;
-}
-
 function canonicalFieldValue(canonicalFields: Lead["canonical_fields"], field: "phone" | "website" | "email"): string | null {
   if (!canonicalFields || typeof canonicalFields !== "object") return null;
   const raw = canonicalFields[field];
@@ -145,8 +45,8 @@ function canonicalFieldValue(canonicalFields: Lead["canonical_fields"], field: "
 }
 
 function normalizePhone(value: string | null): string | null {
-  const digits = (value ?? "").replace(/\D/g, "");
-  return digits.length > 0 ? digits : null;
+  // IT-01: misma clave canónica que el resto del pipeline (shared/phone).
+  return canonicalUruguayPhoneKey(value);
 }
 
 function normalizeEmail(value: string | null): string | null {
@@ -199,6 +99,16 @@ function franchiseSafeToMerge(a: Lead, b: Lead, geoRadiusMeters: number): boolea
   const addressB = normalizeAddress(b.address);
   if (addressA && addressB && addressA === addressB) return true;
 
+  // Misma calle + MISMA puerta = misma ubicación física: evidencia suficiente para
+  // fusionar una franquicia (sucursales distintas tienen puerta distinta y ya las
+  // separa doorsConflict aguas arriba). Cubre el caso donde el GPS no se puede leer
+  // (la columna geography vuelve como EWKB y parseLeadGps no la parsea).
+  const streetA = parseStreetAddress(a.address);
+  const streetB = parseStreetAddress(b.address);
+  if (streetA.door !== null && streetB.door !== null && streetA.door === streetB.door && streetAddressesMatch(streetA, streetB)) {
+    return true;
+  }
+
   const gpsA = parseLeadGps(a.gps);
   const gpsB = parseLeadGps(b.gps);
   if (gpsA && gpsB) {
@@ -231,6 +141,20 @@ function hasEmailConflict(primary: Lead, secondary: Lead): boolean {
   return primaryEmail !== null && secondaryEmail !== null && primaryEmail !== secondaryEmail;
 }
 
+// Duplicado INTRA-fuente: la misma fuente listó el negocio dos veces. findCrossSourceMatch
+// ignora pares de la misma fuente, así que estos dups nunca se consolidaban (F2.6). Señal
+// segura: nombre normalizado idéntico + misma puerta (o, sin puertas, misma calle).
+function isIntraSourceDuplicate(a: Lead, b: Lead): boolean {
+  if (a.source !== b.source) return false;
+  if (normalizeName(a.name) !== normalizeName(b.name)) return false;
+  const pa = parseStreetAddress(a.address);
+  const pb = parseStreetAddress(b.address);
+  if (pa.door !== null && pb.door !== null) {
+    return pa.door === pb.door && streetAddressesMatch(pa, pb);
+  }
+  return streetAddressesMatch(pa, pb);
+}
+
 function chooseBestKeeper(
   lead: Lead,
   keepers: Lead[],
@@ -242,8 +166,9 @@ function chooseBestKeeper(
   let bestSimilarity = -1;
 
   for (const keeper of keepers) {
-    const match = findCrossSourceMatch(candidate, [keeper], threshold, geoRadiusMeters);
-    if (!match) continue;
+    const crossMatch = findCrossSourceMatch(candidate, [keeper], threshold, geoRadiusMeters);
+    const intraDup = isIntraSourceDuplicate(lead, keeper);
+    if (!crossMatch && !intraDup) continue;
     if (!franchiseSafeToMerge(lead, keeper, geoRadiusMeters)) continue;
 
     const similarity = nameSimilarity(lead.name, keeper.name);

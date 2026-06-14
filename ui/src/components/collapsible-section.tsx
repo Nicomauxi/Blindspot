@@ -62,30 +62,42 @@ export function CollapsibleSection({
 
   return (
     <section id={id} className="theme-panel rounded-2xl overflow-hidden">
-      <button
-        type="button"
-        onClick={toggle}
-        className="w-full flex items-start justify-between gap-3 px-5 py-4 text-left hover:bg-slate-50 transition-colors"
+      {/* El header NO es un único <button>: `actions` puede traer botones propios y
+          anidar <button> dentro de <button> es HTML inválido (error de hidratación). */}
+      <div
+        className="w-full flex items-start justify-between gap-3 px-5 py-4 hover:bg-slate-50 transition-colors"
         style={{ borderBottom: isOpen ? "1px solid var(--border)" : "none" }}
-        aria-expanded={isOpen}
       >
-        <div className="flex-1 min-w-0">
+        <button
+          type="button"
+          onClick={toggle}
+          className="flex-1 min-w-0 text-left"
+          aria-expanded={isOpen}
+        >
           <h2 className="text-sm font-semibold uppercase tracking-[0.15em] theme-text-strong">{title}</h2>
           {description ? <p className="mt-1 text-sm theme-text-muted">{description}</p> : null}
-        </div>
+        </button>
         <div className="flex items-center gap-2 shrink-0 pt-0.5">
           {actions}
-          <svg
-            className={cn("h-4 w-4 theme-text-muted transition-transform duration-200", isOpen ? "rotate-180" : "")}
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-            strokeWidth={2}
+          <button
+            type="button"
+            onClick={toggle}
+            aria-expanded={isOpen}
+            aria-label={isOpen ? "Colapsar sección" : "Expandir sección"}
+            className="rounded-lg p-1 hover:bg-slate-100 transition-colors"
           >
-            <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
-          </svg>
+            <svg
+              className={cn("h-4 w-4 theme-text-muted transition-transform duration-200", isOpen ? "rotate-180" : "")}
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth={2}
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+            </svg>
+          </button>
         </div>
-      </button>
+      </div>
       {isOpen ? <div className="px-5 py-4 space-y-4">{children}</div> : null}
     </section>
   );

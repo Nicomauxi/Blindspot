@@ -1,3 +1,4 @@
+import { passesLeadFilter } from "../services/lead-filter.js";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { getDb } from "../db/client.js";
@@ -86,19 +87,6 @@ function isRegressionTransition(from: CrmStatus, to: CrmStatus): boolean {
   return STATUS_ORDER[to] < STATUS_ORDER[from];
 }
 
-function matchesTrackingSearch(tracking: Record<string, unknown>, searchTerms: string[]): boolean {
-  if (searchTerms.length === 0) return true;
-  const haystack = [
-    tracking["case_code"],
-    tracking["title"],
-    tracking["lead_name"],
-    tracking["lead_id"],
-  ]
-    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
-    .join(" ")
-    .toLowerCase();
-  return searchTerms.every((term) => haystack.includes(term));
-}
 
 export async function trackingRoutes(app: FastifyInstance): Promise<void> {
   // POST /api/v1/tracking — create a new CRM tracking entry
@@ -119,7 +107,7 @@ export async function trackingRoutes(app: FastifyInstance): Promise<void> {
     // Verify lead is accessible
     const { data: lead, error: leadErr } = await db
       .from("lead_dashboard")
-      .select("id, contact_tier, name")
+      .select("*")
       .eq("id", parsed.data.lead_id)
       .single();
 
@@ -127,11 +115,21 @@ export async function trackingRoutes(app: FastifyInstance): Promise<void> {
       return reply.status(404).send({ error: "Lead not found", error_code: "not_found" });
     }
 
-    // CM: only for leads that pass their filter
+    // N24: el lead_filter COMPLETO (mismo gate que GET /leads), no solo contact_tier —
+    // trackear es lo que desbloquea contactos, así que el bypass acá rompía el RBAC.
     if (authUser.role === "cm" && authUser.lead_filter) {
-      const tier = (lead as Record<string, unknown>)["contact_tier"];
-      const allowedTiers = authUser.lead_filter["contact_tier"] as string[] | undefined;
-      if (allowedTiers && tier && !allowedTiers.includes(String(tier))) {
+      const leadForFilter = { ...(lead as Record<string, unknown>) };
+      // lead_dashboard no expone lead_company_data: si el filtro restringe por
+      // detected_sub_niche hay que traerlo de leads o el gate se saltea en silencio.
+      if (Array.isArray(authUser.lead_filter["detected_sub_niche"]) && leadForFilter["lead_company_data"] === undefined) {
+        const { data: companyRow } = await db
+          .from("leads")
+          .select("lead_company_data")
+          .eq("id", parsed.data.lead_id)
+          .maybeSingle();
+        leadForFilter["lead_company_data"] = (companyRow as { lead_company_data?: unknown } | null)?.lead_company_data ?? null;
+      }
+      if (!passesLeadFilter(leadForFilter, authUser.lead_filter)) {
         return reply.status(404).send({ error: "Lead not found", error_code: "not_found" });
       }
     }
@@ -243,6 +241,30 @@ export async function trackingRoutes(app: FastifyInstance): Promise<void> {
     if (f.created_after) query = query.gte("started_at", f.created_after);
     if (restrictLeadIds) query = query.in("lead_id", restrictLeadIds);
 
+    // N26: la búsqueda va en SQL ANTES del limit — filtrar en memoria después del limit
+    // hacía inhallables los case_codes fuera de la primera página y mentía el total.
+    // '.' y ':' son sintaxis de PostgREST dentro de or() — un término como 'john.doe' rompía el parseo del filtro.
+    const sanitizeTerm = (value: string): string => value.replace(/[%_,().:*]/g, " ").trim();
+    if (f.case_code && sanitizeTerm(f.case_code)) {
+      query = query.ilike("case_code", `%${sanitizeTerm(f.case_code)}%`);
+    }
+    if (f.title && sanitizeTerm(f.title)) {
+      query = query.ilike("title", `%${sanitizeTerm(f.title)}%`);
+    }
+    if (f.q && sanitizeTerm(f.q)) {
+      const term = sanitizeTerm(f.q);
+      // q también puede matchear el nombre del lead: resolver ids por nombre primero.
+      const { data: nameMatches } = await db
+        .from("leads")
+        .select("id")
+        .ilike("name", `%${term}%`)
+        .limit(1000);
+      const nameIds = ((nameMatches ?? []) as Array<{ id: string }>).map((l) => l.id);
+      const ors = [`case_code.ilike.%${term}%`, `title.ilike.%${term}%`];
+      if (nameIds.length > 0) ors.push(`lead_id.in.(${nameIds.join(",")})`);
+      query = query.or(ors.join(","));
+    }
+
     const { data, error, count } = await query.limit(f.limit);
     if (error) {
       request.log.error({ error }, "tracking list failed");
@@ -267,14 +289,7 @@ export async function trackingRoutes(app: FastifyInstance): Promise<void> {
       lead_name: leadNames[t["lead_id"] as string] ?? null,
     }));
 
-    const searchTerms = [f.q, f.case_code, f.title]
-      .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
-      .map((value) => value.trim().toLowerCase());
-    const filtered = searchTerms.length > 0
-      ? enriched.filter((tracking) => matchesTrackingSearch(tracking, searchTerms))
-      : enriched;
-
-    return reply.status(200).send({ data: filtered, total: searchTerms.length > 0 ? filtered.length : (count ?? filtered.length) });
+    return reply.status(200).send({ data: enriched, total: count ?? enriched.length });
   });
 
   // GET /api/v1/tracking/:id — get tracking with events
@@ -324,14 +339,41 @@ export async function trackingRoutes(app: FastifyInstance): Promise<void> {
     }
 
     const leadId = t["lead_id"] as string;
-    const { data: leadRow } = await db
+    // N30/N34: leads NO tiene columna email (vive en canonical_fields) — el select viejo
+    // fallaba con 42703 y el error se tragaba: el panel de contacto del CRM quedaba vacío.
+    const { data: leadRow, error: leadErr } = await db
       .from("leads")
-      .select("name, niche, address, website, phone, whatsapp, email")
+      .select("name, niche, address, website, phone, whatsapp, canonical_fields")
       .eq("id", leadId)
       .single();
 
+    if (leadErr) {
+      request.log.error({ error: leadErr, leadId }, "tracking detail: lead fetch failed");
+    }
+
+    const canonicalEmail = (canonicalFields: unknown): string | null => {
+      if (!canonicalFields || typeof canonicalFields !== "object") return null;
+      const raw = (canonicalFields as Record<string, unknown>)["email"];
+      if (typeof raw === "string" && raw.trim()) return raw.trim();
+      if (raw && typeof raw === "object" && typeof (raw as { value?: unknown }).value === "string") {
+        return ((raw as { value: string }).value.trim() || null);
+      }
+      return null;
+    };
+
     const lead = leadRow
-      ? (leadRow as { name: string; niche: string | null; address: string | null; website: string | null; phone: string | null; whatsapp: string | null; email: string | null })
+      ? (() => {
+          const row = leadRow as { name: string; niche: string | null; address: string | null; website: string | null; phone: string | null; whatsapp: string | null; canonical_fields: unknown };
+          return {
+            name: row.name,
+            niche: row.niche,
+            address: row.address,
+            website: row.website,
+            phone: row.phone,
+            whatsapp: row.whatsapp,
+            email: canonicalEmail(row.canonical_fields),
+          };
+        })()
       : null;
 
     const actorIds = [...new Set((events ?? [])
@@ -431,14 +473,16 @@ export async function trackingRoutes(app: FastifyInstance): Promise<void> {
       });
     }
 
-    // Optimistic lock: only update if status is still what we read — prevents concurrent transition races
+    // Optimistic lock: only update if status is still what we read — prevents concurrent
+    // transition races. N23: maybeSingle (no single) — .single() sobre 0 filas devuelve
+    // error PGRST116 → toda carrera salía 500 y la rama 409 era código muerto.
     const { data: updatedTracking, error: updateErr } = await db
       .from("lead_tracking")
       .update({ status: toStatus })
       .eq("id", id)
       .eq("status", currentStatus)
       .select("*")
-      .single();
+      .maybeSingle();
 
     if (updateErr) {
       request.log.error({ error: updateErr }, "tracking transition update failed");
@@ -463,7 +507,20 @@ export async function trackingRoutes(app: FastifyInstance): Promise<void> {
       channel:       parsed.data.channel ?? null,
       reminder_at:   parsed.data.reminder_at ?? null,
     });
-    if (eventErr) request.log.error({ error: eventErr }, "tracking transition event insert failed");
+    if (eventErr) {
+      // N25: sin evento no hay timeline ni canal registrado — revertir la transición
+      // (compensación best-effort, no hay transacción vía PostgREST) y avisar 500.
+      request.log.error({ error: eventErr }, "tracking transition event insert failed — reverting status");
+      const { error: revertErr } = await db
+        .from("lead_tracking")
+        .update({ status: currentStatus })
+        .eq("id", id)
+        .eq("status", toStatus);
+      if (revertErr) {
+        request.log.error({ error: revertErr }, "tracking transition revert failed (estado inconsistente)");
+      }
+      return reply.status(500).send({ error: "Database error", error_code: "db_error" });
+    }
 
     const { error: auditErr } = await db.from("audit_log").insert({
       actor_user_id: authUser.id,

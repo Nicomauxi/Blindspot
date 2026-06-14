@@ -173,6 +173,9 @@ export function normalizeLeadDensityFilters(filters: DiscoveryLeadDensityFilters
   if (filters.contact_tier?.length) normalized.contact_tier = normalizeFilterArray(filters.contact_tier);
   if (filters.gps_source?.length) normalized.gps_source = [...filters.gps_source].sort(textCollator.compare);
   if (filters.zone_ids?.length) normalized.zone_ids = normalizeFilterArray(filters.zone_ids);
+  if (filters.primary_offer?.trim()) normalized.primary_offer = filters.primary_offer.trim();
+  if (filters.commercial_offer_type) normalized.commercial_offer_type = filters.commercial_offer_type;
+  if (filters.heat_metric && filters.heat_metric !== "mixed") normalized.heat_metric = filters.heat_metric;
   return normalized;
 }
 

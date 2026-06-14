@@ -317,6 +317,98 @@ heuristic_discovery:
     expect(result.selected.instagram).toBeNull();
   });
 
+  it("N47: dominio ajeno con solo http-ok NO se selecciona (sin señal de identidad)", async () => {
+    const result = await discoverHeuristicSources(
+      makeLead({ name: "American Travel", address: "Montevideo, Uruguay", phone: null }),
+      "website-only",
+      {
+        fetchHtml: async (url) => ({
+          status: 200,
+          finalUrl: url,
+          // Sitio genérico de un tercero: responde 200 pero no menciona al negocio.
+          html: "<html><title>Agencia de viajes</title><body>Ofertas y paquetes</body></html>",
+          headers: {},
+          fetchedAt: "2026-01-01T00:00:00.000Z",
+        }),
+      },
+      { additionalWebsiteUrls: ["https://travel.com.uy"] }
+    );
+
+    expect(result.selected.website).toBeNull();
+  });
+
+  it("N48: 'Uruguay' y 'Departamento de X' no cuentan como ciudad para city-match", async () => {
+    const result = await discoverHeuristicSources(
+      makeLead({
+        name: "Zapatería Sol",
+        address: "Av. 18 de Julio 123, Montevideo, Departamento de Montevideo, Uruguay",
+        phone: null,
+      }),
+      "website-only",
+      {
+        fetchHtml: async (url) => ({
+          status: 200,
+          finalUrl: url,
+          // Menciona 'uruguay' (footer típico) pero NO la ciudad real ni el nombre.
+          html: "<html><body>Sitio genérico .com.uy — Uruguay</body></html>",
+          headers: {},
+          fetchedAt: "2026-01-01T00:00:00.000Z",
+        }),
+      },
+      { additionalWebsiteUrls: ["https://generico.com.uy"] }
+    );
+
+    const cand = result.candidates.website.find((c) => c.url === "https://generico.com.uy");
+    expect(cand?.signals).not.toContain("city-match");
+  });
+
+  it("N48: la ciudad real (Montevideo) sí da city-match", async () => {
+    const result = await discoverHeuristicSources(
+      makeLead({
+        name: "Zapatería Sol",
+        address: "Av. 18 de Julio 123, Montevideo, Departamento de Montevideo, Uruguay",
+        phone: null,
+      }),
+      "website-only",
+      {
+        fetchHtml: async (url) => ({
+          status: 200,
+          finalUrl: url,
+          html: "<html><body>Zapatería Sol — Montevideo</body></html>",
+          headers: {},
+          fetchedAt: "2026-01-01T00:00:00.000Z",
+        }),
+      },
+      { additionalWebsiteUrls: ["https://zapateriasol.com.uy"] }
+    );
+
+    const cand = result.candidates.website.find((c) => c.url === "https://zapateriasol.com.uy");
+    expect(cand?.signals).toContain("city-match");
+  });
+
+  it("N49: slug_match solo cuando el handle coincide con el nombre del negocio", async () => {
+    const result = await discoverHeuristicSources(
+      makeLead({ name: "Peluquería Ñandú", phone: null, address: null }),
+      "full",
+      {
+        fetchHtml: async (url) => ({
+          status: 200,
+          finalUrl: url,
+          // El sitio linkea a un IG AJENO (handle genérico que no es el negocio).
+          html: url.includes("instagram.com")
+            ? "<html><title>berlin</title><body>Travel blog</body></html>"
+            : '<html><body>Peluquería Ñandú <a href="https://instagram.com/berlin">ig</a></body></html>',
+          headers: {},
+          fetchedAt: "2026-01-01T00:00:00.000Z",
+        }),
+      },
+      { additionalWebsiteUrls: ["https://nandu.com.uy"] }
+    );
+
+    const foreign = result.candidates.instagram.find((c) => c.url.includes("/berlin"));
+    expect(foreign?.signals ?? []).not.toContain("slug_match");
+  });
+
   it("prepends additional website URLs, dedupes them, and keeps the probe limit", async () => {
     const probedUrls: string[] = [];
     const result = await discoverHeuristicSources(
@@ -343,10 +435,14 @@ heuristic_discovery:
   });
 
   it("uses single-word threshold for local Uruguay TLD website candidates", async () => {
+    // N47: además del umbral, ahora se exige una señal de identidad (el sitio menciona
+    // al negocio) — un 200 de un dominio genérico ya no alcanza.
     const fetchHtml = async (url: string) => ({
       status: 200,
       finalUrl: url,
-      html: "<html><title>Local business</title></html>",
+      html: url.includes("mood")
+        ? "<html><title>Urban mood gym</title></html>"
+        : "<html><title>Amaya Motors Propios</title></html>",
       headers: {},
       fetchedAt: "2026-01-01T00:00:00.000Z",
     });

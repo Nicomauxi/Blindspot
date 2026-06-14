@@ -1,3 +1,4 @@
+import { OSM_USER_AGENT } from "../../../shared/user-agents.js";
 import { fetch, Agent } from "undici";
 import type {
   IDiscoveryProvider,
@@ -5,6 +6,7 @@ import type {
   DiscoveryQuery,
   DiscoveryCandidate,
 } from "../../../shared/types.js";
+import { normalizeLocationKey } from "../normalize.js";
 
 const SOURCE: DiscoverySource = "osm";
 const SOURCE_CONFIDENCE = 0.6;
@@ -12,16 +14,21 @@ const OVERPASS_URL = "http://overpass.openstreetmap.fr/api/interpreter";
 // Forzar IPv4 — el servidor resuelve a IPv6 pero este ambiente no tiene conectividad IPv6
 const ipv4Agent = new Agent({ connect: { family: 4 } });
 
-export const NICHE_OSM_TAGS: Record<string, string> = {
-  restaurant: "amenity=restaurant",
-  gym: "leisure=gym",
-  hairdresser: "shop=hairdresser",
-  car_dealer: "shop=car",
+export const NICHE_OSM_TAGS: Record<string, string[]> = {
+  restaurant: ["amenity=restaurant"],
+  gym: ["leisure=gym"],
+  hairdresser: ["shop=hairdresser"],
+  car_dealer: ["shop=car"],
+  pharmacy: ["amenity=pharmacy"],
+  grocery: ["shop=supermarket"],
+  dentist: ["amenity=dentist"],
+  healthcare: ["amenity=clinic", "amenity=doctors", "amenity=hospital"],
+  bakery: ["shop=bakery"],
+  veterinary: ["amenity=veterinary"],
 };
 
-// Tabla invertida: "amenity=restaurant" → "restaurant"
 const OSM_TAG_TO_NICHE: Record<string, string> = Object.fromEntries(
-  Object.entries(NICHE_OSM_TAGS).map(([niche, tag]) => [tag, niche])
+  Object.entries(NICHE_OSM_TAGS).flatMap(([niche, tags]) => tags.map((tag) => [tag, niche]))
 );
 
 export interface OSMElement {
@@ -41,32 +48,51 @@ interface OverpassResponse {
 // Formato: [south, west, north, east]
 const UY_BBOXES: Record<string, [number, number, number, number]> = {
   montevideo: [-34.95, -56.42, -34.77, -56.00],
+  canelones: [-34.76, -56.35, -34.45, -55.70],
+  "ciudad de la costa": [-34.86, -56.10, -34.79, -55.93],
+  "las piedras": [-34.76, -56.27, -34.69, -56.18],
+  pando: [-34.75, -56.04, -34.68, -55.89],
+  atlantida: [-34.79, -55.79, -34.74, -55.72],
+  salinas: [-34.81, -55.87, -34.76, -55.79],
   colonia: [-34.50, -57.90, -34.40, -57.80],
+  "colonia del sacramento": [-34.48, -57.86, -34.46, -57.82],
+  carmelo: [-34.04, -58.33, -33.96, -58.24],
   maldonado: [-34.95, -55.00, -34.85, -54.90],
   "punta del este": [-34.98, -55.00, -34.90, -54.93],
+  piriapolis: [-34.89, -55.31, -34.84, -55.25],
+  "san carlos": [-34.83, -54.97, -34.75, -54.88],
   salto: [-31.42, -58.10, -31.35, -58.01],
   paysandu: [-32.35, -58.10, -32.26, -58.04],
   rivera: [-30.92, -55.57, -30.85, -55.50],
-  minas: [-34.38, -55.26, -34.35, -55.22],
-  durazno: [-33.38, -56.54, -33.34, -56.50],
-  colonia_del_sacramento: [-34.48, -57.86, -34.46, -57.82],
+  rocha: [-34.52, -54.37, -34.45, -54.30],
+  "la paloma": [-34.68, -54.18, -34.64, -54.13],
+  minas: [-34.40, -55.28, -34.35, -55.20],
+  durazno: [-33.40, -56.56, -33.34, -56.48],
+  mercedes: [-33.28, -58.08, -33.22, -58.00],
+  melo: [-32.39, -54.20, -32.34, -54.13],
+  "san jose de mayo": [-34.36, -56.75, -34.31, -56.68],
+  florida: [-34.11, -56.24, -34.08, -56.19],
+  trinidad: [-33.56, -56.92, -33.52, -56.86],
+  "fray bentos": [-33.14, -58.34, -33.11, -58.29],
+  artigas: [-30.43, -56.50, -30.37, -56.43],
+  tacuarembo: [-31.75, -56.02, -31.69, -55.95],
+  chuy: [-33.71, -53.48, -33.68, -53.45],
+  "rio branco": [-32.62, -53.42, -32.58, -53.37],
 };
 
 function locationToBbox(location: string): [number, number, number, number] | null {
-  return UY_BBOXES[location.toLowerCase().trim()] ?? null;
+  return UY_BBOXES[normalizeLocationKey(location)] ?? null;
 }
 
-// Convierte "amenity=restaurant" → '["amenity"="restaurant"]'
 function tagToFilter(tag: string): string {
   const [key, value] = tag.split("=");
   return `["${key}"="${value}"]`;
 }
 
 export function nicheToOsmFilters(niche: string): string[] {
-  if (niche in NICHE_OSM_TAGS) {
-    return [tagToFilter(NICHE_OSM_TAGS[niche]!)];
-  }
-  return Object.values(NICHE_OSM_TAGS).map(tagToFilter);
+  const tags = NICHE_OSM_TAGS[niche];
+  if (tags) return tags.map(tagToFilter);
+  return [...new Set(Object.values(NICHE_OSM_TAGS).flat())].map(tagToFilter);
 }
 
 export function buildQuery(
@@ -95,13 +121,16 @@ export function mapElement(element: OSMElement): DiscoveryCandidate {
   const lon =
     element.type === "node" ? (element.lon ?? null) : (element.center?.lon ?? null);
 
+  // N84: un housenumber sin calle no es una dirección ('1234, Montevideo' rompía el
+  // matching por puerta). El número solo acompaña a la calle.
+  const street = typeof tags["addr:street"] === "string" && tags["addr:street"].length > 0 ? tags["addr:street"] : null;
+  const houseNumber = typeof tags["addr:housenumber"] === "string" && tags["addr:housenumber"].length > 0 ? tags["addr:housenumber"] : null;
+  const city = typeof tags["addr:city"] === "string" && tags["addr:city"].length > 0 ? tags["addr:city"] : null;
   const addressParts = [
-    tags["addr:street"],
-    tags["addr:housenumber"],
-    tags["addr:city"],
-  ].filter((v): v is string => typeof v === "string" && v.length > 0);
+    street ? (houseNumber ? `${street} ${houseNumber}` : street) : null,
+    city,
+  ].filter((v): v is string => v !== null);
 
-  // Inferir niche desde tags OSM
   let niche = "other";
   for (const [tagStr, nicheVal] of Object.entries(OSM_TAG_TO_NICHE)) {
     const [key, value] = tagStr.split("=");
@@ -133,7 +162,7 @@ async function executeQuery(ql: string): Promise<OSMElement[]> {
     method: "POST",
     headers: {
       "Content-Type": "application/x-www-form-urlencoded",
-      "User-Agent": "blindspot-discovery/1.0 (contact@blindspot.uy)",
+      "User-Agent": OSM_USER_AGENT,
     },
     body,
     dispatcher: ipv4Agent,

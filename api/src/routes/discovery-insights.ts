@@ -1,16 +1,37 @@
+import { projectMaxGooglePlacesCost } from "../../../src/shared/google-places-costs.js";
+import { buildCommercialOfferings, buildCommercialOfferingsSummary } from "../../../src/modules/scoring/offerings.js";
+
 const SUPPORTED_DISCOVERY_SOURCES = ["mintur", "osm", "yelu", "pedidosya", "google_places"] as const;
 
 export type SupportedDiscoverySource = (typeof SUPPORTED_DISCOVERY_SOURCES)[number];
 
 export type LeadInsightRow = {
   id: string;
+  name?: string | null;
   source: string | null;
   niche: string | null;
   address: string | null;
   prospect_score: number | null;
   contact_tier: string | null;
+  primary_offer?: string | null;
+  commercial_offers_summary?: {
+    primary_offer_type?: string | null;
+    software_score?: number | null;
+    marketing_score?: number | null;
+  } | null;
   gps: unknown;
   corroborating_sources: unknown;
+  website?: string | null;
+  phone?: string | null;
+  whatsapp?: string | null;
+  email?: string | null;
+  rating?: number | null;
+  review_count?: number | null;
+  pitch_hook?: string | null;
+  contact_ready?: boolean | null;
+  tags?: string[] | null;
+  score_breakdown?: Record<string, unknown> | null;
+  digital_footprint?: Record<string, unknown> | null;
 };
 
 export type DiscoveryJobInsightRow = {
@@ -41,14 +62,51 @@ export type LocationDensityPoint = {
   gps_points: Array<{ lat: number; lng: number }>;
 };
 
+export type LeadDensityGpsSource = "real" | "inferred" | "google";
+export type LeadDensityHeatMetric = "mixed" | "marketing" | "software" | "combined";
+export type LeadDensityAggregationMode = "country" | "regional" | "local" | "individual";
+
+export type LeadDensityViewportBounds = {
+  south: number;
+  west: number;
+  north: number;
+  east: number;
+};
+
+export type MapViewportLead = {
+  id: string;
+  name: string | null;
+  niche: string | null;
+  contact_tier: string | null;
+  prospect_score: number | null;
+  address: string | null;
+  gps: unknown;
+  map_point: { lat: number; lng: number };
+  source: string | null;
+  website?: string | null;
+  phone?: string | null;
+  whatsapp?: string | null;
+  email?: string | null;
+  rating?: number | null;
+  review_count?: number | null;
+  primary_offer?: string | null;
+  pitch_hook?: string | null;
+  contact_ready?: boolean | null;
+  tags?: string[] | null;
+};
+
 export type GranularLocationDensityPoint = {
   location_key: string;
   location_label: string;
   parent_location_key: string;
   parent_location_label: string;
+  aggregation_level: LeadDensityAggregationMode;
   lead_count: number;
   hot_leads_count: number;
   avg_prospect_score: number;
+  avg_marketing_score: number;
+  avg_software_score: number;
+  intensity_score: number;
   commercial_density_score: number;
   gps_points: Array<{ lat: number; lng: number }>;
   raw_gps_lead_count: number;
@@ -56,14 +114,17 @@ export type GranularLocationDensityPoint = {
   grid_center: { lat: number; lng: number };
 };
 
-export type LeadDensityGpsSource = "real" | "inferred" | "google";
-
 export type LeadDensityFilters = {
   sources?: string[];
   niche?: string | null;
   prospect_score_gte?: number | null;
   contact_tiers?: string[];
+  primary_offer?: string | null;
+  commercial_offer_type?: string | null;
   gps_sources?: LeadDensityGpsSource[];
+  bbox?: LeadDensityViewportBounds | null;
+  zoom?: number | null;
+  heat_metric?: LeadDensityHeatMetric | null;
 };
 
 export type LeadDensityMeta = {
@@ -74,12 +135,17 @@ export type LeadDensityMeta = {
   filtered_leads: number;
   positioned_leads: number;
   grid_cell_size_km: number;
+  aggregation_mode: LeadDensityAggregationMode;
+  zoom_bucket: number;
+  viewport_lead_count: number;
+  cell_size_hint_km: number;
 };
 
 export type LeadDensitySnapshot = {
   locations: GranularLocationDensityPoint[];
   exact_points: Array<{ lat: number; lng: number }>;
   geocoded_points: Array<{ lat: number; lng: number }>;
+  viewport_leads: MapViewportLead[];
   meta: LeadDensityMeta;
 };
 
@@ -185,6 +251,15 @@ function deriveLocationLabelFromAddress(address: string | null | undefined): str
   return normalizeLocationLabel(raw);
 }
 
+function asNullableNumber(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim() !== "") {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
 function asNumber(value: unknown): number {
   if (typeof value === "number" && Number.isFinite(value)) return value;
   if (typeof value === "string" && value.trim() !== "") {
@@ -259,6 +334,20 @@ function extractGpsPoints(gps: unknown): Array<{ lat: number; lng: number }> {
   return [];
 }
 
+function isValidMapPoint(point: { lat: number; lng: number } | null | undefined): point is { lat: number; lng: number } {
+  return Boolean(
+    point &&
+    Number.isFinite(point.lat) &&
+    Number.isFinite(point.lng) &&
+    point.lat >= -90 &&
+    point.lat <= 90 &&
+    point.lng >= -180 &&
+    point.lng <= 180 &&
+    point.lat !== 0 &&
+    point.lng !== 0
+  );
+}
+
 function percentile(value: number, sortedValues: number[]): number {
   if (sortedValues.length <= 1) return 100;
   const lastIndex = sortedValues.lastIndexOf(value);
@@ -269,6 +358,13 @@ function percentile(value: number, sortedValues: number[]): number {
 const HEATMAP_GRID_STEP_DEGREES = 0.02;
 const HEATMAP_GRID_SIZE_KM = 2.2;
 const DEFAULT_GEOCODE_LIMIT = 120;
+const COUNTRY_GRID_STEP_DEGREES = 0.45;
+const COUNTRY_GRID_SIZE_KM = 50;
+const REGIONAL_GRID_STEP_DEGREES = 0.12;
+const REGIONAL_GRID_SIZE_KM = 13;
+const LOCAL_GRID_STEP_DEGREES = 0.04;
+const LOCAL_GRID_SIZE_KM = 4.4;
+const INDIVIDUAL_MARKER_LIMIT = 200;
 
 export type DensityCoordinate = {
   lat: number;
@@ -276,7 +372,7 @@ export type DensityCoordinate = {
   source: "gps" | "geocoded";
 };
 
-export function buildGridCell(point: { lat: number; lng: number }, step = HEATMAP_GRID_STEP_DEGREES) {
+export function buildGridCell(point: { lat: number; lng: number }, step = HEATMAP_GRID_STEP_DEGREES, aggregationLevel: LeadDensityAggregationMode = "local") {
   const latIndex = Math.floor(point.lat / step);
   const lngIndex = Math.floor(point.lng / step);
   const center = {
@@ -284,9 +380,9 @@ export function buildGridCell(point: { lat: number; lng: number }, step = HEATMA
     lng: Number((lngIndex * step + step / 2).toFixed(5)),
   };
   return {
-    gridKey: `${latIndex}:${lngIndex}`,
+    gridKey: `${aggregationLevel}:${latIndex}:${lngIndex}`,
     center,
-    label: `Cuadrícula ${center.lat.toFixed(2)} / ${center.lng.toFixed(2)}`,
+    label: `Área ${center.lat.toFixed(2)} / ${center.lng.toFixed(2)}`,
   };
 }
 
@@ -317,6 +413,41 @@ function resolveRawGpsSource(lead: LeadInsightRow): Exclude<LeadDensityGpsSource
   return sources.includes("google_places") ? "google" : "real";
 }
 
+function getLeadCommercialSummary(lead: LeadInsightRow) {
+  const existing = lead.commercial_offers_summary;
+  if (existing && typeof existing === "object") {
+    return {
+      primary_offer_type: String(existing.primary_offer_type ?? "unknown").trim().toLowerCase() || "unknown",
+      software_score: asNumber(existing.software_score),
+      marketing_score: asNumber(existing.marketing_score),
+    };
+  }
+
+  const derived = buildCommercialOfferingsSummary(
+    buildCommercialOfferings(
+      Array.isArray(lead.tags) ? lead.tags.filter((tag): tag is string => typeof tag === "string") : [],
+      lead.score_breakdown ?? null,
+      lead.digital_footprint ?? null
+    )
+  );
+
+  return {
+    primary_offer_type: derived.primary_offer_type,
+    software_score: derived.software_score,
+    marketing_score: derived.marketing_score,
+  };
+}
+
+function classifyCommercialOfferType(lead: LeadInsightRow): string {
+  const summary = getLeadCommercialSummary(lead);
+  if (summary.primary_offer_type && summary.primary_offer_type !== "unknown") return summary.primary_offer_type;
+  const normalized = (lead.primary_offer ?? "").trim().toLowerCase();
+  if (!normalized) return "unknown";
+  if (["marketing", "ads", "redes", "social", "campana"].some((term) => normalized.includes(term))) return "marketing";
+  if (["software", "pos", "web", "catalogo", "crm", "erp"].some((term) => normalized.includes(term))) return "software";
+  return "unknown";
+}
+
 export function matchesLeadDensityFilters(
   lead: LeadInsightRow,
   filters: LeadDensityFilters,
@@ -339,6 +470,15 @@ export function matchesLeadDensityFilters(
   if (filters.contact_tiers && filters.contact_tiers.length > 0) {
     const tier = normalizeContactTier(lead.contact_tier);
     if (!tier || !filters.contact_tiers.includes(tier)) return false;
+  }
+
+  if (filters.primary_offer) {
+    const primaryOffer = (lead.primary_offer ?? "").trim().toLowerCase();
+    if (!primaryOffer || primaryOffer !== filters.primary_offer.trim().toLowerCase()) return false;
+  }
+
+  if (filters.commercial_offer_type) {
+    if (classifyCommercialOfferType(lead) !== filters.commercial_offer_type.trim().toLowerCase()) return false;
   }
 
   if (filters.gps_sources && filters.gps_sources.length > 0) {
@@ -403,6 +543,93 @@ export function buildLeadDensityRows(leads: LeadInsightRow[], locationFilter?: s
   });
 }
 
+type AggregationConfig = {
+  mode: LeadDensityAggregationMode;
+  stepDegrees: number | null;
+  cellSizeKm: number;
+};
+
+function resolveAggregationConfig(zoom: number | null | undefined): AggregationConfig {
+  const value = zoom ?? 7;
+  if (value >= 14) return { mode: "individual", stepDegrees: null, cellSizeKm: 0 };
+  if (value >= 11) return { mode: "local", stepDegrees: LOCAL_GRID_STEP_DEGREES, cellSizeKm: LOCAL_GRID_SIZE_KM };
+  if (value >= 8) return { mode: "regional", stepDegrees: REGIONAL_GRID_STEP_DEGREES, cellSizeKm: REGIONAL_GRID_SIZE_KM };
+  return { mode: "country", stepDegrees: COUNTRY_GRID_STEP_DEGREES, cellSizeKm: COUNTRY_GRID_SIZE_KM };
+}
+
+function pointInBounds(point: { lat: number; lng: number }, bbox: LeadDensityViewportBounds | null | undefined): boolean {
+  if (!bbox) return true;
+  return point.lat >= bbox.south && point.lat <= bbox.north && point.lng >= bbox.west && point.lng <= bbox.east;
+}
+
+function metricRankValue(lead: LeadInsightRow, heatMetric: LeadDensityHeatMetric): number {
+  const summary = getLeadCommercialSummary(lead);
+  if (heatMetric === "marketing") return summary.marketing_score;
+  if (heatMetric === "software") return summary.software_score;
+  if (heatMetric === "combined") return Math.round((summary.marketing_score + summary.software_score) / 2);
+  return Math.round(asNumber(lead.prospect_score) * 0.7 + Math.max(summary.marketing_score, summary.software_score) * 0.3);
+}
+
+function computeAdaptiveDensityScores(
+  points: GranularLocationDensityPoint[],
+  heatMetric: LeadDensityHeatMetric
+): GranularLocationDensityPoint[] {
+  const leadCounts = [...points.map((point) => point.lead_count)].sort((a, b) => a - b);
+  const hotCounts = [...points.map((point) => point.hot_leads_count)].sort((a, b) => a - b);
+  const avgScores = [...points.map((point) => point.avg_prospect_score)].sort((a, b) => a - b);
+  const avgMarketing = [...points.map((point) => point.avg_marketing_score)].sort((a, b) => a - b);
+  const avgSoftware = [...points.map((point) => point.avg_software_score)].sort((a, b) => a - b);
+  const avgCombined = [...points.map((point) => (point.avg_marketing_score + point.avg_software_score) / 2)].sort((a, b) => a - b);
+
+  return points.map((point) => {
+    const leadPct = percentile(point.lead_count, leadCounts);
+    const hotPct = percentile(point.hot_leads_count, hotCounts);
+    const scorePct = percentile(point.avg_prospect_score, avgScores);
+    const marketingPct = percentile(point.avg_marketing_score, avgMarketing);
+    const softwarePct = percentile(point.avg_software_score, avgSoftware);
+    const combinedPct = percentile((point.avg_marketing_score + point.avg_software_score) / 2, avgCombined);
+
+    const intensity = heatMetric === "marketing"
+      ? marketingPct * 0.5 + leadPct * 0.25 + hotPct * 0.15 + scorePct * 0.1
+      : heatMetric === "software"
+        ? softwarePct * 0.5 + leadPct * 0.25 + hotPct * 0.15 + scorePct * 0.1
+        : heatMetric === "combined"
+          ? combinedPct * 0.5 + leadPct * 0.2 + hotPct * 0.2 + scorePct * 0.1
+          : leadPct * 0.4 + hotPct * 0.25 + scorePct * 0.15 + marketingPct * 0.1 + softwarePct * 0.1;
+
+    const rounded = Math.round(intensity);
+    return {
+      ...point,
+      intensity_score: rounded,
+      commercial_density_score: rounded,
+    };
+  });
+}
+
+function toViewportLead(lead: LeadInsightRow, coordinate: { lat: number; lng: number }): MapViewportLead {
+  return {
+    id: lead.id,
+    name: lead.name ?? null,
+    niche: lead.niche ?? null,
+    contact_tier: lead.contact_tier ?? null,
+    prospect_score: asNullableNumber(lead.prospect_score),
+    address: lead.address ?? null,
+    gps: lead.gps,
+    map_point: coordinate,
+    source: lead.source ?? null,
+    website: lead.website ?? null,
+    phone: lead.phone ?? null,
+    whatsapp: lead.whatsapp ?? null,
+    email: lead.email ?? null,
+    rating: asNullableNumber(lead.rating),
+    review_count: asNullableNumber(lead.review_count),
+    primary_offer: lead.primary_offer ?? null,
+    pitch_hook: lead.pitch_hook ?? null,
+    contact_ready: lead.contact_ready ?? null,
+    tags: lead.tags ?? null,
+  };
+}
+
 export async function buildLeadDensitySnapshot(
   leads: LeadInsightRow[],
   options: {
@@ -421,8 +648,16 @@ export async function buildLeadDensitySnapshot(
     niche: options.filters?.niche?.trim() || null,
     prospect_score_gte: options.filters?.prospect_score_gte ?? null,
     contact_tiers: options.filters?.contact_tiers?.map((value) => value.trim().toUpperCase()).filter(Boolean),
+    primary_offer: options.filters?.primary_offer?.trim() || null,
+    commercial_offer_type: options.filters?.commercial_offer_type?.trim().toLowerCase() || null,
     gps_sources: options.filters?.gps_sources?.filter(Boolean),
+    bbox: options.filters?.bbox ?? null,
+    zoom: options.filters?.zoom ?? null,
+    heat_metric: options.filters?.heat_metric ?? "mixed",
   };
+
+  const aggregation = resolveAggregationConfig(filters.zoom);
+  const heatMetric = filters.heat_metric ?? "mixed";
 
   const scopedLeads = leads
     .map((lead) => {
@@ -443,18 +678,24 @@ export async function buildLeadDensitySnapshot(
   const geocodedByLeadId = new Map<string, { lat: number; lng: number }>();
   if (geocodeAddress) {
     for (const entry of attemptedGeocodeCandidates) {
-      const point = await geocodeAddress(entry.lead.address ?? "");
-      if (point) geocodedByLeadId.set(entry.lead.id, point);
+      try {
+        const point = await geocodeAddress(entry.lead.address ?? "");
+        if (isValidMapPoint(point)) geocodedByLeadId.set(entry.lead.id, point);
+      } catch {
+        // Treat per-address provider failures as unresolved leads so one bad
+        // geocode request cannot break the whole density map response.
+      }
     }
   }
 
   let rawGpsLeads = 0;
   let geocodedAddressLeads = 0;
   let unresolvedAddressLeads = 0;
-  let filteredLeads = scopedLeads.length;
+  const filteredLeads = scopedLeads.length;
   let positionedLeads = 0;
   const exactPoints: Array<{ lat: number; lng: number }> = [];
   const geocodedPoints: Array<{ lat: number; lng: number }> = [];
+  const viewportLeads: MapViewportLead[] = [];
 
   for (const entry of scopedLeads) {
     const score = asNumber(entry.lead.prospect_score);
@@ -470,7 +711,25 @@ export async function buildLeadDensitySnapshot(
     }
 
     positionedLeads += 1;
-    const cell = buildGridCell(coordinate);
+    if (!pointInBounds(coordinate, filters.bbox)) continue;
+
+    const summary = getLeadCommercialSummary(entry.lead);
+
+    if (coordinate.source === "gps") {
+      rawGpsLeads += 1;
+      exactPoints.push({ lat: coordinate.lat, lng: coordinate.lng });
+    } else {
+      geocodedAddressLeads += 1;
+      geocodedPoints.push({ lat: coordinate.lat, lng: coordinate.lng });
+    }
+
+    viewportLeads.push(toViewportLead(entry.lead, { lat: coordinate.lat, lng: coordinate.lng }));
+
+    if (aggregation.mode === "individual") {
+      continue;
+    }
+
+    const cell = buildGridCell(coordinate, aggregation.stepDegrees ?? HEATMAP_GRID_STEP_DEGREES, aggregation.mode);
     const locationKey = `${entry.parentLocationKey || "sin-ubicacion"}::${cell.gridKey}`;
     const locationLabel = `${entry.parentLocationLabel} · ${cell.label}`;
     const current = grouped.get(locationKey) ?? {
@@ -478,30 +737,29 @@ export async function buildLeadDensitySnapshot(
       location_label: locationLabel,
       parent_location_key: entry.parentLocationKey,
       parent_location_label: entry.parentLocationLabel,
+      aggregation_level: aggregation.mode,
       lead_count: 0,
       hot_leads_count: 0,
       avg_prospect_score: 0,
+      avg_marketing_score: 0,
+      avg_software_score: 0,
+      intensity_score: 0,
       commercial_density_score: 0,
       gps_points: [],
       raw_gps_lead_count: 0,
       geocoded_lead_count: 0,
       grid_center: cell.center,
-    };
+    } satisfies GranularLocationDensityPoint;
 
     current.lead_count += 1;
     current.avg_prospect_score += score;
+    current.avg_marketing_score += summary.marketing_score;
+    current.avg_software_score += summary.software_score;
     if (score >= 55) current.hot_leads_count += 1;
     current.gps_points.push({ lat: coordinate.lat, lng: coordinate.lng });
 
-    if (coordinate.source === "gps") {
-      current.raw_gps_lead_count += 1;
-      rawGpsLeads += 1;
-      exactPoints.push({ lat: coordinate.lat, lng: coordinate.lng });
-    } else {
-      current.geocoded_lead_count += 1;
-      geocodedAddressLeads += 1;
-      geocodedPoints.push({ lat: coordinate.lat, lng: coordinate.lng });
-    }
+    if (coordinate.source === "gps") current.raw_gps_lead_count += 1;
+    else current.geocoded_lead_count += 1;
 
     grouped.set(locationKey, current);
   }
@@ -509,20 +767,34 @@ export async function buildLeadDensitySnapshot(
   const rows = [...grouped.values()].map((row) => ({
     ...row,
     avg_prospect_score: row.lead_count > 0 ? Number((row.avg_prospect_score / row.lead_count).toFixed(2)) : 0,
+    avg_marketing_score: row.lead_count > 0 ? Number((row.avg_marketing_score / row.lead_count).toFixed(2)) : 0,
+    avg_software_score: row.lead_count > 0 ? Number((row.avg_software_score / row.lead_count).toFixed(2)) : 0,
   }));
 
-  const locations = computeDensityScores(rows).sort((left, right) => {
-    if (right.commercial_density_score !== left.commercial_density_score) {
-      return right.commercial_density_score - left.commercial_density_score;
+  const locations = computeAdaptiveDensityScores(rows, heatMetric).sort((left, right) => {
+    if (right.intensity_score !== left.intensity_score) {
+      return right.intensity_score - left.intensity_score;
     }
     if (right.lead_count !== left.lead_count) return right.lead_count - left.lead_count;
     return left.location_label.localeCompare(right.location_label);
   });
 
+  const scopedLeadById = new Map(scopedLeads.map((entry) => [entry.lead.id, entry.lead]));
+  const sortedViewportLeads = [...viewportLeads]
+    .sort((left, right) => {
+      const leftRow = scopedLeadById.get(left.id);
+      const rightRow = scopedLeadById.get(right.id);
+      const metricDelta = metricRankValue(rightRow ?? { id: right.id, source: right.source, niche: right.niche, address: right.address, prospect_score: right.prospect_score, contact_tier: right.contact_tier, primary_offer: right.primary_offer, gps: right.gps, corroborating_sources: [], tags: right.tags ?? [], score_breakdown: null, digital_footprint: null }, heatMetric) - metricRankValue(leftRow ?? { id: left.id, source: left.source, niche: left.niche, address: left.address, prospect_score: left.prospect_score, contact_tier: left.contact_tier, primary_offer: left.primary_offer, gps: left.gps, corroborating_sources: [], tags: left.tags ?? [], score_breakdown: null, digital_footprint: null }, heatMetric);
+      if (metricDelta !== 0) return metricDelta;
+      return asNumber(right.prospect_score) - asNumber(left.prospect_score);
+    })
+    .slice(0, INDIVIDUAL_MARKER_LIMIT);
+
   return {
     locations,
     exact_points: exactPoints,
     geocoded_points: geocodedPoints,
+    viewport_leads: sortedViewportLeads,
     meta: {
       raw_gps_leads: rawGpsLeads,
       geocoded_address_leads: geocodedAddressLeads,
@@ -530,7 +802,11 @@ export async function buildLeadDensitySnapshot(
       deferred_geocode_leads: deferredGeocodeLeads,
       filtered_leads: filteredLeads,
       positioned_leads: positionedLeads,
-      grid_cell_size_km: HEATMAP_GRID_SIZE_KM,
+      grid_cell_size_km: aggregation.mode === "individual" ? 0 : aggregation.cellSizeKm,
+      aggregation_mode: aggregation.mode,
+      zoom_bucket: Math.round(filters.zoom ?? 7),
+      viewport_lead_count: viewportLeads.length,
+      cell_size_hint_km: aggregation.mode === "individual" ? 0 : aggregation.cellSizeKm,
     },
   };
 }
@@ -696,7 +972,7 @@ export function buildDiscoveryRecommendations(params: {
 
 export function estimateGooglePlacesBatchCost(maxResults: number): number {
   const safeMaxResults = Math.max(1, Math.min(maxResults, 1000));
-  return Math.ceil(safeMaxResults / 20) * 0.035 + safeMaxResults * 0.025;
+  return projectMaxGooglePlacesCost(safeMaxResults);
 }
 
 export function supportedDiscoverySources(): string[] {

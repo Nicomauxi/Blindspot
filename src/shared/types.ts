@@ -73,6 +73,7 @@ export interface ScoringRunStats {
   duration_ms: number;
   top_5: ProspectEntry[];
   bottom_5: ProspectEntry[];
+  warnings?: string[];
   error?: string;
 }
 
@@ -115,6 +116,8 @@ export interface HeuristicCandidate {
   http_status?: number | null;
   final_url?: string | null;
   error?: string;
+  // Estado de "vida" de la red (FB/IG): si la página realmente existe y es funcional.
+  liveness?: import("../modules/social-enrich/liveness.js").Liveness;
 }
 
 export interface HeuristicWhatsappCandidate {
@@ -222,7 +225,8 @@ export interface SocialSearchPlatformResult {
 
 export interface DuckDuckGoSocialSearch {
   ran_at: string;
-  source: "duckduckgo" | "duckduckgo-fallback";
+  // searxng: descubrimiento vía SearXNG self-hosted. serper: vía Serper.dev (Google SERP API).
+  source: "duckduckgo" | "duckduckgo-fallback" | "searxng" | "serper";
   facebook: SocialSearchPlatformResult;
   instagram: SocialSearchPlatformResult;
 }
@@ -237,6 +241,7 @@ export interface PlaywrightFacebookSearchResult {
   whatsapp_button: boolean;
   confidence: number;
   signals: PlaywrightSocialSignal[];
+  liveness?: import("../modules/social-enrich/liveness.js").Liveness;
 }
 
 export interface PlaywrightInstagramSearchResult {
@@ -249,6 +254,7 @@ export interface PlaywrightInstagramSearchResult {
   has_contact_button: boolean;
   confidence: number;
   signals: PlaywrightSocialSignal[];
+  liveness?: import("../modules/social-enrich/liveness.js").Liveness;
 }
 
 export interface PlaywrightSocialSearch {
@@ -283,7 +289,8 @@ export type DigitalFootprintSkipped = {
   heuristic_discovery?: HeuristicDiscovery;
   directory_discovery?: DirectoryDiscovery;
   social_search?: SocialSearch;
-  social_enrich_status?: "ok" | "blocked";
+  social_activity?: import("../modules/social-enrich/social-activity.js").SocialActivitySnapshot;
+  social_enrich_status?: "ok" | "blocked" | "no_data";
   last_change_diff?: EnrichmentDiff;
 };
 
@@ -329,6 +336,7 @@ export interface DigitalFootprintEnriched {
   heuristic_discovery?: HeuristicDiscovery;
   directory_discovery?: DirectoryDiscovery;
   social_search?: SocialSearch;
+  social_activity?: import("../modules/social-enrich/social-activity.js").SocialActivitySnapshot;
   fetch_error?: string;
   attempted_url?: string;
   final_url?: string;
@@ -372,7 +380,7 @@ export interface DigitalFootprintEnriched {
     error?: string;
   };
   inferred_state?: InferredState;
-  social_enrich_status?: "ok" | "blocked";
+  social_enrich_status?: "ok" | "blocked" | "no_data";
   last_change_diff?: EnrichmentDiff;
 }
 
@@ -432,6 +440,8 @@ export interface Lead {
   prospect_score_v1: number | null;
   passed_filter: boolean;
   rejection_reasons: string[];
+  /** Ley 18.331: el lead es (probable) persona física → oculto + datos personales minimizados. */
+  is_natural_person?: boolean;
   score_breakdown: Record<string, unknown> | null;
   score_breakdown_v1: Record<string, unknown> | null;
   systems_gap_breakdown: Record<string, unknown> | null;
@@ -546,7 +556,12 @@ export type DiscoverySource =
   | "yelu"
   | "osm"
   | "infonegocios"
-  | "dgi";
+  | "dgi"
+  | "miem_dei"
+  // Fuentes derivadas del scraping de la propia red social descubierta (descripción/bio).
+  // Su confianza es dinámica (ver social-source-confidence.ts), no un valor fijo.
+  | "social_facebook"
+  | "social_instagram";
 
 export interface DiscoveryQuery {
   niche: string;
@@ -566,6 +581,10 @@ export interface DiscoveryCandidate {
   latitude: number | null;
   longitude: number | null;
   niche: string | null;
+  // Texto crudo de rubro/actividad que cada provider conoce (ej. descripción CIIU del DEI,
+  // TipoOperador de MINTUR). La capa normalizadora común lo reclasifica con el vocabulario
+  // dinámico de nichos — así la clasificación es única para todos los datasources, no ad-hoc.
+  niche_hint?: string;
   raw: Record<string, unknown>;
 }
 

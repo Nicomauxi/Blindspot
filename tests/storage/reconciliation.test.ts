@@ -169,6 +169,7 @@ describe("reconcileLeadIntoPrimary", () => {
       if (table === "leads") return leadsTable;
       if (table === "lead_source_references") return refsTable;
       if (table === "lead_field_evidences") return evidenceTable;
+      if (table === "lead_tracking") return { update: () => ({ eq: vi.fn(async () => ({ error: null })) }) };
       throw new Error(`Unexpected table ${table}`);
     });
 
@@ -203,6 +204,57 @@ describe("reconcileLeadIntoPrimary", () => {
         ]),
       })
     );
+  });
+
+  it("N0.1: re-apunta el tracking del CRM del secundario al primario antes de borrarlo", async () => {
+    const primary = leadRow({ id: "lead-primary", source: "google_places", name: "Hotel Bahia", prospect_score: 80 });
+    const secondary = leadRow({ id: "lead-secondary", source: "mintur", name: "Hotel Bahía", prospect_score: 10 });
+
+    const leadsSelect = vi.fn()
+      .mockResolvedValueOnce({ data: primary, error: null })
+      .mockResolvedValueOnce({ data: secondary, error: null })
+      .mockResolvedValueOnce({ data: primary, error: null });
+    const leadsEq = vi.fn(() => ({ single: leadsSelect }));
+    const emptySelect = vi.fn().mockResolvedValue({ data: [], error: null });
+
+    const refsTable = { select: vi.fn(() => ({ eq: () => emptySelect() })), upsert: vi.fn(async () => ({ error: null })) };
+    const evidenceTable = { select: vi.fn(() => ({ eq: () => emptySelect() })), upsert: vi.fn(async () => ({ error: null })) };
+
+    const order: string[] = [];
+    const fromFn = vi.fn((table: string) => {
+      if (table === "leads") {
+        return {
+          select: vi.fn(() => ({ eq: leadsEq })),
+          update: vi.fn(() => ({ eq: vi.fn(async () => ({ error: null })) })),
+          delete: vi.fn(() => ({ eq: vi.fn(async () => { order.push("delete"); return { error: null }; }) })),
+        };
+      }
+      if (table === "lead_source_references") return refsTable;
+      if (table === "lead_field_evidences") return evidenceTable;
+      if (table === "lead_tracking") {
+        return {
+          update: vi.fn((payload: { lead_id: string }) => ({
+            eq: vi.fn(async (col: string, val: string) => {
+              order.push(`tracking:set=${payload.lead_id};where=${col}=${val}`);
+              return { error: null };
+            }),
+          })),
+        };
+      }
+      throw new Error(`Unexpected table ${table}`);
+    });
+
+    supabaseRef.current = { from: fromFn };
+
+    await reconcileLeadIntoPrimary("lead-primary", "lead-secondary");
+
+    const trackingIdx = order.findIndex((o) => o.startsWith("tracking:"));
+    const deleteIdx = order.indexOf("delete");
+    expect(trackingIdx).toBeGreaterThanOrEqual(0);
+    expect(deleteIdx).toBeGreaterThanOrEqual(0);
+    expect(trackingIdx).toBeLessThan(deleteIdx); // re-apunta ANTES de borrar
+    // re-apunta del secundario al primario
+    expect(order).toContain("tracking:set=lead-primary;where=lead_id=lead-secondary");
   });
 
   it("sets canonical_source to primary source when it has the highest confidence", async () => {
@@ -251,6 +303,7 @@ describe("reconcileLeadIntoPrimary", () => {
         if (table === "leads") return leadsTable;
         if (table === "lead_source_references") return refsTable;
         if (table === "lead_field_evidences") return evidenceTable;
+        if (table === "lead_tracking") return { update: () => ({ eq: vi.fn(async () => ({ error: null })) }) };
         throw new Error(`Unexpected table ${table}`);
       }),
     };
@@ -259,6 +312,172 @@ describe("reconcileLeadIntoPrimary", () => {
 
     const updateCall = leadsTable.update.mock.calls[0]?.[0] as Record<string, unknown>;
     expect(updateCall).toMatchObject({ canonical_source: "google_places" });
+  });
+
+  it("omite id en los upserts de source refs y field evidences (default uuid)", async () => {
+    const primary = leadRow({ id: "lead-p6", source: "google_places", name: "Cafe Centro", prospect_score: 80 });
+    const secondary = leadRow({ id: "lead-s6", source: "osm", name: "Cafe Centro", prospect_score: 10 });
+
+    const leadsSelect = vi.fn()
+      .mockResolvedValueOnce({ data: primary, error: null })
+      .mockResolvedValueOnce({ data: secondary, error: null })
+      .mockResolvedValueOnce({ data: primary, error: null });
+    // refs/evidences de entrada CON id (como vienen de select *)
+    const sourceRefsSelect = vi.fn()
+      .mockResolvedValueOnce({ data: [], error: null })
+      .mockResolvedValueOnce({
+        data: [{ id: "ref-uuid-1", lead_id: "lead-s6", source: "osm", external_id: "o-1", source_confidence: 0.6, raw_data: {}, seen_at: "2026-01-03T00:00:00.000Z" }],
+        error: null,
+      });
+    const evidenceSelect = vi.fn()
+      .mockResolvedValueOnce({ data: [], error: null })
+      .mockResolvedValueOnce({
+        data: [{ id: "ev-uuid-1", lead_id: "lead-s6", field_name: "phone", value: "099", sources: ["osm"], confidence: 0.6, first_seen: "2026-01-01", last_seen: "2026-01-02" }],
+        error: null,
+      });
+
+    const leadsTable = {
+      select: vi.fn(() => ({ eq: vi.fn(() => ({ single: leadsSelect })) })),
+      update: vi.fn(() => ({ eq: vi.fn(async () => ({ error: null })) })),
+      delete: vi.fn(() => ({ eq: vi.fn(async () => ({ error: null })) })),
+    };
+    const refsTable = {
+      select: vi.fn(() => ({ eq: vi.fn(() => sourceRefsSelect()) })),
+      upsert: vi.fn(async () => ({ error: null })),
+    };
+    const evidenceTable = {
+      select: vi.fn(() => ({ eq: vi.fn(() => evidenceSelect()) })),
+      upsert: vi.fn(async () => ({ error: null })),
+    };
+
+    supabaseRef.current = {
+      from: vi.fn((table: string) => {
+        if (table === "leads") return leadsTable;
+        if (table === "lead_source_references") return refsTable;
+        if (table === "lead_field_evidences") return evidenceTable;
+        if (table === "lead_tracking") return { update: () => ({ eq: vi.fn(async () => ({ error: null })) }) };
+        throw new Error(`Unexpected table ${table}`);
+      }),
+    };
+
+    await reconcileLeadIntoPrimary("lead-p6", "lead-s6");
+
+    const refRows = refsTable.upsert.mock.calls[0]?.[0] as Array<Record<string, unknown>>;
+    const evRows = evidenceTable.upsert.mock.calls[0]?.[0] as Array<Record<string, unknown>>;
+    for (const row of refRows) expect(row).not.toHaveProperty("id");
+    for (const row of evRows) expect(row).not.toHaveProperty("id");
+  });
+
+  it("transfiere el gps del secundario al primario cuando el primario no tiene coordenadas", async () => {
+    const primary = leadRow({
+      id: "lead-p4",
+      source: "mintur",
+      name: "Farmacia Centro",
+      source_confidence: 0.8,
+      gps: null,
+    });
+    const secondary = leadRow({
+      id: "lead-s4",
+      source: "osm",
+      name: "Farmacia Centro",
+      source_confidence: 0.6,
+      gps: "POINT(-56.1645 -34.9011)",
+    });
+
+    const leadsSelect = vi.fn()
+      .mockResolvedValueOnce({ data: primary, error: null })
+      .mockResolvedValueOnce({ data: secondary, error: null })
+      .mockResolvedValueOnce({ data: { ...primary, gps: "POINT(-56.1645 -34.9011)" }, error: null });
+    const sourceRefsSelect = vi.fn()
+      .mockResolvedValueOnce({ data: [], error: null })
+      .mockResolvedValueOnce({ data: [], error: null });
+    const evidenceSelect = vi.fn()
+      .mockResolvedValueOnce({ data: [], error: null })
+      .mockResolvedValueOnce({ data: [], error: null });
+
+    const leadsTable = {
+      select: vi.fn(() => ({ eq: vi.fn(() => ({ single: leadsSelect })) })),
+      update: vi.fn(() => ({ eq: vi.fn(async () => ({ error: null })) })),
+      delete: vi.fn(() => ({ eq: vi.fn(async () => ({ error: null })) })),
+    };
+    const refsTable = {
+      select: vi.fn(() => ({ eq: vi.fn(() => sourceRefsSelect()) })),
+      upsert: vi.fn(async () => ({ error: null })),
+    };
+    const evidenceTable = {
+      select: vi.fn(() => ({ eq: vi.fn(() => evidenceSelect()) })),
+      upsert: vi.fn(async () => ({ error: null })),
+    };
+
+    supabaseRef.current = {
+      from: vi.fn((table: string) => {
+        if (table === "leads") return leadsTable;
+        if (table === "lead_source_references") return refsTable;
+        if (table === "lead_field_evidences") return evidenceTable;
+        if (table === "lead_tracking") return { update: () => ({ eq: vi.fn(async () => ({ error: null })) }) };
+        throw new Error(`Unexpected table ${table}`);
+      }),
+    };
+
+    await reconcileLeadIntoPrimary("lead-p4", "lead-s4");
+
+    const updateCall = leadsTable.update.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(updateCall.gps).toBe("SRID=4326;POINT(-56.1645 -34.9011)");
+  });
+
+  it("no pisa el gps del primario cuando ya tiene coordenadas", async () => {
+    const primary = leadRow({
+      id: "lead-p5",
+      source: "google_places",
+      name: "Farmacia Centro",
+      gps: "POINT(-56.2000 -34.8000)",
+    });
+    const secondary = leadRow({
+      id: "lead-s5",
+      source: "osm",
+      name: "Farmacia Centro",
+      gps: "POINT(-56.1645 -34.9011)",
+    });
+
+    const leadsSelect = vi.fn()
+      .mockResolvedValueOnce({ data: primary, error: null })
+      .mockResolvedValueOnce({ data: secondary, error: null })
+      .mockResolvedValueOnce({ data: primary, error: null });
+    const sourceRefsSelect = vi.fn()
+      .mockResolvedValueOnce({ data: [], error: null })
+      .mockResolvedValueOnce({ data: [], error: null });
+    const evidenceSelect = vi.fn()
+      .mockResolvedValueOnce({ data: [], error: null })
+      .mockResolvedValueOnce({ data: [], error: null });
+
+    const leadsTable = {
+      select: vi.fn(() => ({ eq: vi.fn(() => ({ single: leadsSelect })) })),
+      update: vi.fn(() => ({ eq: vi.fn(async () => ({ error: null })) })),
+      delete: vi.fn(() => ({ eq: vi.fn(async () => ({ error: null })) })),
+    };
+    const refsTable = {
+      select: vi.fn(() => ({ eq: vi.fn(() => sourceRefsSelect()) })),
+      upsert: vi.fn(async () => ({ error: null })),
+    };
+    const evidenceTable = {
+      select: vi.fn(() => ({ eq: vi.fn(() => evidenceSelect()) })),
+      upsert: vi.fn(async () => ({ error: null })),
+    };
+
+    supabaseRef.current = {
+      from: vi.fn((table: string) => {
+        if (table === "leads") return leadsTable;
+        if (table === "lead_source_references") return refsTable;
+        if (table === "lead_field_evidences") return evidenceTable;
+        if (table === "lead_tracking") return { update: () => ({ eq: vi.fn(async () => ({ error: null })) }) };
+        throw new Error(`Unexpected table ${table}`);
+      }),
+    };
+
+    await reconcileLeadIntoPrimary("lead-p5", "lead-s5");
+
+    const updateCall = leadsTable.update.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(updateCall).not.toHaveProperty("gps");
   });
 
   it("sets canonical_source to corroborating source when it has higher confidence than primary", async () => {
@@ -307,6 +526,7 @@ describe("reconcileLeadIntoPrimary", () => {
         if (table === "leads") return leadsTable;
         if (table === "lead_source_references") return refsTable;
         if (table === "lead_field_evidences") return evidenceTable;
+        if (table === "lead_tracking") return { update: () => ({ eq: vi.fn(async () => ({ error: null })) }) };
         throw new Error(`Unexpected table ${table}`);
       }),
     };

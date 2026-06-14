@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Lead } from "../../src/shared/types.js";
 
 vi.mock("../../src/storage/runs.js", () => ({
@@ -39,7 +39,11 @@ vi.mock("../../src/storage/owner-group.js", () => ({
   detectOwnerGroups: vi.fn(),
 }));
 
-import { enrichCommand } from "../../src/cli/commands/enrich.js";
+vi.mock("../../src/cli/commands/rescore-chain.js", () => ({
+  rescoreLeadsChained: vi.fn(),
+}));
+
+import { enrichCommand, startFilterEnrichmentJob, resolveEffectiveConcurrency } from "../../src/cli/commands/enrich.js";
 import { getRunById, createEnrichmentRun, completeRun } from "../../src/storage/runs.js";
 import { loadLeadsByRunId, loadLeadsBySource, loadAllPassedLeads, loadLeadsByFilterSelection, updateLeadEnrichment } from "../../src/storage/leads.js";
 import { recordPipelineError } from "../../src/storage/pipeline-errors.js";
@@ -47,6 +51,7 @@ import { loadFilterWordsForNiche } from "../../src/storage/vocabulary.js";
 import { detectAndSeedEmailProviders, loadAllRuntime, retroactiveEmailCleanup, detectAndSeedHeuristicDomains } from "../../src/storage/system-lists.js";
 import { enrichLead } from "../../src/modules/enrichment/index.js";
 import { detectOwnerGroups } from "../../src/storage/owner-group.js";
+import { rescoreLeadsChained } from "../../src/cli/commands/rescore-chain.js";
 
 const RUN_ID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
 const ENRICH_RUN_ID = "11111111-2222-3333-4444-555555555555";
@@ -413,5 +418,126 @@ describe("enrichCommand — change detection and pipeline errors", () => {
         recovered: true,
       })
     );
+  });
+});
+
+describe("resolveEffectiveConcurrency", () => {
+  afterEach(() => {
+    delete process.env["ENRICH_HEURISTIC_MAX_CONCURRENCY"];
+  });
+
+  it("sin heurística usa la concurrencia pedida sin cap", () => {
+    expect(resolveEffectiveConcurrency({ withHeuristic: false, concurrency: 8 })).toBe(8);
+  });
+
+  it("con heurística y sin override aplica el cap de env (default 2)", () => {
+    expect(resolveEffectiveConcurrency({ withHeuristic: true, concurrency: 8 })).toBe(2);
+    process.env["ENRICH_HEURISTIC_MAX_CONCURRENCY"] = "5";
+    expect(resolveEffectiveConcurrency({ withHeuristic: true, concurrency: 8 })).toBe(5);
+  });
+
+  it("con heuristicConcurrency explícito ignora el env y respeta el mínimo", () => {
+    process.env["ENRICH_HEURISTIC_MAX_CONCURRENCY"] = "2";
+    expect(
+      resolveEffectiveConcurrency({ withHeuristic: true, concurrency: 8, heuristicConcurrency: 6 })
+    ).toBe(6);
+    expect(
+      resolveEffectiveConcurrency({ withHeuristic: true, concurrency: 4, heuristicConcurrency: 6 })
+    ).toBe(4);
+  });
+});
+
+describe("startFilterEnrichmentJob — leadLimit y forceRefresh threadeados", () => {
+  it("default: leadLimit 250 al loader y forceRefresh false al run", async () => {
+    await startFilterEnrichmentJob({
+      filters: { niche: "hairdresser" },
+      withHeuristic: true,
+      concurrency: 2,
+    });
+
+    await vi.waitFor(() => expect(loadLeadsByFilterSelection).toHaveBeenCalled());
+    expect(loadLeadsByFilterSelection).toHaveBeenCalledWith(
+      { niche: "hairdresser" },
+      { passedOnly: true, limit: 250 }
+    );
+    expect(createEnrichmentRun).toHaveBeenCalledWith(
+      expect.objectContaining({ forceRefresh: false })
+    );
+  });
+
+  it("scope=all: leadLimit 10000 al loader y forceRefresh true al run", async () => {
+    await startFilterEnrichmentJob({
+      filters: { niche: "hairdresser" },
+      withHeuristic: true,
+      concurrency: 2,
+      forceRefresh: true,
+      leadLimit: 10000,
+      heuristicConcurrency: 2,
+    });
+
+    await vi.waitFor(() => expect(loadLeadsByFilterSelection).toHaveBeenCalled());
+    expect(loadLeadsByFilterSelection).toHaveBeenCalledWith(
+      { niche: "hairdresser" },
+      { passedOnly: true, limit: 10000 }
+    );
+    expect(createEnrichmentRun).toHaveBeenCalledWith(
+      expect.objectContaining({ forceRefresh: true })
+    );
+  });
+});
+
+describe("startFilterEnrichmentJob — re-score encadenado", () => {
+  it("con rescoreOnComplete dispara el re-score con los ids enriquecidos al completar", async () => {
+    vi.mocked(loadLeadsByFilterSelection).mockResolvedValue([
+      makeLead({ id: "filtered-1", niche: "hairdresser" }),
+      makeLead({ id: "filtered-2", niche: "hairdresser" }),
+    ]);
+    vi.mocked(rescoreLeadsChained).mockResolvedValue({ runId: "score-run-1", leadsScored: 2 });
+
+    await startFilterEnrichmentJob({
+      filters: { niche: "hairdresser" },
+      withHeuristic: false,
+      concurrency: 2,
+      rescoreOnComplete: true,
+    });
+
+    await vi.waitFor(() => expect(rescoreLeadsChained).toHaveBeenCalled());
+    expect(rescoreLeadsChained).toHaveBeenCalledWith(
+      expect.objectContaining({ id: ENRICH_RUN_ID }),
+      ["filtered-1", "filtered-2"]
+    );
+    expect(completeRun).toHaveBeenCalled();
+  });
+
+  it("sin rescoreOnComplete no re-score", async () => {
+    vi.mocked(loadLeadsByFilterSelection).mockResolvedValue([
+      makeLead({ id: "filtered-1", niche: "hairdresser" }),
+    ]);
+
+    await startFilterEnrichmentJob({
+      filters: { niche: "hairdresser" },
+      withHeuristic: false,
+      concurrency: 2,
+    });
+
+    await vi.waitFor(() => expect(completeRun).toHaveBeenCalled());
+    expect(rescoreLeadsChained).not.toHaveBeenCalled();
+  });
+
+  it("si el re-score encadenado falla, el run de enrich queda completado igual", async () => {
+    vi.mocked(loadLeadsByFilterSelection).mockResolvedValue([
+      makeLead({ id: "filtered-1", niche: "hairdresser" }),
+    ]);
+    vi.mocked(rescoreLeadsChained).mockRejectedValue(new Error("scoring reventó"));
+
+    await startFilterEnrichmentJob({
+      filters: { niche: "hairdresser" },
+      withHeuristic: false,
+      concurrency: 2,
+      rescoreOnComplete: true,
+    });
+
+    await vi.waitFor(() => expect(rescoreLeadsChained).toHaveBeenCalled());
+    expect(completeRun).toHaveBeenCalled();
   });
 });

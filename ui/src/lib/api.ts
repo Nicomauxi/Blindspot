@@ -184,6 +184,8 @@ export type AdminSystemStatus = {
     last_status: string | null;
     missed: boolean;
     active_run: PipelineRun | null;
+    active_runs?: Array<{ id: string; kind: string; status: string; started_at: string | null; label: string | null }>;
+    active_run_count?: number;
     runs_recent: Record<string, { total: number; last_status: string | null; last_run_at: string | null }>;
     recent: PipelineRun[];
   };
@@ -314,6 +316,8 @@ export type MonitoringOverview = {
     last_completed_at: string | null;
     last_status: string | null;
     active_run: PipelineRun | null;
+    active_runs?: Array<{ id: string; kind: string; status: string; started_at: string | null; label: string | null }>;
+    active_run_count?: number;
     recent: PipelineRun[];
     runs_by_trigger: Record<string, { total: number; last_status: string | null; last_run_at: string | null }>;
   };
@@ -444,6 +448,52 @@ export type DiscoveryJobsSummary = {
 
 export async function getMonitoringDiscoveryJobs(token: string) {
   return request<{ data: DiscoveryJobsSummary }>("/api/v1/admin/monitoring/discovery-jobs", {}, token);
+}
+
+export type UnifiedRunKind = "pipeline" | "enrichment" | "scoring" | "social" | "discovery";
+
+export type UnifiedRun = {
+  id: string;
+  kind: UnifiedRunKind | string;
+  status: string;
+  started_at: string | null;
+  finished_at: string | null;
+  label: string | null;
+  source_run_id: string | null;
+  progress: Record<string, unknown> | null;
+  phases: unknown;
+};
+
+export type SocialEnrichJobState = {
+  running: boolean;
+  pid: number | null;
+  started_at: string | null;
+  log_file: string | null;
+  limit: number | null;
+  force: boolean | null;
+};
+
+export async function getSocialEnrichJob(token: string) {
+  return request<{ data: SocialEnrichJobState }>("/api/v1/admin/social-enrich/jobs/current", {}, token);
+}
+
+export async function launchSocialEnrichJob(token: string, body: { limit?: number; force?: boolean }) {
+  return request<{ data: SocialEnrichJobState }>(
+    "/api/v1/admin/social-enrich/jobs",
+    { method: "POST", body: JSON.stringify(body) },
+    token
+  );
+}
+
+export async function listMonitoringRuns(
+  token: string,
+  opts: { type?: string; limit?: number } = {}
+) {
+  const params = new URLSearchParams();
+  if (opts.type) params.set("type", opts.type);
+  if (opts.limit) params.set("limit", String(opts.limit));
+  const qs = params.toString();
+  return request<{ data: UnifiedRun[] }>(`/api/v1/admin/monitoring/runs${qs ? `?${qs}` : ""}`, {}, token);
 }
 
 export type BackupRun = {
@@ -632,6 +682,7 @@ export type VariableItem = {
   type: "boolean" | "number" | "string" | "string_array";
   sensitive: boolean;
   nullable: boolean;
+  group: "resources" | "pipeline";
   value: boolean | number | string | string[] | null;
 };
 
@@ -731,6 +782,9 @@ export type EnrichmentFilters = MissingFilters & {
   mode?: "enrichment" | "re_discovery";
   with_heuristic?: boolean;
   concurrency?: number;
+  scope?: "selection" | "all";
+  force_refresh?: boolean;
+  rescore_on_complete?: boolean;
 };
 
 export async function estimateEnrichmentImpact(token: string, filters: Omit<EnrichmentFilters, "with_heuristic" | "concurrency">) {
@@ -994,6 +1048,22 @@ export type LeadDashboard = {
   contact_reliability_score: number | null;
   contact_ready: boolean | null;
   sources_count?: number | null;
+  // Cluster C — columnas derivadas de lead_dashboard para la grilla social/comercial.
+  sources_count_real?: number | null;
+  best_contact_email?: string | null;
+  sellable?: boolean | null;
+  website_kind?: "none" | "social" | "directory" | "real" | null;
+  opportunity_no_web?: boolean | null;
+  demand_gap_score?: number | null;
+  deal_value_tier?: "high" | "medium" | "low" | "unknown" | string | null;
+  deal_value_monthly_uyu?: number | null;
+  has_social?: boolean | null;
+  has_social_candidate?: boolean | null;
+  social_platform?: string | null;
+  social_instagram_url?: string | null;
+  social_followers?: number | null;
+  social_audience_tier?: string | null;
+  social_status?: string | null;
   commercial_offerings?: CommercialOfferings | null;
   commercial_offers_summary?: CommercialOfferingsSummary | null;
 };
@@ -1125,12 +1195,40 @@ export async function createLeadFeedback(
     field_value?: unknown;
     verdict: LeadFeedbackVerdict;
     comment?: string;
+    rejection_reason?: "no_pertenece_al_lead" | "dato_desactualizado" | "fuera_de_servicio" | "otro";
+    reassign_to_lead_id?: string;
   }
 ) {
   return request<{ data: LeadFeedbackEntry; lead_id: string }>(`/api/v1/leads/${leadId}/feedback`, {
     method: "POST",
     body: JSON.stringify(data),
   }, token);
+}
+
+export async function updateFavoriteContacts(
+  token: string,
+  leadId: string,
+  favoriteContacts: Array<{ kind: string; value: string }>
+) {
+  return request<{ data: { lead_id: string; favorite_contacts: unknown[] } }>(
+    `/api/v1/leads/${leadId}/favorite-contacts`,
+    { method: "PATCH", body: JSON.stringify({ favorite_contacts: favoriteContacts }) },
+    token
+  );
+}
+
+// Búsqueda liviana de leads por nombre para reasignación de contactos.
+export async function searchLeadsByName(
+  token: string,
+  query: string
+): Promise<Array<{ id: string; name: string; niche: string | null; city: string | null }>> {
+  const res = await listLeads(token, { q: query, limit: 8 });
+  return res.data.map((lead) => ({
+    id: lead.id,
+    name: lead.name,
+    niche: (lead as { niche?: string | null }).niche ?? null,
+    city: (lead as { location_label?: string | null }).location_label ?? null,
+  }));
 }
 
 // Outreach — @deprecated: replaced by CRM tracking. Functions kept for FK bridge; do not use in new UI.
@@ -1353,9 +1451,13 @@ export type DiscoveryMapDensityLocation = {
   location_label: string;
   parent_location_key: string;
   parent_location_label: string;
+  aggregation_level: "country" | "regional" | "local" | "individual";
   lead_count: number;
   hot_leads_count: number;
   avg_prospect_score: number;
+  avg_marketing_score: number;
+  avg_software_score: number;
+  intensity_score: number;
   commercial_density_score: number;
   gps_points: Array<{ lat: number; lng: number }>;
   raw_gps_lead_count: number;
@@ -1364,6 +1466,14 @@ export type DiscoveryMapDensityLocation = {
 };
 
 export type DiscoveryLeadDensityGpsSource = "real" | "inferred" | "google";
+export type DiscoveryHeatMetric = "mixed" | "marketing" | "software" | "combined";
+
+export type DiscoveryMapViewportBounds = {
+  south: number;
+  west: number;
+  north: number;
+  east: number;
+};
 
 export type DiscoveryLeadDensityFilters = {
   location?: string;
@@ -1371,9 +1481,14 @@ export type DiscoveryLeadDensityFilters = {
   niche?: string;
   prospect_score_gte?: number;
   contact_tier?: string[];
+  primary_offer?: string;
+  commercial_offer_type?: CommercialOfferType;
   gps_source?: DiscoveryLeadDensityGpsSource[];
   zone_ids?: string[];
   limit?: number;
+  heat_metric?: DiscoveryHeatMetric;
+  zoom?: number;
+  bbox?: DiscoveryMapViewportBounds;
 };
 
 export type DiscoveryLeadDensityMeta = {
@@ -1384,6 +1499,10 @@ export type DiscoveryLeadDensityMeta = {
   filtered_leads: number;
   positioned_leads: number;
   grid_cell_size_km: number;
+  aggregation_mode: "country" | "regional" | "local" | "individual";
+  zoom_bucket: number;
+  viewport_lead_count: number;
+  cell_size_hint_km: number;
 };
 
 export type DiscoveryLocationSuggestion = {
@@ -1581,9 +1700,19 @@ export function buildDiscoveryGeoFilterQuery(params: DiscoveryLeadDensityFilters
   if (params.niche) qp.set("niche", params.niche);
   if (params.prospect_score_gte != null) qp.set("prospect_score_gte", String(params.prospect_score_gte));
   if (params.contact_tier && params.contact_tier.length > 0) qp.set("contact_tier", params.contact_tier.join(","));
+  if (params.primary_offer) qp.set("primary_offer", params.primary_offer);
+  if (params.commercial_offer_type) qp.set("commercial_offer_type", params.commercial_offer_type);
   if (params.gps_source && params.gps_source.length > 0) qp.set("gps_source", params.gps_source.join(","));
   if (params.zone_ids && params.zone_ids.length > 0) qp.set("zone_ids", params.zone_ids.join(","));
   if (params.limit) qp.set("limit", String(params.limit));
+  if (params.heat_metric) qp.set("heat_metric", params.heat_metric);
+  if (params.zoom != null) qp.set("zoom", String(params.zoom));
+  if (params.bbox) {
+    qp.set("south", String(params.bbox.south));
+    qp.set("west", String(params.bbox.west));
+    qp.set("north", String(params.bbox.north));
+    qp.set("east", String(params.bbox.east));
+  }
   return qp;
 }
 
@@ -1592,7 +1721,7 @@ export async function getLeadDensity(
   params: DiscoveryLeadDensityFilters = {}
 ) {
   const qp = buildDiscoveryGeoFilterQuery(params);
-  return request<{ data: { locations: DiscoveryMapDensityLocation[]; exact_points: Array<{ lat: number; lng: number }>; geocoded_points: Array<{ lat: number; lng: number }>; meta: DiscoveryLeadDensityMeta } }>(`/api/v1/admin/geo/lead-density?${qp}`, {}, token);
+  return request<{ data: { locations: DiscoveryMapDensityLocation[]; exact_points: Array<{ lat: number; lng: number }>; geocoded_points: Array<{ lat: number; lng: number }>; viewport_leads: ZoneLead[]; meta: DiscoveryLeadDensityMeta } }>(`/api/v1/admin/geo/lead-density?${qp}`, {}, token);
 }
 
 // Costs
@@ -2218,6 +2347,7 @@ export type ZoneLead = {
   pitch_hook?: string | null;
   contact_ready?: boolean | null;
   tags?: string[] | null;
+  commercial_offerings?: CommercialOfferings | null;
 };
 
 export async function getZoneLeads(
@@ -2279,4 +2409,85 @@ export async function deleteNicheAliasGroup(token: string, id: string) {
   return request<{ data: { deleted: string } }>(`/api/v1/admin/niches/groups/${id}`, {
     method: "DELETE",
   }, token);
+}
+
+// Merge candidates (cola de revisión de uniones cross-source)
+export type MergeCandidateLead = {
+  id: string;
+  name: string;
+  source: string;
+  address: string | null;
+  phone: string | null;
+  website: string | null;
+  niche: string | null;
+  prospect_score: number | null;
+};
+
+export type MergeCandidate = {
+  id: string;
+  match_kind: "phone" | "domain" | "email";
+  match_key: string;
+  same_city: boolean;
+  name_similarity: number;
+  reason: string;
+  created_at: string;
+  primary: MergeCandidateLead;
+  secondary: MergeCandidateLead;
+};
+
+export async function listMergeCandidates(token: string) {
+  return request<{ data: MergeCandidate[]; meta: { total: number } }>(
+    "/api/v1/admin/merge-candidates",
+    {},
+    token
+  );
+}
+
+export async function approveMergeCandidate(token: string, id: string) {
+  return request<{ data: { id: string; status: string; primary_lead_id: string } }>(
+    `/api/v1/admin/merge-candidates/${id}/approve`,
+    { method: "POST" },
+    token
+  );
+}
+
+export async function rejectMergeCandidate(token: string, id: string) {
+  return request<{ data: { id: string; status: string } }>(
+    `/api/v1/admin/merge-candidates/${id}/reject`,
+    { method: "POST" },
+    token
+  );
+}
+
+// Histórico social (crecimiento, posts/mes, churn) por plataforma
+export type SocialHistoryPlatform = {
+  followers_growth_30d: { abs: number; pct: number | null } | null;
+  posts_per_month: number | null;
+  churn_risk: boolean;
+  engagement_trend: number | null;
+  recency_days: number | null;
+  engagement_ratio: number | null;
+  series: Array<{ captured_at: string; followers: number | null }>;
+  point_count: number;
+};
+
+export async function getSocialHistory(token: string, leadId: string) {
+  return request<{ data: { lead_id: string; platforms: Record<string, SocialHistoryPlatform> }; meta: { platform_count: number } }>(
+    `/api/v1/leads/${leadId}/social-history`,
+    {},
+    token
+  );
+}
+
+// Recursos físicos del host (monitoreo)
+export type ResourceSnapshot = {
+  ram: { used_bytes: number; free_bytes: number; total_bytes: number; pct: number };
+  disk: { used_bytes: number; free_bytes: number; total_bytes: number; pct: number } | null;
+  cpu: { load_1m: number; cores: number; pct: number };
+  processes: Array<{ pid: number; cmd: string; cpu_pct: number; mem_mb: number }>;
+  sampled_at: string;
+};
+
+export async function getResourceSnapshot(token: string) {
+  return request<{ data: ResourceSnapshot }>("/api/v1/admin/monitoring/resources", {}, token);
 }

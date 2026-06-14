@@ -3,6 +3,7 @@ import type { Lead, PlaywrightInstagramSearchResult, PlaywrightSocialSignal } fr
 import type { SocialEnrichPage } from "./facebook.js";
 import { normalizeUruguayPhone } from "../enrichment/social-search.js";
 import { applyGeographicPenalties } from "./geo-penalty.js";
+import { detectLiveness, isHardDead } from "./liveness.js";
 
 const NAVIGATION_TIMEOUT_MS = 15_000;
 const DEFAULT_BLOCKED_HOSTS = ["about.meta.com", "facebook.com", "instagram.com", "meta.com"];
@@ -176,10 +177,30 @@ export async function extractInstagramProfile(
             )?.[0] ?? null,
           external_url,
           has_contact_button,
+          og_title: metaTitle,
+          page_title: document.querySelector("title")?.textContent ?? null,
+          final_url: document.location?.href ?? null,
         };
       },
       { blockedHosts: [...blockedHosts] }
     );
+
+    // Liveness: descartar perfiles muertos/redirigidos (no se confirman ni se incluyen).
+    const liveness = detectLiveness({
+      platform: "instagram",
+      requestedUrl: url,
+      finalUrl: extracted.final_url ?? url,
+      httpStatus: 200,
+      ogTitle: extracted.og_title,
+      title: extracted.page_title,
+      ogDescription: extracted.bio,
+      checkedAt: new Date().toISOString(),
+    });
+    if (isHardDead(liveness)) {
+      log.info({ leadId: lead.id, platform: "instagram", url, reason: liveness.reason }, "social enrich: perfil muerto descartado");
+      return null;
+    }
+
     const data: InstagramPageData = {
       name: cleanText(extracted.name),
       bio: cleanText(extracted.bio),
@@ -194,6 +215,7 @@ export async function extractInstagramProfile(
       ...data,
       confidence: scored.confidence,
       signals: scored.signals,
+      liveness,
     };
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);

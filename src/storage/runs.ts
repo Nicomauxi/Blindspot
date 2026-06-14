@@ -19,6 +19,7 @@ export async function createRun(params: {
       profile: params.profile,
       config: params.config,
       status: "running",
+      kind: "discovery",
     })
     .select()
     .single();
@@ -48,7 +49,11 @@ export async function completeRun(runId: string, stats: RunStats): Promise<void>
 export async function failRun(
   runId: string,
   errMsg: string,
-  duration_ms: number
+  duration_ms: number,
+  // N75: el gasto Google YA ejecutado antes del fallo (places_requests /
+  // estimated_cost_usd) debe sobrevivir en stats — antes se pisaba y el costo
+  // real de runs fallidos era irrecuperable para el backfill de presupuesto.
+  extraStats: Record<string, unknown> = {}
 ): Promise<void> {
   const log = getLogger();
 
@@ -58,7 +63,7 @@ export async function failRun(
     .from("runs")
     .update({
       status: "failed" satisfies RunStatus,
-      stats: { duration_ms, error: errMsg },
+      stats: { ...extraStats, duration_ms, error: errMsg },
       finished_at: new Date().toISOString(),
     })
     .eq("id", runId);
@@ -150,11 +155,46 @@ export async function createEnrichmentRun(params: {
 
   const { data, error } = await getSupabase()
     .from("runs")
-    .insert({ niche, location, profile, config, status: "running" })
+    .insert({ niche, location, profile, config, status: "running", kind: "enrichment" })
     .select()
     .single();
 
   if (error) throw new Error(`Failed to create enrichment run: ${error.message}`);
+  return data as Run;
+}
+
+const SOCIAL_ENRICH_SENTINEL = "__social_enrich__";
+
+// Run de social-enrich (kind "social"): da visibilidad en el Estado del run unificado
+// tanto a las corridas por terminal como a las lanzadas por la API vía subproceso.
+export async function createSocialEnrichRun(params: {
+  scope: "run" | "all";
+  sourceRun?: Run;
+  limit: number;
+  force: boolean;
+}): Promise<Run> {
+  const { scope, sourceRun, limit, force } = params;
+
+  const { data, error } = await getSupabase()
+    .from("runs")
+    .insert({
+      niche: sourceRun?.niche ?? SOCIAL_ENRICH_SENTINEL,
+      location: sourceRun?.location ?? SOCIAL_ENRICH_SENTINEL,
+      profile: sourceRun?.profile ?? "a",
+      config: {
+        command: "social-enrich",
+        scope,
+        ...(sourceRun ? { source_run_id: sourceRun.id } : {}),
+        limit,
+        force,
+      },
+      status: "running",
+      kind: "social",
+    })
+    .select()
+    .single();
+
+  if (error) throw new Error(`Failed to create social-enrich run: ${error.message}`);
   return data as Run;
 }
 
@@ -184,6 +224,7 @@ export async function createScoringRun(params: {
         dry_run: dryRun,
       },
       status: "running",
+      kind: "scoring",
     })
     .select()
     .single();

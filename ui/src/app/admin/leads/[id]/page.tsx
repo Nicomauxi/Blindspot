@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import {
@@ -11,8 +11,12 @@ import {
   generateOffer,
   getLead,
   getOwnerGroup,
+  getSocialHistory,
+  updateFavoriteContacts,
+  searchLeadsByName,
   listOutreach,
   type LeadAssistantBrief,
+  type SocialHistoryPlatform,
   type LeadDetail,
   type LeadFieldSource,
   type OfferPackage,
@@ -20,11 +24,18 @@ import {
   type OwnerGroupMember,
 } from "@/lib/api";
 import { useAuthStore } from "@/lib/auth-store";
+import { contactReadyCopy } from "@/lib/contact-ready";
 import { cn, formatRelative } from "@/lib/utils";
 import { AdminPageLayout, EmptyPanel, HelpTip, SectionCard, StatCard } from "@/components/admin-shell";
 import { CollapsibleSection } from "@/components/collapsible-section";
 import { CommercialSummary } from "@/components/lead/commercial-summary";
-import { ContactBlock, type ContactPoint } from "@/components/lead/contact-block";
+import {
+  ContactBlock,
+  type ContactPoint,
+  type ContactSocialActivity,
+  type ContactLiveness,
+  type FeedbackPayload,
+} from "@/components/lead/contact-block";
 
 const TIER_COLORS: Record<string, string> = {
   A: "bg-emerald-100 text-emerald-800",
@@ -51,6 +62,92 @@ const CHANNEL_LABELS: Record<string, string> = {
 };
 
 type ContactPointKind = ContactPoint["kind"];
+
+function Sparkline({ values }: { values: number[] }) {
+  if (values.length < 2) return null;
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const range = max - min || 1;
+  const w = 160;
+  const h = 36;
+  const step = w / (values.length - 1);
+  const points = values
+    .map((v, i) => `${(i * step).toFixed(1)},${(h - ((v - min) / range) * h).toFixed(1)}`)
+    .join(" ");
+  return (
+    <svg width={w} height={h} className="overflow-visible">
+      <polyline points={points} fill="none" stroke="#0ea5e9" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function SocialGrowthChart({ leadId }: { leadId: string }) {
+  const token = useAuthStore((s) => s.token);
+  const [platforms, setPlatforms] = useState<Record<string, SocialHistoryPlatform> | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!token) return;
+    let active = true;
+    getSocialHistory(token, leadId)
+      .then((res) => {
+        if (active) setPlatforms(res.data.platforms);
+      })
+      .catch(() => {
+        if (active) setPlatforms({});
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [token, leadId]);
+
+  if (loading) return null;
+  const entries = Object.entries(platforms ?? {});
+  const withSeries = entries.filter(([, p]) => p.point_count > 0);
+
+  if (withSeries.length === 0) {
+    return (
+      <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500">
+        📈 Crecimiento de seguidores: empezamos a medir. La gráfica aparece tras la próxima medición.
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-2">
+      <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Crecimiento de seguidores</div>
+      {withSeries.map(([platform, p]) => {
+        const followers = p.series.map((s) => s.followers).filter((v): v is number => v != null);
+        const growth = p.followers_growth_30d;
+        return (
+          <div key={platform} className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2">
+            <div className="flex flex-col">
+              <span className="text-xs font-medium capitalize text-slate-700">{platform}</span>
+              {growth ? (
+                <span className={cn("text-xs font-semibold", growth.abs >= 0 ? "text-emerald-600" : "text-rose-600")}>
+                  {growth.abs >= 0 ? "+" : ""}{growth.abs.toLocaleString("es-UY")}
+                  {growth.pct != null ? ` (${growth.pct >= 0 ? "+" : ""}${growth.pct}%)` : ""} en ~30d
+                </span>
+              ) : p.point_count < 2 ? (
+                <span className="text-xs text-slate-400">1 medición — sin tendencia aún</span>
+              ) : (
+                <span className="text-xs text-slate-400">sin datos de ventana</span>
+              )}
+              {p.posts_per_month != null ? (
+                <span className="text-[11px] text-slate-500">{p.posts_per_month} posts/mes</span>
+              ) : null}
+              {p.churn_risk ? <span className="text-[11px] font-semibold text-amber-600">⚠ Riesgo de abandono</span> : null}
+            </div>
+            <Sparkline values={followers} />
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 function formatSectionError(error: unknown, fallbackMessage: string) {
   if (error instanceof ApiError) {
@@ -106,6 +203,14 @@ export default function LeadDetailPage() {
 
   useEffect(() => {
     if (!token || !id || !lead) return;
+    // N66: cm pre-tracking → el endpoint 403ea siempre; la UI ya sabe que el lead
+    // está redactado y se ahorra la llamada garantizada e inútil.
+    const redacted = lead.phone === "***" || lead.email === "***" || lead.whatsapp === "***";
+    if (redacted) {
+      setAssistant(null);
+      setAssistantError(null);
+      return;
+    }
     setAssistantLoading(true);
     setAssistantError(null);
     generateLeadBrief(token, id)
@@ -143,15 +248,49 @@ export default function LeadDetailPage() {
 
   const contactPoints = useMemo(() => buildContactPoints(lead), [lead]);
 
-  async function handleContactFeedback(fieldKey: string, value: string, verdict: "good" | "bad", comment?: string) {
+  async function handleContactFeedback(payload: FeedbackPayload) {
     if (!token || !lead) return;
     await createLeadFeedback(token, lead.id, {
-      field_key: fieldKey,
-      field_value: value,
-      verdict,
-      comment: comment?.trim() || undefined,
+      field_key: payload.fieldKey,
+      field_value: payload.value,
+      verdict: payload.verdict,
+      comment: payload.comment?.trim() || undefined,
+      rejection_reason: payload.rejectionReason,
+      reassign_to_lead_id: payload.reassignToLeadId,
     });
   }
+
+  async function handleToggleFavorite(point: ContactPoint, next: boolean) {
+    if (!token || !lead) return;
+    const current = contactPoints.filter((p) => p.favorite).map((p) => ({ kind: p.kind, value: p.value }));
+    const key = (k: string, v: string) => `${k}::${v.trim().toLowerCase()}`;
+    const nextFavorites = next
+      ? [...current, { kind: point.kind, value: point.value }]
+      : current.filter((f) => key(f.kind, f.value) !== key(point.kind, point.value));
+    // Dedup
+    const seen = new Set<string>();
+    const deduped = nextFavorites.filter((f) => {
+      const k = key(f.kind, f.value);
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    });
+    try {
+      await updateFavoriteContacts(token, lead.id, deduped);
+      const refreshed = await getLead(token, lead.id);
+      setLead(refreshed.data);
+    } catch (err) {
+      setError(formatSectionError(err, "No se pudo actualizar el favorito."));
+    }
+  }
+
+  const handleSearchLeads = useCallback(
+    async (query: string) => {
+      if (!token) return [];
+      return searchLeadsByName(token, query);
+    },
+    [token]
+  );
 
   async function handleGenerateOffer() {
     if (!token || !lead) return;
@@ -224,7 +363,15 @@ export default function LeadDetailPage() {
   if (error) return <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</div>;
   if (!lead) return null;
 
-  const recommendedChannelLabel = CHANNEL_LABELS[assistant?.recommended_channel ?? ""] ?? CHANNEL_LABELS[offerChannel] ?? "Canal no definido";
+  // N68: sin brief del asistente (cm pre-tracking → 403), el canal se deriva del
+  // primer contacto VIVO del lead — el fallback al selector de mensajes decía
+  // 'WhatsApp' para miles de leads sin WhatsApp.
+  const hasValue = (value: string | null | undefined) => Boolean(value && value !== "***");
+  const derivedChannel = hasValue(lead.whatsapp) ? "whatsapp" : hasValue(lead.phone) ? "phone" : hasValue(lead.email) ? "email" : null;
+  const recommendedChannelLabel =
+    CHANNEL_LABELS[assistant?.recommended_channel ?? ""] ??
+    (derivedChannel ? CHANNEL_LABELS[derivedChannel] : undefined) ??
+    "Canal no definido";
 
   return (
     <AdminPageLayout
@@ -251,7 +398,7 @@ export default function LeadDetailPage() {
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
         <StatCard label="Prospect score" value={lead.prospect_score ?? "—"} hint="Prioridad comercial relativa" tone="good" />
         <StatCard label="Oferta sugerida" value={lead.primary_offer ?? "—"} hint={lead.pitch_hook ?? "Sin pitch hook sugerido"} tone="info" />
-        <StatCard label="Canal recomendado" value={recommendedChannelLabel} hint={lead.contact_ready ? "Listo para primer toque" : "Conviene validar antes de salir"} />
+        <StatCard label="Canal recomendado" value={recommendedChannelLabel} hint={contactReadyCopy(lead.contact_ready).hint} />
         <StatCard label="Fuentes disponibles" value={lead.sources_count ?? lead.corroborating_sources.length ?? 0} hint={lead.canonical_source ? `Fuente principal: ${lead.canonical_source}` : "Sin canonical_source"} />
         <StatCard label="Tier / Estado" value={`${lead.contact_tier ?? "—"} · ${lead.state}`} hint={lead.business_status ?? "Sin estado comercial"} />
       </div>
@@ -360,7 +507,7 @@ export default function LeadDetailPage() {
                 <span className={cn("rounded-full px-2.5 py-1 font-semibold", lead.contact_tier ? TIER_COLORS[lead.contact_tier] ?? "bg-slate-700 text-white" : "bg-slate-800 text-slate-200")}>Tier {lead.contact_tier ?? "—"}</span>
                 <span className="rounded-full bg-white/10 px-2.5 py-1">{lead.state}</span>
                 {lead.business_status ? <span className="rounded-full bg-white/10 px-2.5 py-1">{lead.business_status}</span> : null}
-                {lead.contact_ready != null ? <span className="rounded-full bg-white/10 px-2.5 py-1">{lead.contact_ready ? "Contacto listo" : "Validar contacto"}</span> : null}
+                <span className="rounded-full bg-white/10 px-2.5 py-1">{contactReadyCopy(lead.contact_ready).pill}</span>
               </div>
               {lead.tags.length > 0 ? (
                 <div className="mt-3 flex flex-wrap gap-2">
@@ -374,9 +521,15 @@ export default function LeadDetailPage() {
         </div>
       </SectionCard>
 
-      {/* 3. Contacto y datos — full width */}
-      <SectionCard title="Contacto y datos listos para vender" description="Filtrá por tipo, fuente y fiabilidad para priorizar el primer toque.">
-        <ContactBlock points={contactPoints} onFeedback={handleContactFeedback} />
+      {/* 3. Contactos y Redes — master-detail con actividad social integrada */}
+      <SectionCard title="Contactos y Redes" description="Elegí un contacto o red para ver su desglose, actividad y acciones.">
+        <ContactBlock
+          points={contactPoints}
+          leadId={lead.id}
+          onFeedback={handleContactFeedback}
+          onToggleFavorite={handleToggleFavorite}
+          onSearchLeads={handleSearchLeads}
+        />
         <div className="mt-6 grid gap-4 lg:grid-cols-2">
           <div>
             <div className="mb-3 text-xs font-semibold uppercase tracking-[0.15em] text-slate-500">Datos de contacto</div>
@@ -398,7 +551,11 @@ export default function LeadDetailPage() {
             </div>
           </div>
         </div>
+        <div className="mt-6">
+          <SocialGrowthChart leadId={lead.id} />
+        </div>
       </SectionCard>
+
 
       {/* 4. Historial de seguimiento (si existe) */}
       {outreach.length > 0 ? (
@@ -802,6 +959,29 @@ function buildContactPoints(lead: LeadDetail | null): ContactPoint[] {
   }
 
   buckets.forEach((bucket) => visit(bucket.root, [], bucket.source, null));
+
+  // Enriquecer con favorito, liveness y actividad social (datos ya persistidos).
+  const fp = (lead.digital_footprint ?? {}) as {
+    social_activity?: { profiles?: Record<string, ContactSocialActivity> };
+    heuristic_discovery?: { selected?: Record<string, { liveness?: ContactLiveness } | null> };
+  };
+  const socialProfiles = fp.social_activity?.profiles ?? {};
+  const selected = fp.heuristic_discovery?.selected ?? {};
+  const favorites = ((lead as { favorite_contacts?: Array<{ kind: string; value: string }> }).favorite_contacts ?? []);
+  const isFav = (p: ContactPoint): boolean =>
+    favorites.some((f) => f.kind === p.kind && f.value.trim().toLowerCase() === p.value.trim().toLowerCase());
+
+  for (const point of points) {
+    point.favorite = isFav(point);
+    if (point.kind === "instagram" || point.kind === "facebook") {
+      const liveness = selected[point.kind]?.liveness ?? null;
+      if (liveness) point.liveness = liveness;
+      // No mostrar métricas de actividad de una red muerta (sería contradictorio con el
+      // badge "No disponible"); la actividad solo aplica a redes vivas.
+      const profile = socialProfiles[point.kind];
+      if (profile && liveness?.state !== "dead") point.activity = profile;
+    }
+  }
 
   const order: ContactPointKind[] = ["whatsapp", "phone", "email", "instagram", "facebook", "website", "address"];
   return points.sort((left, right) => order.indexOf(left.kind) - order.indexOf(right.kind) || left.value.localeCompare(right.value));

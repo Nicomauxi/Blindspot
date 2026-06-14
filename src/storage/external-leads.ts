@@ -1,17 +1,16 @@
 import { getSupabase } from "../shared/supabase.js";
 import type { CorroboratingSource, DiscoveryCandidate, Lead } from "../shared/types.js";
 import { calculateContactReliability, calculateDataConfidence } from "../modules/scoring/confidence.js";
+import { isValidCoord } from "../modules/discovery/geo-text.js";
+import { isForeignAddress } from "../modules/discovery/geo-validator.js";
+import { candidateHasContact, leadHasContact, qualifyExternalLead } from "../modules/discovery/qualification.js";
+import { isPersonaFisicaRejection, personaFisicaRedaction } from "../modules/discovery/persona-fisica.js";
+import { classifyVertical, verticalTag } from "../modules/discovery/vertical.js";
+import { mergeCanonicalFields } from "./canonical-field.js";
 
 interface InsertExternalLeadOpts {
   dryRun?: boolean;
   extraTags?: string[];
-}
-
-interface CanonicalFieldValue {
-  value: string;
-  confidence: number;
-  sources: string[];
-  conflict: boolean;
 }
 
 export async function insertExternalLead(
@@ -22,6 +21,46 @@ export async function insertExternalLead(
 
   const db = getSupabase();
   const placeId = `${candidate.source}:${candidate.external_id}`;
+
+  // Vertical de negocio (solo DEI trae CIIU): segmenta industrial/otro fuera del pool
+  // comercial y se taguea para el scoring/tier. F1.4.
+  const vertical =
+    candidate.source === "miem_dei"
+      ? classifyVertical(String(candidate.raw["Codigo CIIU principal"] ?? ""))
+      : undefined;
+
+  // Gate de calidad: un lead externo nuevo (aún sin corroborar) solo es "visible" si
+  // tiene contacto accionable y no es una fuente-señal standalone.
+  const qualification = qualifyExternalLead({
+    source: candidate.source,
+    name: candidate.name,
+    hasContact: candidateHasContact(candidate),
+    corroborated: false,
+    foreign: isForeignAddress(candidate.address),
+    ...(vertical ? { vertical } : {}),
+  });
+
+  // N20: espejo rejected:* en tags para rechazados — mismo contrato que el path google
+  // (upsertLeads), que las vistas/queries operativas asumen.
+  const tags = [
+    ...(opts.extraTags ?? []),
+    ...(vertical ? [verticalTag(vertical)] : []),
+    ...(qualification.passed_filter ? [] : qualification.rejection_reasons.map((r) => `rejected:${r}`)),
+  ];
+
+  // N16: el dedup intra-fuente excluye leads de la misma fuente del match, así que en
+  // re-runs TODO candidato re-fetcheado cae acá sobre su propia fila. El upsert ciego
+  // pisaba tags/state/passed_filter/niche de leads ya deduplicados/enriquecidos.
+  const { data: existingRow, error: existingError } = await db
+    .from("leads")
+    .select("*")
+    .eq("place_id", placeId)
+    .maybeSingle();
+  if (existingError) throw new Error(`insertExternalLead lookup failed: ${existingError.message}`);
+
+  if (existingRow) {
+    return updateExistingExternalLead(existingRow as Lead, candidate, vertical);
+  }
 
   const { data, error } = await db
     .from("leads")
@@ -38,9 +77,16 @@ export async function insertExternalLead(
         website: candidate.website,
         niche: candidate.niche ?? "other",
         state: "discovered",
-        passed_filter: true,
-        rejection_reasons: [],
-        tags: opts.extraTags ?? [],
+        passed_filter: qualification.passed_filter,
+        rejection_reasons: qualification.rejection_reasons,
+        tags,
+        ...(candidate.latitude != null &&
+        candidate.longitude != null &&
+        isValidCoord(candidate.latitude, candidate.longitude)
+          ? { gps: `SRID=4326;POINT(${candidate.longitude} ${candidate.latitude})` }
+          : {}),
+        // Ley 18.331: persona física → minimizar (los nulls de la redacción ganan sobre los PII de arriba).
+        ...(isPersonaFisicaRejection(qualification.rejection_reasons) ? personaFisicaRedaction() : {}),
       },
       { onConflict: "place_id", ignoreDuplicates: false }
     )
@@ -50,160 +96,92 @@ export async function insertExternalLead(
   if (error) throw new Error(`insertExternalLead failed: ${error.message}`);
   const lead = data as Lead;
 
-  if (candidate.email) {
+  // No persistir email de una persona física (dato personal minimizado).
+  if (candidate.email && !isPersonaFisicaRejection(qualification.rejection_reasons)) {
     const existing = (lead.canonical_fields ?? {}) as Record<string, unknown>;
-    await db
+    // N33: shape contractual {value, confidence, sources, conflict} — el string plano
+    // dejaba el email invisible para lead_dashboard/KPIs (->>'value' devuelve NULL).
+    const { error: emailError } = await db
       .from("leads")
-      .update({ canonical_fields: { ...existing, email: candidate.email } })
+      .update({
+        canonical_fields: {
+          ...existing,
+          email: {
+            value: candidate.email,
+            confidence: candidate.source_confidence,
+            sources: [candidate.source],
+            conflict: false,
+          },
+        },
+      })
       .eq("id", lead.id);
+    if (emailError) {
+      throw new Error(`insertExternalLead email persist failed: ${emailError.message}`);
+    }
   }
 
   return lead;
 }
 
-function round2(value: number): number {
-  return Math.round((value + Number.EPSILON) * 100) / 100;
-}
+// Razones de higiene que NUNCA se rescatan automáticamente (las puso un proceso de
+// dedup/limpieza, no la calificación de contacto).
+const NON_RESCUABLE_REASONS = new Set(["duplicate-secondary", "placeholder-name", "persona-fisica"]);
 
-function canonicalFieldEntry(value: unknown): CanonicalFieldValue | null {
-  if (typeof value === "string") {
-    return {
-      value,
-      confidence: 0.5,
-      sources: [],
-      conflict: false,
-    };
-  }
-
-  if (
-    value &&
-    typeof value === "object" &&
-    "value" in value &&
-    typeof value.value === "string"
-  ) {
-    const field = value as {
-      value: string;
-      confidence?: number;
-      sources?: unknown[];
-      conflict?: boolean;
-    };
-    const sources = Array.isArray(field.sources)
-      ? field.sources.filter((source): source is string => typeof source === "string")
-      : [];
-
-    return {
-      value: field.value,
-      confidence: typeof field.confidence === "number" ? field.confidence : 0.5,
-      sources,
-      conflict: field.conflict === true,
-    };
-  }
-
-  return null;
-}
-
-function normalizeComparableValue(field: "phone" | "website" | "email", value: string): string {
-  const trimmed = value.trim();
-  if (field === "phone") return trimmed.replace(/\D/g, "");
-
-  if (field === "website") {
-    try {
-      const url = new URL(trimmed);
-      url.hash = "";
-      url.search = "";
-      url.hostname = url.hostname.toLowerCase().replace(/^www\./, "");
-      url.pathname = url.pathname.replace(/\/+$/, "");
-      return url.toString().replace(/\/$/, "");
-    } catch {
-      return trimmed.toLowerCase().replace(/\/+$/, "");
-    }
-  }
-
-  return trimmed.toLowerCase();
-}
-
-function buildCanonicalField(
-  lead: Lead,
-  field: "phone" | "website" | "email",
+// N16: re-descubrimiento de la misma fuente → refrescar SOLO los datos crudos del
+// provider (source_data, name, address, phone, website, gps faltante), preservando
+// tags/state/niche/dedup. N17: única excepción — rescue one-way de passed_filter
+// false→true si el lead ahora corrobora/tiene contacto y su rechazo era rescatable.
+async function updateExistingExternalLead(
+  existing: Lead,
   candidate: DiscoveryCandidate,
-  candidateValue: string | null
-): CanonicalFieldValue | null {
-  const existingField = canonicalFieldEntry(lead.canonical_fields?.[field]);
-  const existingValue =
-    existingField?.value ??
-    (field === "phone" ? lead.phone : field === "website" ? lead.website : null);
+  vertical: ReturnType<typeof classifyVertical> | undefined
+): Promise<Lead> {
+  const db = getSupabase();
 
-  if (!existingValue && !candidateValue) return null;
-  if (!existingValue && candidateValue) {
-    return {
-      value: candidateValue,
-      confidence: round2(Math.min(0.95, candidate.source_confidence)),
-      sources: [candidate.source],
-      conflict: false,
-    };
+  // Ley 18.331: un lead ya marcado persona física no se reprocesa (no re-escribir datos personales).
+  if (isPersonaFisicaRejection(existing.rejection_reasons)) {
+    return existing;
   }
 
-  if (!candidateValue && existingField) return existingField;
-  if (!candidateValue && existingValue) {
-    return {
-      value: existingValue,
-      confidence: round2(Math.min(0.95, lead.source_confidence ?? 0.5)),
-      sources: existingField?.sources.length ? existingField.sources : [lead.source],
-      conflict: existingField?.conflict ?? false,
-    };
-  }
+  const corroborated = (existing.corroborating_sources ?? []).length > 0;
+  const qualification = qualifyExternalLead({
+    source: candidate.source,
+    name: candidate.name ?? existing.name,
+    hasContact: candidateHasContact(candidate) || leadHasContact(existing),
+    corroborated,
+    foreign: isForeignAddress(candidate.address ?? existing.address),
+    ...(vertical ? { vertical } : {}),
+  });
 
-  const safeExistingValue = existingValue ?? "";
-  const safeCandidateValue = candidateValue ?? "";
-  const sameValue = normalizeComparableValue(field, safeExistingValue) ===
-    normalizeComparableValue(field, safeCandidateValue);
+  const reasons = existing.rejection_reasons ?? [];
+  const canRescue =
+    existing.passed_filter === false &&
+    qualification.passed_filter &&
+    !reasons.some((reason) => NON_RESCUABLE_REASONS.has(reason));
 
-  if (sameValue) {
-    const sources = Array.from(new Set([
-      ...(existingField?.sources.length ? existingField.sources : [lead.source]),
-      candidate.source,
-    ]));
-
-    return {
-      value: safeExistingValue,
-      confidence: round2(Math.min(0.95, (lead.source_confidence ?? 0.5) + ((sources.length - 1) * 0.15))),
-      sources,
-      conflict: false,
-    };
-  }
-
-  const existingConfidence = existingField?.confidence ?? (lead.source_confidence ?? 0.5);
-  const useCandidate = candidate.source_confidence > existingConfidence;
-  const winnerValue = useCandidate ? safeCandidateValue : safeExistingValue;
-  const winnerSources = useCandidate
-    ? [candidate.source]
-    : (existingField?.sources.length ? existingField.sources : [lead.source]);
-
-  return {
-    value: winnerValue,
-    confidence: round2(Math.min(0.95, Math.max(existingConfidence, candidate.source_confidence))),
-    sources: Array.from(new Set(winnerSources)),
-    conflict: true,
-  };
-}
-
-function mergeCanonicalFields(
-  lead: Lead,
-  candidate: DiscoveryCandidate
-): Record<string, unknown> | null {
-  const nextFields: Record<string, unknown> = {
-    ...((lead.canonical_fields ?? {}) as Record<string, unknown>),
+  const payload: Record<string, unknown> = {
+    source_data: candidate.raw,
+    name: candidate.name,
+    address: candidate.address ?? existing.address,
+    phone: candidate.phone ?? existing.phone,
+    website: candidate.website ?? existing.website,
+    ...(existing.gps == null &&
+    candidate.latitude != null &&
+    candidate.longitude != null &&
+    isValidCoord(candidate.latitude, candidate.longitude)
+      ? { gps: `SRID=4326;POINT(${candidate.longitude} ${candidate.latitude})` }
+      : {}),
+    ...(canRescue ? { passed_filter: true, rejection_reasons: [] } : {}),
   };
 
-  const phone = buildCanonicalField(lead, "phone", candidate, candidate.phone);
-  const website = buildCanonicalField(lead, "website", candidate, candidate.website);
-  const email = buildCanonicalField(lead, "email", candidate, candidate.email);
-
-  if (phone) nextFields.phone = phone;
-  if (website) nextFields.website = website;
-  if (email) nextFields.email = email;
-
-  return Object.keys(nextFields).length > 0 ? nextFields : null;
+  const { data, error } = await db
+    .from("leads")
+    .update(payload)
+    .eq("id", existing.id)
+    .select()
+    .single();
+  if (error) throw new Error(`insertExternalLead refresh failed: ${error.message}`);
+  return data as Lead;
 }
 
 export async function addCorroboratingSource(
@@ -225,6 +203,10 @@ export async function addCorroboratingSource(
   if (fetchError) throw new Error(`addCorroboratingSource lead fetch failed: ${fetchError.message}`);
 
   const lead = leadRow as Lead;
+  // Ley 18.331: no enriquecer/escribir datos sobre un lead marcado persona física.
+  if (isPersonaFisicaRejection(lead.rejection_reasons) || lead.is_natural_person === true) {
+    return lead;
+  }
   const existing: CorroboratingSource[] = lead.corroborating_sources ?? [];
   if (existing.some((source) => source.source === candidate.source)) return lead;
 
@@ -259,5 +241,48 @@ export async function addCorroboratingSource(
     .single();
 
   if (updateError) throw new Error(`addCorroboratingSource update failed: ${updateError.message}`);
-  return data as Lead;
+
+  // GPS backfill: si el lead primario no tenía coordenadas y la fuente corroborante
+  // sí las trae, completamos el gps (la mejor señal para futuros cruces).
+  // Se chequea contra el lead ya leído (primaryLead), no contra la respuesta del RPC,
+  // para no pisar un gps existente si el RPC no devuelve la columna.
+  let mergedResult = data as Lead;
+
+  // N17: passed_filter era write-once — un rejected 'no-contact' que ahora ESTÁ
+  // corroborado y tiene contacto mergeado en canonical_fields quedaba fuera del pool
+  // para siempre (caso real: 'Soho' con email+phone+web de 2 fuentes). Rescue one-way:
+  // nunca degrada, y nunca toca rechazos de higiene (duplicate-secondary, etc.).
+  const rescueReasons = lead.rejection_reasons ?? [];
+  if (
+    lead.passed_filter === false &&
+    !rescueReasons.some((reason) => NON_RESCUABLE_REASONS.has(reason)) &&
+    qualifyExternalLead({
+      source: candidate.source,
+      name: mergedLead.name ?? candidate.name,
+      hasContact: leadHasContact({ ...mergedLead, ...mergedResult }) || candidateHasContact(candidate),
+      corroborated: true,
+      foreign: isForeignAddress(lead.address ?? candidate.address),
+    }).passed_filter
+  ) {
+    const { error: rescueError } = await db
+      .from("leads")
+      .update({ passed_filter: true, rejection_reasons: [] })
+      .eq("id", leadId);
+    if (rescueError) throw new Error(`addCorroboratingSource rescue failed: ${rescueError.message}`);
+    mergedResult = { ...mergedResult, passed_filter: true, rejection_reasons: [] };
+  }
+
+  if (
+    lead.gps == null &&
+    candidate.latitude != null &&
+    candidate.longitude != null &&
+    isValidCoord(candidate.latitude, candidate.longitude)
+  ) {
+    const gps = `SRID=4326;POINT(${candidate.longitude} ${candidate.latitude})`;
+    const { error: gpsError } = await db.from("leads").update({ gps }).eq("id", leadId);
+    if (gpsError) throw new Error(`addCorroboratingSource gps backfill failed: ${gpsError.message}`);
+    return { ...mergedResult, gps };
+  }
+
+  return mergedResult;
 }

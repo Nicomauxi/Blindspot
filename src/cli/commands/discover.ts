@@ -8,7 +8,7 @@ import { enrichWithDetails } from "../../modules/discovery/google-data-enricher.
 import { applyProfileFilter, normalizeNiche, tagCandidate } from "../../modules/discovery/filters.js";
 import { getDiscoveryConfig, getProfileConfig } from "../../modules/discovery/config.js";
 import { createRun, completeRun, failRun } from "../../storage/runs.js";
-import { incrementGooglePlacesBudgetSpent } from "../../storage/pipeline-config.js";
+import { getGooglePlacesBudgetStatus, incrementGooglePlacesBudgetSpent } from "../../storage/pipeline-config.js";
 import { upsertLeads, loadAllLeads } from "../../storage/leads.js";
 import { rebuildVocabularyForNiche } from "../../storage/vocabulary.js";
 import { loadAllRuntime } from "../../storage/system-lists.js";
@@ -17,8 +17,11 @@ import type { PlaceCandidate, ProfileConfig, RejectionReason } from "../../share
 import type { RuntimeMappings } from "../../storage/system-lists.js";
 
 // Approximate pricing per request used in trace cost estimate
-const TEXT_SEARCH_COST_PER_REQUEST = 0.035;
-const DETAILS_COST_PER_REQUEST = 0.025;
+import {
+  TEXT_SEARCH_COST_PER_REQUEST,
+  DETAILS_COST_PER_REQUEST,
+  gpBudgetGate,
+} from "../../shared/google-places-costs.js";
 
 const DiscoverArgsSchema = z.object({
   niche: z.string().min(1, "niche cannot be empty"),
@@ -130,6 +133,24 @@ export async function discoverCommand(rawArgs: {
   const discoveryConfig = getDiscoveryConfig();
   const rawOverrides = parseOverrides(opts.overrides);
   const profileConfig = getProfileConfig(opts.profile, rawOverrides);
+
+  // N74: el CLI discover gastaba Google Places SIN gate de presupuesto (el gate solo
+  // existía en el path de la cola). Mismo contrato: si el costo proyectado no entra en
+  // el remaining, no se arranca.
+  try {
+    const budget = await getGooglePlacesBudgetStatus();
+    const gate = gpBudgetGate(budget, opts.maxResults);
+    if (!gate.allowed) {
+      log.error(
+        { projected_usd: gate.projected_usd, remaining_usd: budget?.budget_remaining ?? null },
+        "Google Places budget gate: presupuesto insuficiente — no se ejecuta discovery"
+      );
+      process.exit(1);
+    }
+  } catch (err) {
+    log.error({ err }, "No se pudo leer el presupuesto GP — no se ejecuta discovery (fail-closed)");
+    process.exit(1);
+  }
 
   const run = await createRun({
     niche: opts.niche,
@@ -319,8 +340,13 @@ export async function discoverCommand(rawArgs: {
       leads_rejected: rejected.length,
       duration_ms,
     });
-    // Best-effort: increment budget tracker (non-blocking)
-    incrementGooglePlacesBudgetSpent(runCostUsd).catch(() => undefined);
+    // N74: el registro del gasto es parte del contrato de presupuesto — awaiteado y
+    // con error visible (antes era fire-and-forget con catch vacío).
+    try {
+      await incrementGooglePlacesBudgetSpent(runCostUsd);
+    } catch (err) {
+      log.error({ err, runId: run.id, cost_usd: runCostUsd }, "No se pudo registrar el gasto GP (usar gp-budget/backfill)");
+    }
 
     // 8. Best-effort vocabulary rebuild using ALL leads for the niche (GAP 3).
     //    Uses loadAllLeads so frequencies are computed from the full corpus,

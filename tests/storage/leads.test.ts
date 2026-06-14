@@ -1,8 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  buildDuplicateTagUpdates,
   detectDuplicates,
   listLeads,
   mergeFootprint,
+  propagateChainWebsites,
   updateLeadEnrichment,
   upsertLeads,
 } from "../../src/storage/leads.js";
@@ -258,6 +260,104 @@ describe("detectDuplicates", () => {
     const group = [...detectDuplicates([a, b]).values()][0];
 
     expect(group?.[0]?.id).toBe("b");
+  });
+});
+
+describe("buildDuplicateTagUpdates (F5.1)", () => {
+  it("saca al secundario del pool: passed_filter=false + rejection reason", () => {
+    const a = lead({
+      id: "a",
+      prospect_score: 90,
+      digital_footprint: footprintWithIdentity("https://negocio.uy"),
+    });
+    const b = lead({
+      id: "b",
+      prospect_score: 10,
+      digital_footprint: footprintWithIdentity("https://negocio.uy"),
+    });
+
+    const updates = buildDuplicateTagUpdates(detectDuplicates([a, b]));
+    const primary = updates.find((u) => u.id === "a");
+    const secondary = updates.find((u) => u.id === "b");
+
+    expect(primary?.tags).toContain("possible-duplicate");
+    expect(primary?.passed_filter).toBeUndefined();
+
+    expect(secondary?.tags).toContain("duplicate-secondary");
+    expect(secondary?.passed_filter).toBe(false);
+    expect(secondary?.rejection_reasons).toContain("duplicate-secondary");
+  });
+
+  it("al PRIMARIO se le limpia un duplicate-secondary viejo (era secundario, hoy gana)", () => {
+    const a = lead({
+      id: "a",
+      prospect_score: 90,
+      tags: ["possible-duplicate", "duplicate-secondary"], // tag arrastrado de un run viejo
+      digital_footprint: footprintWithIdentity("https://negocio.uy"),
+    });
+    const b = lead({
+      id: "b",
+      prospect_score: 10,
+      digital_footprint: footprintWithIdentity("https://negocio.uy"),
+    });
+
+    const updates = buildDuplicateTagUpdates(detectDuplicates([a, b]));
+    const primary = updates.find((u) => u.id === "a");
+
+    expect(primary?.tags).not.toContain("duplicate-secondary");
+    expect(primary?.tags).toContain("possible-duplicate");
+  });
+
+  it("no duplica la razón si el secundario ya la tenía", () => {
+    const a = lead({
+      id: "a",
+      prospect_score: 90,
+      digital_footprint: footprintWithIdentity("https://negocio.uy"),
+    });
+    const b = lead({
+      id: "b",
+      prospect_score: 10,
+      rejection_reasons: ["duplicate-secondary"],
+      digital_footprint: footprintWithIdentity("https://negocio.uy"),
+    });
+
+    const updates = buildDuplicateTagUpdates(detectDuplicates([a, b]));
+    const secondary = updates.find((u) => u.id === "b");
+
+    expect(secondary?.rejection_reasons).toEqual(["duplicate-secondary"]);
+  });
+});
+
+describe("propagateChainWebsites", () => {
+  it("persiste el dominio dominante en las fichas del mismo negocio sin web", async () => {
+    const updates: Array<{ id: string; website: string }> = [];
+    supabaseRef.current = {
+      from: () => ({
+        update: (patch: { website: string }) => ({
+          eq: (_col: string, id: string) => {
+            updates.push({ id, website: patch.website });
+            return Promise.resolve({ error: null });
+          },
+        }),
+      }),
+    };
+    const leads = [
+      { id: "1", name: "Tienda Inglesa", website: "https://www.tiendainglesa.com.uy/" },
+      { id: "2", name: "Tienda Inglesa", website: "http://www.tiendainglesa.com.uy/" },
+      { id: "3", name: "Tienda Inglesa", website: null },
+      { id: "9", name: "La Pasiva", website: "https://instagram.com/lapasiva" }, // social → no propaga
+      { id: "10", name: "La Pasiva", website: null },
+    ] as unknown as Lead[];
+
+    const applied = await propagateChainWebsites(leads);
+    expect(applied).toBe(1);
+    expect(updates).toEqual([{ id: "3", website: "https://www.tiendainglesa.com.uy/" }]);
+  });
+
+  it("no hace nada si no hay propagaciones", async () => {
+    supabaseRef.current = { from: () => { throw new Error("no debería llamar a la DB"); } };
+    const applied = await propagateChainWebsites([{ id: "1", name: "Solo", website: null } as unknown as Lead]);
+    expect(applied).toBe(0);
   });
 });
 

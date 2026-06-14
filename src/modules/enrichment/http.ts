@@ -2,9 +2,39 @@ import { fetch } from "undici";
 import pRetry from "p-retry";
 import { getLogger } from "../../shared/logger.js";
 
-export const USER_AGENT = "blindspot/1.0";
-export const FETCH_TIMEOUT_MS = 8_000;
+import { BOT_USER_AGENT } from "../../shared/user-agents.js";
+export const USER_AGENT = BOT_USER_AGENT;
 export const MAX_BODY_BYTES = 2 * 1024 * 1024;
+
+// Knobs de velocidad leídos del env POR LLAMADA (no const fija al arranque): la API
+// los settea desde pipeline_config (Variables) al lanzar jobs, sin reiniciar el proceso.
+const DEFAULT_FETCH_TIMEOUT_MS = 8000;
+const DEFAULT_FETCH_RETRIES = 2;
+
+export function getFetchTimeoutMs(): number {
+  const raw = process.env["FETCH_TIMEOUT_MS"];
+  if (raw === undefined || raw.trim() === "") return DEFAULT_FETCH_TIMEOUT_MS;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : DEFAULT_FETCH_TIMEOUT_MS;
+}
+
+export function getFetchRetries(): number {
+  const raw = process.env["FETCH_RETRIES"];
+  if (raw === undefined || raw.trim() === "") return DEFAULT_FETCH_RETRIES;
+  const n = Number(raw);
+  return Number.isInteger(n) && n >= 0 ? n : DEFAULT_FETCH_RETRIES;
+}
+
+const SCHEME_RE = /^https?:\/\//i;
+
+/**
+ * Garantiza que la URL tenga esquema antes de pasarla a fetch() (undici lanza ante
+ * URLs sin esquema como "www.foo.com"). Por defecto asume https. F1.2.
+ * NO confundir con normalizeDomain de whois.ts, que QUITA el esquema.
+ */
+export function ensureScheme(url: string): string {
+  return SCHEME_RE.test(url) ? url : `https://${url}`;
+}
 
 export interface FetchHtmlResult {
   status: number | null;
@@ -60,7 +90,7 @@ async function attemptFetch(url: string): Promise<FetchHtmlResult> {
   const response = await fetch(url, {
     method: "GET",
     redirect: "follow",
-    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    signal: AbortSignal.timeout(getFetchTimeoutMs()),
     headers: {
       "User-Agent": USER_AGENT,
       Accept: "text/html,application/xhtml+xml,*/*;q=0.5",
@@ -107,11 +137,11 @@ async function attemptFetch(url: string): Promise<FetchHtmlResult> {
   }
 }
 
-export async function fetchHtml(url: string): Promise<FetchHtmlResult> {
+async function fetchWithRetries(url: string): Promise<FetchHtmlResult> {
   const log = getLogger();
   try {
     return await pRetry(() => attemptFetch(url), {
-      retries: 2,
+      retries: getFetchRetries(),
       factor: 2,
       minTimeout: 500,
       onFailedAttempt: (ctx) => {
@@ -138,6 +168,20 @@ export async function fetchHtml(url: string): Promise<FetchHtmlResult> {
       error: `network: ${msg}`,
     };
   }
+}
+
+export async function fetchHtml(rawUrl: string): Promise<FetchHtmlResult> {
+  const hadScheme = SCHEME_RE.test(rawUrl);
+  const primaryUrl = ensureScheme(rawUrl); // https:// por defecto
+  const result = await fetchWithRetries(primaryUrl);
+
+  // Fallback http:// SOLO si nosotros sintetizamos el https y falló a nivel de red/TLS
+  // (no degradamos un https provisto por el usuario). F1.2.
+  if (!hadScheme && result.error?.startsWith("network:")) {
+    return await fetchWithRetries(`http://${rawUrl}`);
+  }
+
+  return result;
 }
 
 export function checkSsl(finalUrl: string | null): {

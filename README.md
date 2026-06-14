@@ -1,105 +1,72 @@
 # blindspot
 
-Blindspot detecta negocios locales con reputación offline fuerte y brechas digitales accionables. El repo tiene tres superficies:
+Blindspot detecta, enriquece y prioriza leads de negocios locales con brechas digitales. El repo tiene tres superficies:
 
 - `src/`: CLI y pipeline principal
 - `api/`: API Fastify para panel/admin
 - `ui/`: panel Next.js
 
-El stack real usa Supabase/Postgres local, discovery multi-source, enriquecimiento heurístico/social, scoring v2, buyer scores, campañas y panel admin.
+## Contexto canónico
 
-## Estructura del repositorio
+Para entender el sistema antes de tocar código, empezá por [context/README.md](/home/nicolasfalcioni/Documentos/blindspot/context/README.md).
 
-- `src/`: CLI y pipeline principal
-- `api/`: API Fastify y scheduler embebible
-- `ui/`: panel Next.js
-- `supabase/`: migraciones y configuración local
-- `tests/`: pruebas de API y discovery
+- Estado actual del producto: [context/PROJECT_MASTER.md](/home/nicolasfalcioni/Documentos/blindspot/context/PROJECT_MASTER.md)
+- Arquitectura real: [context/ARCHITECTURE.md](/home/nicolasfalcioni/Documentos/blindspot/context/ARCHITECTURE.md)
+- Guardrails operativos: [context/SECURITY.md](/home/nicolasfalcioni/Documentos/blindspot/context/SECURITY.md)
+- Operación diaria: [RUNBOOK.md](/home/nicolasfalcioni/Documentos/blindspot/RUNBOOK.md)
 
 ## Requisitos
 
 - Node.js 20+
 - `pnpm` 10+
 - Supabase CLI
-- Una `.env` válida
-- Google Places API Key si vas a correr `discover-google-places`
+- una `.env` válida
 
 ## Variables de entorno
 
-Variables mínimas para desarrollo local:
+Copiá `.env.example` a `.env` y completá lo mínimo para desarrollo local:
 
 | Variable | Uso |
 | --- | --- |
 | `SUPABASE_URL` | URL del stack local o remoto de Supabase |
-| `SUPABASE_SERVICE_ROLE_KEY` | Service role key |
-| `DATABASE_URL` | Conexión directa a Postgres |
-| `API_JWT_SECRET` | Obligatoria para levantar `api/` |
-| `GOOGLE_PLACES_API_KEY` | Obligatoria para discovery con Google Places |
-| `LOG_LEVEL` | `info`, `debug`, `warn`, `error` |
-| `CORS_ORIGIN` | Opcional, default `http://localhost:3000` |
-| `PORT` | Opcional, default `3001` para el API |
-| `NEXT_PUBLIC_API_URL` | Opcional en UI, default `http://localhost:3001` |
+| `SUPABASE_SERVICE_ROLE_KEY` | service role key |
+| `DATABASE_URL` | conexión directa a Postgres para `pg`/scheduler |
+| `API_JWT_SECRET` | obligatoria para levantar `api/` |
+| `EMBED_SCHEDULER` | `true` para el modo local normal |
+| `GOOGLE_PLACES_API_KEY` | obligatoria solo si vas a correr discovery real con Google Places |
+| `NEXT_PUBLIC_API_URL` | opcional en UI, default `http://localhost:3001` |
+| `GEMINI_API_KEY` | opcional para features LLM |
+| `SEARXNG_URL` | opcional, default `http://localhost:8080`; SearXNG self-hosted para enriquecer métricas de IG (comando `ig-snippet-enrich`) |
 
-## Base local
+El runtime LLM también acepta `GOOGLE_GEMINI_API_KEY`, `VITE_GOOGLE_GEMINI_API_KEY` y `OPENAI_COMPAT_*`, pero no son necesarias para arrancar el sistema base.
 
-Levantar Supabase local:
+## Arranque local
 
-```bash
-supabase start
-```
-
-Aplicar el schema local desde `supabase/migrations/`:
-
-```bash
-supabase db reset
-```
-
-Si trabajás contra un proyecto remoto linkeado:
-
-```bash
-supabase db push
-```
-
-Si `supabase db push` falla con `Cannot find project ref`, no está linkeado; usá `supabase db reset` para local o conectate por `psql`/SQL Editor al destino correcto.
-
-## Bootstrap de usuario admin
-
-No hay self-registration. Para entrar al panel necesitás un usuario en la tabla `users`.
-
-Generá el hash:
-
-```bash
-node -e "import bcrypt from 'bcryptjs'; bcrypt.hash('tu_password_segura', 12).then(console.log)"
-```
-
-Insertalo:
-
-```sql
-INSERT INTO users (email, password_hash, role)
-VALUES ('admin@blindspot.local', '$2b$12$<hash>', 'admin');
-```
-
-## Instalar dependencias
+1. Instalar dependencias:
 
 ```bash
 pnpm install
 ```
 
-## Levantar el sistema
-
-CLI / comandos manuales:
+2. Levantar Supabase local:
 
 ```bash
-pnpm dev -- --help
+supabase start
 ```
 
-API local:
+3. Aplicar schema local limpio cuando haga falta:
+
+```bash
+supabase db reset
+```
+
+4. Levantar API + scheduler embebido:
 
 ```bash
 pnpm --dir api dev
 ```
 
-UI local:
+5. Levantar UI:
 
 ```bash
 pnpm --dir ui dev
@@ -111,16 +78,14 @@ URLs locales:
 - API health: `http://127.0.0.1:3001/api/v1/health`
 - Supabase Studio: `http://127.0.0.1:54403`
 
+El modo operativo normal es `EMBED_SCHEDULER=true`: con `pnpm --dir api dev` alcanza para API + pipeline. El modo legacy con core separado sigue disponible con `pnpm start:core`, pero no es el flujo recomendado.
+
 ## Comandos útiles
 
-Discovery Google Places:
+Ayuda de CLI:
 
 ```bash
-node --env-file=.env --import tsx/esm src/cli/index.ts discover-google-places \
-  --niche "restaurante" \
-  --location "Montevideo Uruguay" \
-  --profile b \
-  --max-results 5
+pnpm dev -- --help
 ```
 
 Pipeline integral:
@@ -152,13 +117,13 @@ node --env-file=.env --import tsx/esm src/cli/index.ts social-enrich \
   --force
 ```
 
-Inferencia de estado:
+Métricas IG vía SearXNG self-hosted (gratis, $0; requiere `SEARXNG_URL` arriba):
 
 ```bash
-node --env-file=.env --import tsx/esm src/cli/index.ts infer-state \
+node --env-file=.env --import tsx/esm src/cli/index.ts ig-snippet-enrich \
   --all \
-  --force \
-  --concurrency 20
+  --limit 20 \
+  --throttle-ms 1500
 ```
 
 Scoring:
@@ -177,173 +142,26 @@ node --env-file=.env --import tsx/esm src/cli/index.ts report \
   --format all
 ```
 
-Listar leads de una corrida:
-
-```bash
-node --env-file=.env --import tsx/esm src/cli/index.ts leads list \
-  --seen-in <run_id> \
-  --passed-only \
-  --format json
-```
-
 ## Verificación
-
-Suite principal:
 
 ```bash
 pnpm test
 pnpm typecheck
-```
-
-Smoke API contra DB local limpia:
-
-```bash
+pnpm --dir ui typecheck
+pnpm --dir ui build
 pnpm smoke:api
 ```
 
-Runbook operativo: [docs/remediation-runbook.md](/home/nicolasfalcioni/Documentos/blindspot/docs/remediation-runbook.md)
-
-Frontend:
-
-```bash
-pnpm --dir ui typecheck
-pnpm --dir ui build
-```
-
-Health check en vivo:
+Health check:
 
 ```bash
 curl http://127.0.0.1:3001/api/v1/health
 ```
 
-El `health` valida también que `lead_dashboard` tenga el schema esperado. Si `invariants.lead_dashboard_schema_current=false`, hay drift de migraciones entre código y base.
+Si `invariants.lead_dashboard_schema_current=false`, hay drift entre migraciones y la base.
 
-## Levantar el entorno local
+## Notas operativas
 
-Modo real por defecto:
-
-1. Supabase local
-2. API HTTP (`api/`) con scheduler embebido
-3. UI Next (`ui/`)
-
-El scheduler/pipeline corre embebido en la API cuando `EMBED_SCHEDULER=true` (modo operativo normal).
-`src/start.ts` sigue existiendo como modo opcional/manual para correr el core separado, pero no es el
-flujo principal de desarrollo local.
-
-Secuencia recomendada desde la raíz del repo:
-
-1. Instalar dependencias:
-
-```bash
-pnpm install
-```
-
-2. Levantar Supabase:
-
-```bash
-pnpm supabase start
-```
-
-3. Resetear baseline local cuando necesites base limpia:
-
-```bash
-supabase db reset
-```
-
-4. Levantar la API HTTP:
-
-```bash
-pnpm --dir api start
-```
-
-5. Levantar la UI:
-
-```bash
-pnpm --dir ui dev
-```
-
-6. Levantar el core pipeline persistente:
-
-```bash
-node --env-file=.env --import tsx/esm src/start.ts
-```
-
-URLs útiles:
-
-- UI: `http://127.0.0.1:3000`
-- API: `http://127.0.0.1:3001`
-- Health: `http://127.0.0.1:3001/api/v1/health`
-- Supabase Studio: `http://127.0.0.1:54403`
-
-Credenciales seed locales:
-
-- Admin: `admin@blindspot.local` / `admin_local_2026`
-- CM: `cm@blindspot.local` / `cm_local_2026`
-
-## Backups y restore
-
-Backups desde el panel:
-
-- `Admin > Backups > Ejecutar backup ahora` dispara un backup manual aunque haya cron activo.
-- La configuración permite definir `enabled`, `cron_expression`, `directory` y `max_backups`.
-- El directorio efectivo es `backup_config.directory ?? BLINDSPOT_BACKUP_DIR ?? $HOME/blindspot-backups`.
-- La retención elimina determinísticamente los excedentes y conserva los `N` backups más recientes.
-
-Restore desde el panel:
-
-- En `Admin > Backups`, cada backup `completed` expone la acción `Restaurar`.
-- El restore reemplaza la DB local activa y por eso exige confirmación explícita.
-- Antes de restaurar, el sistema crea un checkpoint automático `restore_checkpoint`.
-- Durante el restore, el sistema entra en mantenimiento y pausa backup scheduler y pipeline polling.
-- Si necesitás deshacer el restore, podés restaurar el checkpoint recién creado desde la misma pantalla.
-
-Comandos shell equivalentes:
-
-```bash
-BACKUP_TAG=manual BLINDSPOT_BACKUP_DIR="$HOME/blindspot-backups" bash scripts/backup.sh
-BLINDSPOT_RESTORE_FILE="$HOME/blindspot-backups/<backup>.sql.gz" bash scripts/restore.sh
-```
-
-### Pipeline manual puntual
-
-Si querés disparar un run completo una sola vez, además del proceso persistente podés ejecutar:
-
-```bash
-pnpm dev pipeline --run-all
-```
-
-Opciones útiles:
-
-```bash
-pnpm dev pipeline --run-all --dry-run
-pnpm dev pipeline --run-all --cpu-budget conservative
-pnpm dev pipeline --run-all --phases refresh,discovery,enrich,score
-```
-
-## Smoke test E2E recomendado
-
-Secuencia mínima validada en local:
-
-1. `pnpm supabase start`
-2. `supabase db reset`
-3. `pnpm install`
-4. Levantar API con `pnpm --dir api start`
-5. Levantar UI con `pnpm --dir ui dev`
-6. Levantar core pipeline con `node --env-file=.env --import tsx/esm src/start.ts`
-7. Correr discovery real pequeño con Google Places
-8. Correr `enrich --run <run_id> --with-heuristic`
-9. Correr `social-enrich --all --limit 1 --force`
-10. Correr `infer-state --all --force`
-11. Correr `score --run <run_id> --buyer-types`
-12. Correr `report --run <run_id> --format all`
-13. Verificar `/api/v1/health`, login en `/login` y lectura de un lead por API
-
-## Costos
-
-`discover-google-places` consume Google Places. Para pruebas manuales:
-
-- usá `--max-results` bajo
-- evitá repetir búsquedas amplias sin necesidad
-- monitoreá billing en GCP
-
-Referencia práctica: `max-results 3..5` sirve para smoke tests con costo bajo.
+- `discover-google-places` consume Google Places. Usá `--max-results` bajo para pruebas manuales.
+- No hay self-registration. Para entrar al panel necesitás un usuario en la tabla `users`.
+- Para troubleshooting operativo, scheduler y logs, usar [RUNBOOK.md](/home/nicolasfalcioni/Documentos/blindspot/RUNBOOK.md).

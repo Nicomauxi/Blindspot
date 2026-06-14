@@ -1,13 +1,15 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { CircleMarker, MapContainer, Marker, Popup, TileLayer, Tooltip, useMap } from "react-leaflet";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { CircleMarker, MapContainer, Marker, Popup, TileLayer, Tooltip, useMap, useMapEvents } from "react-leaflet";
 import type {
   DiscoveryGeoZone,
+  DiscoveryHeatMetric,
   DiscoveryLeadDensityFilters,
   DiscoveryLeadDensityGpsSource,
   DiscoveryLeadDensityMeta,
   DiscoveryMapDensityLocation,
+  DiscoveryMapViewportBounds,
   NicheAliasGroup,
   ZoneLead,
 } from "@/lib/api";
@@ -27,9 +29,13 @@ import {
   type NicheMarkerIconOption,
 } from "@/lib/location-density-map";
 import { cn } from "@/lib/utils";
+import { OfferBarsPreview } from "@/components/lead/offer-bars-preview";
 
 const DEFAULT_CENTER: [number, number] = [-32.5228, -55.7658];
 const DEFAULT_ZOOM = 7;
+// Espera tras el último zoom/pan antes de pedir densidad al backend.
+// Evita encolar queries cuando se "juega" con la rueda del mouse.
+const VIEWPORT_DEBOUNCE_MS = 400;
 const ICON_PREFERENCES_STORAGE_KEY = "blindspot-map-niche-icon-preferences";
 const MAP_SOURCE_OPTIONS = ["yelu", "mintur", "osm", "google_places", "pedidosya"] as const;
 const CONTACT_TIER_OPTIONS = ["A", "B", "C", "D", "X"] as const;
@@ -38,6 +44,18 @@ const GPS_SOURCE_OPTIONS: Array<{ value: DiscoveryLeadDensityGpsSource; label: s
   { value: "google", label: "Google" },
   { value: "inferred", label: "Inferido" },
 ];
+const HEAT_METRIC_OPTIONS: Array<{ value: DiscoveryHeatMetric; label: string }> = [
+  { value: "mixed", label: "Mixto comercial" },
+  { value: "marketing", label: "Marketing" },
+  { value: "software", label: "Software" },
+  { value: "combined", label: "Combinado" },
+];
+const AGGREGATION_LABELS: Record<string, string> = {
+  country: "País",
+  regional: "Regional",
+  local: "Local",
+  individual: "Individual",
+};
 
 const TIER_COLORS: Record<string, { color: string; fillColor: string }> = {
   A: { color: "#6ee7b7", fillColor: "#10b981" },
@@ -75,14 +93,42 @@ const VARIANT_COPY: Record<LocationDensityMapVariant, {
   },
 };
 
+function asFiniteNumber(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim() !== "") {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function isValidMapPoint(point: { lat: number; lng: number } | null | undefined): point is { lat: number; lng: number } {
+  return Boolean(
+    point &&
+    Number.isFinite(point.lat) &&
+    Number.isFinite(point.lng) &&
+    point.lat >= -90 &&
+    point.lat <= 90 &&
+    point.lng >= -180 &&
+    point.lng <= 180 &&
+    point.lat !== 0 &&
+    point.lng !== 0
+  );
+}
+
 function extractGpsPoint(gps: unknown, mapPoint?: { lat: number; lng: number } | null): { lat: number; lng: number } | null {
-  if (mapPoint && Number.isFinite(mapPoint.lat) && Number.isFinite(mapPoint.lng)) {
+  if (isValidMapPoint(mapPoint)) {
     return mapPoint;
   }
   if (!gps || typeof gps !== "object") return null;
   const obj = gps as Record<string, unknown>;
-  if (typeof obj["lat"] === "number" && typeof obj["lng"] === "number") {
-    return { lat: obj["lat"], lng: obj["lng"] };
+  const lat = asFiniteNumber(obj["lat"]);
+  const lng = asFiniteNumber(obj["lng"]);
+  if (lat != null && lng != null) {
+    const point = { lat, lng };
+    if (isValidMapPoint(point)) {
+      return point;
+    }
   }
   return null;
 }
@@ -127,6 +173,32 @@ function signalClass(active: boolean): string {
   return active
     ? "border-emerald-200 bg-emerald-50 text-emerald-700"
     : "border-slate-200 bg-slate-50 text-slate-500";
+}
+
+function intensityTone(score: number) {
+  if (score >= 85) return { stroke: "#7f1d1d", fill: "#ef4444", fillOpacity: 0.82 };
+  if (score >= 65) return { stroke: "#9a3412", fill: "#f97316", fillOpacity: 0.74 };
+  if (score >= 45) return { stroke: "#92400e", fill: "#f59e0b", fillOpacity: 0.66 };
+  if (score >= 25) return { stroke: "#0f766e", fill: "#14b8a6", fillOpacity: 0.58 };
+  return { stroke: "#155e75", fill: "#38bdf8", fillOpacity: 0.48 };
+}
+
+function radiusForLocation(location: DiscoveryMapDensityLocation): number {
+  const score = location.intensity_score ?? location.commercial_density_score;
+  const normalized = Math.max(0, Math.min(1, score / 100));
+  const base = location.aggregation_level === "country" ? 12 : location.aggregation_level === "regional" ? 9 : 7;
+  const spread = location.aggregation_level === "country" ? 24 : location.aggregation_level === "regional" ? 18 : 14;
+  return base + Math.sqrt(normalized) * spread;
+}
+
+function buildViewportBounds(map: import("leaflet").Map): DiscoveryMapViewportBounds {
+  const bounds = map.getBounds();
+  return {
+    south: Number(bounds.getSouth().toFixed(6)),
+    west: Number(bounds.getWest().toFixed(6)),
+    north: Number(bounds.getNorth().toFixed(6)),
+    east: Number(bounds.getEast().toFixed(6)),
+  };
 }
 
 function buildLeadMarkerDivIcon(leaflet: typeof import("leaflet"), option: NicheMarkerIconOption) {
@@ -213,8 +285,10 @@ function LeadReviewCard({
 }) {
   const tier = lead.contact_tier?.toUpperCase() ?? "D";
   const tierBadgeClass = TIER_BADGE_CLASSES[tier] ?? TIER_BADGE_CLASSES.D;
-  const score = lead.prospect_score ?? 0;
-  const scoreTone = score >= 75 ? "text-emerald-700" : score >= 55 ? "text-amber-700" : "text-slate-600";
+  const score = asFiniteNumber(lead.prospect_score);
+  const rating = asFiniteNumber(lead.rating);
+  const reviewCount = asFiniteNumber(lead.review_count);
+  const scoreTone = (score ?? 0) >= 75 ? "text-emerald-700" : (score ?? 0) >= 55 ? "text-amber-700" : "text-slate-600";
   const offerType = classifyOfferType(lead.primary_offer);
   const canonicalNiche = resolveCanonicalNiche(lead.niche, nicheGroups);
 
@@ -237,7 +311,7 @@ function LeadReviewCard({
           </div>
         </div>
         <div className="text-right">
-          <div className={cn("text-2xl font-semibold", scoreTone)}>{lead.prospect_score ?? "—"}</div>
+          <div className={cn("text-2xl font-semibold", scoreTone)}>{score ?? "—"}</div>
           <div className="text-[11px] text-slate-500">score comercial</div>
         </div>
       </div>
@@ -245,13 +319,14 @@ function LeadReviewCard({
       <div className="mt-4 rounded-2xl border border-slate-100 bg-slate-50 px-3 py-3">
         <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Lectura rápida</div>
         <p className="mt-2 text-sm text-slate-700">{lead.pitch_hook ?? "Sin pitch hook visible; conviene abrir la ficha antes de contactar."}</p>
+        <OfferBarsPreview offerings={lead.commercial_offerings} pitchHook={lead.pitch_hook} />
       </div>
 
       <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
         <LeadSignal label="Web" value={lead.website ? "Sitio detectado" : "Sin sitio confirmado"} active={Boolean(lead.website)} />
         <LeadSignal label="Social" value={hasSocialSignal(lead) ? "Señales sociales" : "Sin señal social"} active={hasSocialSignal(lead)} />
         <LeadSignal label="Contacto" value={hasContactSignal(lead) ? "Listo para salida" : "Falta validar"} active={hasContactSignal(lead)} />
-        <LeadSignal label="Reviews" value={lead.review_count ? `${lead.review_count} reseñas` : "Sin reseñas"} active={(lead.review_count ?? 0) > 0 || (lead.rating ?? 0) > 0} />
+        <LeadSignal label="Reviews" value={reviewCount ? `${reviewCount} reseñas` : "Sin reseñas"} active={(reviewCount ?? 0) > 0 || (rating ?? 0) > 0} />
         <LeadSignal label="Software" value={offerType === "software" ? "Oferta alineada" : "Sin señal clara"} active={offerType === "software"} />
         <LeadSignal label="Marketing" value={offerType === "marketing" ? "Oferta alineada" : "Sin señal clara"} active={offerType === "marketing"} />
       </div>
@@ -269,7 +344,7 @@ function LeadReviewCard({
           {lead.whatsapp ? <span className="rounded-full bg-slate-100 px-2 py-1">WhatsApp</span> : null}
           {lead.email ? <span className="rounded-full bg-slate-100 px-2 py-1">Email</span> : null}
           {lead.contact_ready ? <span className="rounded-full bg-emerald-50 px-2 py-1 text-emerald-700">Contacto listo</span> : null}
-          {lead.rating ? <span className="rounded-full bg-amber-50 px-2 py-1 text-amber-700">Rating {lead.rating.toFixed(1)}</span> : null}
+          {rating != null ? <span className="rounded-full bg-amber-50 px-2 py-1 text-amber-700">Rating {rating.toFixed(1)}</span> : null}
         </div>
         <a href={`/admin/leads/${lead.id}`} className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-sm font-semibold text-sky-700 transition-colors hover:bg-sky-100">
           Abrir ficha
@@ -282,28 +357,74 @@ function LeadReviewCard({
 function MapViewport({
   locations,
   selectedLocationKey,
+  onViewportChange,
 }: {
   locations: DiscoveryMapDensityLocation[];
   selectedLocationKey?: string | null;
+  onViewportChange?: (viewport: { zoom: number; bbox: DiscoveryMapViewportBounds }) => void;
 }) {
   const map = useMap();
+  const hasFitOnceRef = useRef(false);
+  const previousSelectionRef = useRef<string | null | undefined>(undefined);
+  const viewportDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Emisión inmediata del viewport (sin debounce).
+  const emitViewportNow = useCallback(() => {
+    onViewportChange?.({ zoom: map.getZoom(), bbox: buildViewportBounds(map) });
+  }, [map, onViewportChange]);
+
+  // Versión con debounce: evita encolar queries cuando el usuario "juega"
+  // con la rueda del mouse haciendo múltiples zooms/pans seguidos.
+  const emitViewport = useCallback(() => {
+    if (viewportDebounceRef.current) {
+      clearTimeout(viewportDebounceRef.current);
+    }
+    viewportDebounceRef.current = setTimeout(() => {
+      viewportDebounceRef.current = null;
+      emitViewportNow();
+    }, VIEWPORT_DEBOUNCE_MS);
+  }, [emitViewportNow]);
+
+  useMapEvents({
+    moveend: emitViewport,
+    zoomend: emitViewport,
+  });
+
+  // Primera emisión inmediata (sin esperar el debounce) y limpieza al desmontar.
+  useEffect(() => {
+    emitViewportNow();
+    return () => {
+      if (viewportDebounceRef.current) {
+        clearTimeout(viewportDebounceRef.current);
+      }
+    };
+  }, [emitViewportNow]);
 
   useEffect(() => {
     const selected = locations.find((location) => location.location_key === selectedLocationKey);
     const selectedCenter = selected ? computeLocationCentroid(selected) : null;
-    if (selectedCenter) {
-      map.flyTo([selectedCenter.lat, selectedCenter.lng], Math.max(map.getZoom(), 12), { duration: 0.45 });
+    if (selectedCenter && previousSelectionRef.current !== selectedLocationKey) {
+      previousSelectionRef.current = selectedLocationKey;
+      map.flyTo([selectedCenter.lat, selectedCenter.lng], Math.max(map.getZoom(), 13), { duration: 0.45 });
       return;
     }
 
-    const boundsPoints = locations.flatMap((location) => location.gps_points.map((point) => [point.lat, point.lng] as [number, number]));
-    if (boundsPoints.length > 0) {
-      map.fitBounds(boundsPoints, { padding: [24, 24], maxZoom: 11 });
-      return;
+    if (selectedLocationKey == null) {
+      previousSelectionRef.current = null;
     }
 
-    map.setView(DEFAULT_CENTER, DEFAULT_ZOOM);
-  }, [locations, map, selectedLocationKey]);
+    if (!hasFitOnceRef.current) {
+      const boundsPoints = locations.flatMap((location) => location.gps_points.map((point) => [point.lat, point.lng] as [number, number]));
+      if (boundsPoints.length > 0) {
+        hasFitOnceRef.current = true;
+        map.fitBounds(boundsPoints, { padding: [24, 24], maxZoom: 8 });
+        return;
+      }
+
+      hasFitOnceRef.current = true;
+      map.setView(DEFAULT_CENTER, DEFAULT_ZOOM);
+    }
+  }, [emitViewport, locations, map, selectedLocationKey]);
 
   return null;
 }
@@ -328,15 +449,20 @@ export type LocationDensityMapBaseProps = {
   zonesLoading?: boolean;
   zonesError?: string | null;
   zoneLeads?: ZoneLead[] | null;
+  viewportLeads?: ZoneLead[] | null;
   zoneLeadsTotal?: number;
   zoneLeadsLoading?: boolean;
   zoneLeadsError?: string | null;
   pendingChanges?: boolean;
+  onViewportChange?: (viewport: { zoom: number; bbox: DiscoveryMapViewportBounds }) => void;
   pendingSelectionLabel?: string | null;
   appliedSelectionLabel?: string | null;
   onApplySelection?: () => void;
   onCancelSelection?: () => void;
   onClearSelection?: () => void;
+  filterPanelMode?: "full" | "geo-only";
+  showSelectionActions?: boolean;
+  filterHint?: string;
 };
 
 export function LocationDensityMapBase({
@@ -359,15 +485,22 @@ export function LocationDensityMapBase({
   zonesLoading = false,
   zonesError = null,
   zoneLeads,
+  viewportLeads,
   zoneLeadsTotal,
   zoneLeadsLoading,
   zoneLeadsError = null,
   pendingChanges = false,
+  onViewportChange,
   pendingSelectionLabel = null,
   appliedSelectionLabel = null,
   onApplySelection,
   onCancelSelection,
   onClearSelection,
+  filterPanelMode = "full",
+  showSelectionActions = variant === "lead-review",
+  filterHint = variant === "lead-review"
+    ? "Los cambios quedan en borrador hasta aplicar la selección."
+    : "Debounce 300ms sobre API. Los filtros se aplican antes de agregar la grilla.",
 }: LocationDensityMapBaseProps) {
   const [sort, setSort] = useState<LocationDensitySort>("density");
   const [mounted, setMounted] = useState(false);
@@ -418,15 +551,24 @@ export function LocationDensityMapBase({
     filters.contact_tier?.length ?? 0,
     filters.gps_source?.length ?? 0,
     filters.zone_ids?.length ?? 0,
+    filters.primary_offer?.trim() ? 1 : 0,
+    filters.commercial_offer_type ? 1 : 0,
+    filters.heat_metric && filters.heat_metric !== "mixed" ? 1 : 0,
   ].reduce((sum, value) => sum + value, 0);
   const nicheListId = "discovery-map-niche-suggestions";
-  const hasMore = (zoneLeadsTotal ?? 0) > (zoneLeads?.length ?? 0);
-  const showLeadReviewActions = variant === "lead-review";
+  const aggregationMode = meta?.aggregation_mode ?? "regional";
+  const autoIndividual = mode === "heatmap" && aggregationMode === "individual";
+  const displayMode = mode === "individual" || autoIndividual ? "individual" : "heatmap";
+  const heatMetric = filters.heat_metric ?? "mixed";
+  const displayedLeads = autoIndividual ? (viewportLeads ?? []) : (zoneLeads ?? []);
+  const hasMore = !autoIndividual && (zoneLeadsTotal ?? 0) > (zoneLeads?.length ?? 0);
+  const showLeadReviewSummary = variant === "lead-review";
+  const showLeadReviewActions = showLeadReviewSummary && showSelectionActions;
   const selectedLocation = selectedLocationKey
     ? locations.find((location) => location.location_key === selectedLocationKey) ?? null
     : null;
   const draftSelectionLabel = pendingSelectionLabel ?? selectedLocation?.location_label ?? null;
-  const individualLeads = zoneLeads ?? [];
+  const individualLeads = displayedLeads;
   const leadIcons = useMemo(
     () => new Map(individualLeads.map((lead) => [lead.id, resolveLeadMarkerIcon(lead, nicheGroups, iconPreferences)])),
     [iconPreferences, individualLeads, nicheGroups]
@@ -443,6 +585,7 @@ export function LocationDensityMapBase({
     onFiltersChange?.({
       location: filters.location,
       limit: filters.limit,
+      heat_metric: "mixed",
     });
     onZoneSearchChange?.("");
   }
@@ -484,11 +627,11 @@ export function LocationDensityMapBase({
           </div>
           <div className="flex flex-col items-end gap-2">
             <div className="rounded-2xl border border-white/10 bg-white/5 px-3 py-2 text-right text-xs text-slate-200">
-              <div data-testid="location-density-visible-count">{visibleLocations.length} cuadrículas visibles</div>
+              <div data-testid="location-density-visible-count">{displayMode === "individual" ? individualLeads.length : visibleLocations.length} {displayMode === "individual" ? "leads visibles" : "áreas visibles"}</div>
               <div className="mt-1 text-slate-300">{filteredLeadCount} leads filtrados</div>
-              <div className="mt-1 text-slate-400">{positionedLeadCount} leads posicionados</div>
+              <div className="mt-1 text-slate-400">Viewport {meta?.viewport_lead_count ?? positionedLeadCount} · posicionados {positionedLeadCount}</div>
               <div className="mt-1 text-slate-400">GPS {rawVisible} · geocodificados {geocodedVisible}</div>
-              <div className="mt-1 text-slate-400">Score 0-100 · grilla ~{meta?.grid_cell_size_km ?? 2.2} km</div>
+              <div className="mt-1 text-slate-400">Resolución {AGGREGATION_LABELS[aggregationMode] ?? aggregationMode} · celda ~{meta?.cell_size_hint_km ?? meta?.grid_cell_size_km ?? 2.2} km</div>
               {loading ? <div className="mt-1 text-amber-200">Actualizando filtros...</div> : null}
             </div>
             <div className="flex gap-1 rounded-full border border-white/10 bg-white/5 p-0.5 text-xs">
@@ -510,19 +653,19 @@ export function LocationDensityMapBase({
                 <div className="mt-1 text-slate-200">{loadError}</div>
               </div>
             </div>
-          ) : mode === "heatmap" && visibleLocations.length === 0 ? (
+          ) : displayMode === "heatmap" && visibleLocations.length === 0 ? (
             <div className="flex h-full items-center justify-center rounded-[24px] border border-dashed border-white/15 text-sm text-slate-300">
               Sin densidad para mostrar.
             </div>
-          ) : mode === "individual" && !selectedLocationKey ? (
+          ) : displayMode === "individual" && mode === "individual" && !selectedLocationKey ? (
             <div className="flex h-full items-center justify-center rounded-[24px] border border-dashed border-white/15 text-sm text-slate-300">
               Selecciona una zona para ver los leads individuales.
             </div>
-          ) : mode === "individual" && zoneLeadsLoading ? (
+          ) : displayMode === "individual" && mode === "individual" && zoneLeadsLoading ? (
             <div className="flex h-full items-center justify-center rounded-[24px] border border-white/10 bg-black/20 text-sm text-slate-300">
               Cargando leads...
             </div>
-          ) : mode === "individual" && selectedLocationKey && individualLeads.length === 0 ? (
+          ) : displayMode === "individual" && !autoIndividual && individualLeads.length === 0 ? (
             <div className="flex h-full items-center justify-center rounded-[24px] border border-dashed border-white/15 px-6 text-center text-sm text-slate-300">
               No hay leads posicionables en esta cuadrícula con los filtros actuales.
             </div>
@@ -531,26 +674,26 @@ export function LocationDensityMapBase({
               Inicializando mapa geográfico...
             </div>
           ) : (
-            <MapContainer center={DEFAULT_CENTER} zoom={DEFAULT_ZOOM} scrollWheelZoom={false} className="location-density-leaflet h-full w-full rounded-[24px]" data-testid="location-density-map">
+            <MapContainer center={DEFAULT_CENTER} zoom={DEFAULT_ZOOM} scrollWheelZoom zoomAnimation={false} fadeAnimation={false} markerZoomAnimation={false} className="location-density-leaflet h-full w-full rounded-[24px]" data-testid="location-density-map">
               <TileLayer attribution={'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'} url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
-              <MapViewport locations={visibleLocations} selectedLocationKey={selectedLocationKey} />
+              <MapViewport locations={visibleLocations} selectedLocationKey={selectedLocationKey} onViewportChange={onViewportChange} />
 
-              {mode === "heatmap" && visibleLocations.map((location) => {
+              {displayMode === "heatmap" && visibleLocations.map((location) => {
                 const centroid = computeLocationCentroid(location);
                 if (!centroid) return null;
-                const radius = 7 + (location.commercial_density_score / 100) * 15;
                 const active = selectedLocationKey === location.location_key;
+                const tone = intensityTone(location.intensity_score ?? location.commercial_density_score);
                 return (
                   <CircleMarker
                     key={location.location_key}
                     center={[centroid.lat, centroid.lng]}
-                    radius={radius}
+                    radius={radiusForLocation(location)}
                     pathOptions={{
                       className: "density-marker density-marker--heatmap",
-                      color: active ? "#fef3c7" : "#dbeafe",
-                      fillColor: active ? "#f59e0b" : "#38bdf8",
-                      fillOpacity: active ? 0.76 : 0.58,
-                      weight: active ? 2.2 : 1.4,
+                      color: active ? "#fef3c7" : tone.stroke,
+                      fillColor: active ? "#fde68a" : tone.fill,
+                      fillOpacity: active ? 0.88 : tone.fillOpacity,
+                      weight: active ? 2.4 : 1.8,
                     }}
                     eventHandlers={{ click: () => handleHeatmapMarkerClick(location) }}
                   >
@@ -559,14 +702,15 @@ export function LocationDensityMapBase({
                         <p className="text-sm font-semibold text-slate-900">{location.location_label}</p>
                         <p className="text-xs text-slate-600">Área base: {location.parent_location_label}</p>
                         <p className="text-xs text-slate-600">{location.lead_count} leads · {location.hot_leads_count} hot · promedio {location.avg_prospect_score.toFixed(1)}</p>
-                        <p className="text-xs font-medium text-slate-700">Densidad {location.commercial_density_score} · GPS {location.raw_gps_lead_count} · geocodificados {location.geocoded_lead_count}</p>
+                        <p className="text-xs text-slate-600">Marketing {location.avg_marketing_score.toFixed(1)} · Software {location.avg_software_score.toFixed(1)}</p>
+                        <p className="text-xs font-medium text-slate-700">Intensidad {location.intensity_score} · {AGGREGATION_LABELS[location.aggregation_level] ?? location.aggregation_level}</p>
                       </div>
                     </Popup>
                   </CircleMarker>
                 );
               })}
 
-              {mode === "individual" && individualLeads.map((lead) => {
+              {displayMode === "individual" && individualLeads.map((lead) => {
                 const point = extractGpsPoint(lead.gps, lead.map_point ?? null);
                 if (!point) return null;
                 const iconOption = leadIcons.get(lead.id) ?? getNicheMarkerOption("default");
@@ -598,9 +742,16 @@ export function LocationDensityMapBase({
             </MapContainer>
           )}
 
-          {mode === "individual" && hasMore && !zoneLeadsLoading && individualLeads.length > 0 ? (
+          {displayMode === "individual" && hasMore && !zoneLeadsLoading && individualLeads.length > 0 ? (
             <div className="absolute bottom-2 left-1/2 z-[1000] -translate-x-1/2 rounded-full border border-white/10 bg-slate-950/80 px-4 py-1.5 text-xs text-slate-100 backdrop-blur-sm">
               Mostrando {individualLeads.length} de {zoneLeadsTotal} leads en esta cuadrícula.
+            </div>
+          ) : null}
+
+          {/* Overlay no bloqueante: el mapa sigue visible para poder alejar el zoom o desplazarse. */}
+          {displayMode === "individual" && autoIndividual && mounted && !loadError && individualLeads.length === 0 ? (
+            <div className="pointer-events-none absolute bottom-2 left-1/2 z-[1000] -translate-x-1/2 rounded-full border border-white/10 bg-slate-950/80 px-4 py-1.5 text-xs text-slate-100 backdrop-blur-sm">
+              No hay leads en esta vista — alejá el zoom o desplazate para ver más.
             </div>
           ) : null}
         </div>
@@ -611,8 +762,8 @@ export function LocationDensityMapBase({
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
               <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">{copy.filterTitle}</p>
-              <p className="mt-1 text-xs text-slate-500">Debounce 300ms sobre API. Los filtros se aplican antes de agregar la grilla.</p>
-              {showLeadReviewActions ? (
+              <p className="mt-1 text-xs text-slate-500">{filterHint}</p>
+              {showLeadReviewSummary ? (
                 <p className="mt-2 text-[11px] text-slate-500" data-testid="lead-review-map-selection-summary">
                   {pendingChanges
                     ? draftSelectionLabel
@@ -626,31 +777,31 @@ export function LocationDensityMapBase({
             </div>
             <div className="flex flex-wrap items-center justify-end gap-2">
               <span className="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-600">{activeFilterCount} filtros activos</span>
-              {showLeadReviewActions ? (
+              {showLeadReviewSummary ? (
                 <>
                   <span data-testid="lead-review-map-pending-state" className={cn("rounded-full px-2 py-1 text-[11px] font-semibold", pendingChanges ? "bg-amber-100 text-amber-700" : "bg-emerald-100 text-emerald-700")}>
                     {pendingChanges ? "Cambios sin aplicar" : "Listado sincronizado"}
                   </span>
-                  <button type="button" onClick={() => onApplySelection?.()} disabled={!pendingChanges} data-testid="lead-review-map-apply" className="rounded-full border border-sky-200 bg-sky-50 px-3 py-1.5 text-xs font-semibold text-sky-700 transition-colors hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-50">
-                    Aplicar al listado
-                  </button>
-                  <button type="button" onClick={() => onCancelSelection?.()} disabled={!pendingChanges} data-testid="lead-review-map-cancel" className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50">
-                    Cancelar
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (onClearSelection) {
-                        onClearSelection();
-                        return;
-                      }
-                      clearFilters();
-                    }}
-                    data-testid="lead-review-map-clear"
-                    className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 transition-colors hover:bg-slate-50"
-                  >
-                    Limpiar
-                  </button>
+                  {showLeadReviewActions ? (
+                    <>
+                      <button type="button" onClick={() => onApplySelection?.()} disabled={!pendingChanges} data-testid="lead-review-map-apply" className="rounded-full border border-sky-200 bg-sky-50 px-3 py-1.5 text-xs font-semibold text-sky-700 transition-colors hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-50">
+                        Aplicar al listado
+                      </button>
+                      <button type="button" onClick={() => onCancelSelection?.()} disabled={!pendingChanges} data-testid="lead-review-map-cancel" className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50">
+                        Cancelar
+                      </button>
+                    </>
+                  ) : null}
+                  {onClearSelection ? (
+                    <button
+                      type="button"
+                      onClick={() => onClearSelection()}
+                      data-testid="lead-review-map-clear"
+                      className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 transition-colors hover:bg-slate-50"
+                    >
+                      Limpiar selección
+                    </button>
+                  ) : null}
                 </>
               ) : (
                 <button type="button" onClick={clearFilters} className="text-xs font-medium text-sky-700 hover:underline">
@@ -662,86 +813,18 @@ export function LocationDensityMapBase({
 
           <div className="mt-4 space-y-4">
             <div>
-              <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Fuente</span>
+              <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Lectura del mapa</span>
               <div className="mt-2 flex flex-wrap gap-2">
-                {MAP_SOURCE_OPTIONS.map((source) => {
-                  const active = filters.source?.includes(source) ?? false;
-                  return (
-                    <button
-                      key={source}
-                      type="button"
-                      onClick={() => patchFilters({ source: toggleValue(filters.source, source) })}
-                      className={cn(
-                        "rounded-full border px-2.5 py-1.5 text-xs font-medium transition-colors",
-                        active ? "border-sky-300 bg-sky-50 text-sky-700" : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"
-                      )}
-                    >
-                      {sourceLabel(source)}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            <label className="space-y-1">
-              <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Niche</span>
-              <input
-                value={filters.niche ?? ""}
-                onChange={(event) => patchFilters({ niche: event.target.value || undefined })}
-                placeholder="restaurante, clínica, hotel..."
-                list={nicheListId}
-                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-sky-300 focus:bg-white"
-              />
-              <datalist id={nicheListId}>
-                {nicheSuggestions.map((niche) => (
-                  <option key={niche} value={niche} />
-                ))}
-              </datalist>
-            </label>
-
-            <label className="space-y-2">
-              <span className="flex items-center justify-between text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
-                <span>Prospect score mínimo</span>
-                <span className="text-slate-700">{filters.prospect_score_gte ?? 0}</span>
-              </span>
-              <input type="range" min={0} max={100} step={5} value={filters.prospect_score_gte ?? 0} onChange={(event) => patchFilters({ prospect_score_gte: Number(event.target.value) || 0 })} className="w-full accent-sky-600" />
-            </label>
-
-            <div>
-              <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Contact tier</span>
-              <div className="mt-2 flex flex-wrap gap-2">
-                {CONTACT_TIER_OPTIONS.map((tier) => {
-                  const active = filters.contact_tier?.includes(tier) ?? false;
-                  return (
-                    <button
-                      key={tier}
-                      type="button"
-                      onClick={() => patchFilters({ contact_tier: toggleValue(filters.contact_tier, tier) })}
-                      className={cn(
-                        "rounded-full border px-2.5 py-1.5 text-xs font-medium transition-colors",
-                        active ? "border-emerald-300 bg-emerald-50 text-emerald-700" : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"
-                      )}
-                    >
-                      {tier}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            <div>
-              <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Origen GPS</span>
-              <div className="mt-2 flex flex-wrap gap-2">
-                {GPS_SOURCE_OPTIONS.map((option) => {
-                  const active = filters.gps_source?.includes(option.value) ?? false;
+                {HEAT_METRIC_OPTIONS.map((option) => {
+                  const active = heatMetric === option.value;
                   return (
                     <button
                       key={option.value}
                       type="button"
-                      onClick={() => patchFilters({ gps_source: toggleValue(filters.gps_source, option.value) as DiscoveryLeadDensityGpsSource[] | undefined })}
+                      onClick={() => patchFilters({ heat_metric: option.value })}
                       className={cn(
                         "rounded-full border px-2.5 py-1.5 text-xs font-medium transition-colors",
-                        active ? "border-violet-300 bg-violet-50 text-violet-700" : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"
+                        active ? "border-rose-300 bg-rose-50 text-rose-700" : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"
                       )}
                     >
                       {option.label}
@@ -749,7 +832,110 @@ export function LocationDensityMapBase({
                   );
                 })}
               </div>
+              <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
+                <span className="rounded-full bg-slate-100 px-2 py-1 font-semibold text-slate-700">{AGGREGATION_LABELS[aggregationMode] ?? aggregationMode}</span>
+                <span>Zoom {meta?.zoom_bucket ?? DEFAULT_ZOOM}</span>
+                <span>Celda ~{meta?.cell_size_hint_km ?? meta?.grid_cell_size_km ?? 2.2} km</span>
+              </div>
             </div>
+
+            {filterPanelMode === "full" ? (
+              <>
+                <div>
+                  <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Fuente</span>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {MAP_SOURCE_OPTIONS.map((source) => {
+                      const active = filters.source?.includes(source) ?? false;
+                      return (
+                        <button
+                          key={source}
+                          type="button"
+                          onClick={() => patchFilters({ source: toggleValue(filters.source, source) })}
+                          className={cn(
+                            "rounded-full border px-2.5 py-1.5 text-xs font-medium transition-colors",
+                            active ? "border-sky-300 bg-sky-50 text-sky-700" : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"
+                          )}
+                        >
+                          {sourceLabel(source)}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <label className="space-y-1">
+                  <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Niche</span>
+                  <input
+                    value={filters.niche ?? ""}
+                    onChange={(event) => patchFilters({ niche: event.target.value || undefined })}
+                    placeholder="restaurante, clínica, hotel..."
+                    list={nicheListId}
+                    className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-sky-300 focus:bg-white"
+                  />
+                  <datalist id={nicheListId}>
+                    {nicheSuggestions.map((niche) => (
+                      <option key={niche} value={niche} />
+                    ))}
+                  </datalist>
+                </label>
+
+                <label className="space-y-2">
+                  <span className="flex items-center justify-between text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+                    <span>Prospect score mínimo</span>
+                    <span className="text-slate-700">{filters.prospect_score_gte ?? 0}</span>
+                  </span>
+                  <input type="range" min={0} max={100} step={5} value={filters.prospect_score_gte ?? 0} onChange={(event) => patchFilters({ prospect_score_gte: Number(event.target.value) || 0 })} className="w-full accent-sky-600" />
+                </label>
+
+                <div>
+                  <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Contact tier</span>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {CONTACT_TIER_OPTIONS.map((tier) => {
+                      const active = filters.contact_tier?.includes(tier) ?? false;
+                      return (
+                        <button
+                          key={tier}
+                          type="button"
+                          onClick={() => patchFilters({ contact_tier: toggleValue(filters.contact_tier, tier) })}
+                          className={cn(
+                            "rounded-full border px-2.5 py-1.5 text-xs font-medium transition-colors",
+                            active ? "border-emerald-300 bg-emerald-50 text-emerald-700" : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"
+                          )}
+                        >
+                          {tier}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div>
+                  <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Origen GPS</span>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {GPS_SOURCE_OPTIONS.map((option) => {
+                      const active = filters.gps_source?.includes(option.value) ?? false;
+                      return (
+                        <button
+                          key={option.value}
+                          type="button"
+                          onClick={() => patchFilters({ gps_source: toggleValue(filters.gps_source, option.value) as DiscoveryLeadDensityGpsSource[] | undefined })}
+                          className={cn(
+                            "rounded-full border px-2.5 py-1.5 text-xs font-medium transition-colors",
+                            active ? "border-violet-300 bg-violet-50 text-violet-700" : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"
+                          )}
+                        >
+                          {option.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div className="rounded-2xl border border-slate-100 bg-slate-50 px-3 py-3 text-xs text-slate-600">
+                El mapa ya refleja fuente, nicho, score y tier del panel principal. Acá definís solo el recorte geográfico.
+              </div>
+            )}
           </div>
 
           {unpositionedLeadCount > 0 ? (
@@ -759,11 +945,38 @@ export function LocationDensityMapBase({
           ) : null}
 
           {meta ? (
-            <div className="mt-4 grid gap-2 rounded-2xl border border-slate-100 bg-slate-50 px-3 py-2 text-xs text-slate-600 sm:grid-cols-2">
-              <div>GPS reales totales: <span className="font-semibold text-slate-900">{meta.raw_gps_leads}</span></div>
-              <div>Direcciones geocodificadas: <span className="font-semibold text-slate-900">{meta.geocoded_address_leads}</span></div>
-              <div>Direcciones sin resolver: <span className="font-semibold text-slate-900">{meta.unresolved_address_leads}</span></div>
-              <div>Backlog por rate-limit: <span className="font-semibold text-slate-900">{meta.deferred_geocode_leads}</span></div>
+            <div className="mt-4 space-y-3">
+              <div className="grid gap-2 rounded-2xl border border-slate-100 bg-slate-50 px-3 py-2 text-xs text-slate-600 sm:grid-cols-2">
+                <div>GPS reales totales: <span className="font-semibold text-slate-900">{meta.raw_gps_leads}</span></div>
+                <div>Direcciones geocodificadas: <span className="font-semibold text-slate-900">{meta.geocoded_address_leads}</span></div>
+                <div>Direcciones sin resolver: <span className="font-semibold text-slate-900">{meta.unresolved_address_leads}</span></div>
+                <div>Backlog por rate-limit: <span className="font-semibold text-slate-900">{meta.deferred_geocode_leads}</span></div>
+              </div>
+              <div className="rounded-2xl border border-slate-100 bg-slate-50 px-3 py-3 text-xs text-slate-600">
+                <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Leyenda</div>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {[
+                    { label: "Baja", color: "bg-sky-400" },
+                    { label: "Media", color: "bg-amber-400" },
+                    { label: "Alta", color: "bg-orange-500" },
+                    { label: "Muy alta", color: "bg-rose-500" },
+                  ].map((entry) => (
+                    <span key={entry.label} className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-2 py-1">
+                      <span className={cn("h-2.5 w-2.5 rounded-full", entry.color)} />
+                      {entry.label}
+                    </span>
+                  ))}
+                </div>
+                <p className="mt-2 text-[11px] text-slate-500">
+                  {heatMetric === "marketing"
+                    ? "La intensidad prioriza señal comercial de marketing en el viewport actual."
+                    : heatMetric === "software"
+                      ? "La intensidad prioriza señal comercial de software en el viewport actual."
+                      : heatMetric === "combined"
+                        ? "La intensidad balancea marketing y software sobre las zonas visibles."
+                        : "La intensidad mezcla volumen, hot leads y score comercial sobre las zonas visibles."}
+                </p>
+              </div>
             </div>
           ) : null}
         </div>
@@ -823,13 +1036,13 @@ export function LocationDensityMapBase({
           </div>
         </div>
 
-        {mode === "individual" && selectedLocationKey ? (
+        {displayMode === "individual" ? (
           <div className="max-h-[420px] space-y-3 overflow-y-auto pr-1">
-            {zoneLeadsError ? (
+            {mode === "individual" && zoneLeadsError ? (
               <div data-testid="location-density-zone-error" className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-5 text-sm text-rose-700">
                 {zoneLeadsError}
               </div>
-            ) : zoneLeadsLoading ? (
+            ) : mode === "individual" && zoneLeadsLoading ? (
               <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">Cargando leads...</div>
             ) : individualLeads.length > 0 ? (
               individualLeads.map((lead) => {
@@ -847,7 +1060,7 @@ export function LocationDensityMapBase({
               })
             ) : (
               <div data-testid="location-density-empty" className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-5 text-sm text-slate-500">
-                No hay leads individuales para esta cuadrícula.
+                {autoIndividual ? "No hay leads visibles en este nivel de zoom." : "No hay leads individuales para esta cuadrícula."}
               </div>
             )}
           </div>
@@ -873,7 +1086,7 @@ export function LocationDensityMapBase({
                       <p className="mt-1 text-xs text-slate-500">{location.lead_count} leads · {location.hot_leads_count} hot · promedio {location.avg_prospect_score.toFixed(1)}</p>
                       <p className="mt-2 text-xs font-medium text-slate-600">GPS {location.raw_gps_lead_count} · geocodificados {location.geocoded_lead_count}</p>
                     </div>
-                    <div className="rounded-full bg-slate-950 px-2.5 py-1 text-xs font-semibold text-white">{location.commercial_density_score}</div>
+                    <div className="rounded-full bg-slate-950 px-2.5 py-1 text-xs font-semibold text-white">{location.intensity_score ?? location.commercial_density_score}</div>
                   </div>
                 </button>
               );

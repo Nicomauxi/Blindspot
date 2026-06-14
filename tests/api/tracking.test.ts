@@ -124,16 +124,28 @@ vi.mock("../../api/src/db/client.js", () => ({
           niche: "restaurants",
           address: "Test St 123",
           website: null,
-          phone: null,
+          phone: "+598 99 111 222",
+          whatsapp: null,
+          canonical_fields: { email: "dueno@test.uy" }, // shape legacy string (N33)
         };
+        // Simula PostgREST: la tabla leads NO tiene columna email → 400 (42703). N30/N34.
+        const LEAD_COLUMNS = new Set(["id", "name", "niche", "address", "website", "phone", "whatsapp", "canonical_fields"]);
         return {
-          select: () => ({
-            in: (_col: string, _ids: string[]) =>
-              Promise.resolve({ data: [{ id: mockLeadData.id, name: mockLeadData.name }], error: null }),
-            eq: (_col: string, _val: string) => ({
-              single: async () => ({ data: mockLeadData, error: null }),
-            }),
-          }),
+          select: (columns = "*") => {
+            const requested = String(columns).split(",").map((c) => c.trim()).filter(Boolean);
+            const unknown = columns === "*" ? [] : requested.filter((c) => !LEAD_COLUMNS.has(c));
+            const fail = unknown.length > 0;
+            return {
+              in: (_col: string, _ids: string[]) =>
+                Promise.resolve({ data: [{ id: mockLeadData.id, name: mockLeadData.name }], error: null }),
+              eq: (_col: string, _val: string) => ({
+                single: async () =>
+                  fail
+                    ? { data: null, error: { code: "42703", message: `column leads.${unknown[0]} does not exist` } }
+                    : { data: mockLeadData, error: null },
+              }),
+            };
+          },
         };
       }
       if (table === "lead_dashboard") {
@@ -172,7 +184,17 @@ vi.mock("../../api/src/db/client.js", () => ({
                 return chain;
               },
               select: () => ({
+                // Comportamiento real de supabase-js: .single() sobre 0 filas → error PGRST116.
                 single: async () => {
+                  const t = _mockTrackings.find(
+                    (r) => r["id"] === matchedId &&
+                           (matchedStatus === null || r["status"] === matchedStatus)
+                  );
+                  if (!t) return { data: null, error: { code: "PGRST116", message: "0 rows" } };
+                  Object.assign(t, payload);
+                  return { data: { ...t }, error: null };
+                },
+                maybeSingle: async () => {
                   const t = _mockTrackings.find(
                     (r) => r["id"] === matchedId &&
                            (matchedStatus === null || r["status"] === matchedStatus)
@@ -268,6 +290,31 @@ beforeEach(() => {
 });
 
 describe("POST /api/v1/tracking", () => {
+  it("N2.4: aplica el lead_filter COMPLETO del cm (no solo contact_tier)", async () => {
+    // mockLeadRow no tiene niche → un cm restringido por niche no puede trackearlo,
+    // aunque el contact_tier ("A") sí pase.
+    _mockUser = {
+      id: CM_ID,
+      email: "cm@blindspot.local",
+      role: "cm",
+      lead_filter: { contact_tier: ["A"], niche: ["bars"] },
+      active: true,
+    };
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: CM_ID, email: "cm@blindspot.local" });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/tracking",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ lead_id: LEAD_ID }),
+    });
+
+    expect(res.statusCode).toBe(404);
+    await app.close();
+  });
+
   it("creates a tracking entry for an accessible lead", async () => {
     const { buildServer } = await import("../../api/src/server.js");
     const app = await buildServer();
@@ -423,6 +470,28 @@ describe("GET /api/v1/tracking/:id", () => {
     await app.close();
   });
 
+  it("N2.3: el lead embebido trae contacto (no null por columna inexistente)", async () => {
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: ADMIN_ID, email: "admin@blindspot.local" });
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/v1/tracking/${TRACKING_ID}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const lead = res.json().data.lead;
+    expect(lead).not.toBeNull();
+    expect(lead.name).toBe("Test Business");
+    expect(lead.phone).toBe("+598 99 111 222");
+    // email derivado de canonical_fields (string legacy o {value}).
+    expect(lead.email).toBe("dueno@test.uy");
+    expect(res.json().data.lead_name).toBe("Test Business");
+    await app.close();
+  });
+
   it("CM cannot see tracking owned by another user", async () => {
     _mockUser = { id: CM_ID, email: "cm@blindspot.local", role: "cm", lead_filter: null, active: true };
     const { buildServer } = await import("../../api/src/server.js");
@@ -461,6 +530,39 @@ describe("POST /api/v1/tracking/:id/transition", () => {
     expect(res.json().data.status).toBe("validation");
     expect(_lastEventInsert).toMatchObject({ event_type: "system_status_change", from_status: "pending", to_status: "validation" });
     expect(_auditInserts[0]).toMatchObject({ action: "tracking.transition", target_type: "lead" });
+    await app.close();
+  });
+
+  it("N2.2: una transición concurrente devuelve 409 state_conflict (no 500)", async () => {
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: ADMIN_ID, email: "admin@blindspot.local" });
+
+    // Simula la carrera: otro proceso ya movió el tracking después del read inicial.
+    // El mock filtra el UPDATE por status=currentStatus; cambiamos el row al vuelo
+    // interceptando el primer fetch (status leído = pending) y mutando luego.
+    const original = _mockTrackings[0]!;
+    const originalStatusGetter = original["status"];
+    let reads = 0;
+    Object.defineProperty(original, "status", {
+      configurable: true,
+      get() {
+        reads += 1;
+        // Primer read (handler lee currentStatus) → pending; después → ya cambiado.
+        return reads <= 1 ? originalStatusGetter : "observed";
+      },
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/v1/tracking/${TRACKING_ID}/transition`,
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ to_status: "validation", notes: "x" }),
+    });
+
+    Object.defineProperty(original, "status", { configurable: true, value: "pending", writable: true });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error_code).toBe("state_conflict");
     await app.close();
   });
 

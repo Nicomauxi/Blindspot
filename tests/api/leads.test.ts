@@ -4,6 +4,7 @@ const LEAD_ID = "00000000-0000-0000-0000-000000000001";
 const geocodeAddress = vi.fn();
 
 let _orderCalls: Array<{ column: string; ascending?: boolean }> = [];
+let _eqFilterCalls: Array<{ column: string; value: unknown }> = [];
 let _mockLeadQueryRows: Array<Record<string, unknown>> = [];
 
 let _mockUser: Record<string, unknown> = {
@@ -75,6 +76,15 @@ const mockLeadViewRow = {
     phone_alternatives: ["+598 98 111 222"],
     email_quality: [{ email: "ventas@parrilla.example.com", quality: "generic", mx_valid: true }],
     nested: { contact_phone: "+598 99 123456", additional_phones: ["+598 97 333 444"] },
+    // N0.2: paths que escapaban a la redacción por nombre de clave — el valor lleva PII
+    // bajo claves NO-contacto.
+    last_change_diff: {
+      changes: [{ field: "contact_email", from: null, to: "silca@silca.com.uy" }],
+    },
+    fetch_error: "Failed to parse URL from gperalta@estudiovanini.com.uy",
+    attempted_url: "https://api.whatsapp.com/send?phone=59899951138",
+    final_url: "https://wa.me/59893592683",
+    social_search: { facebook: { query: 'site:facebook.com "DONDESEATRANSPORTES@OUTLOOK.ES"' } },
   },
   inferred_state: {
     has_delivery: { value: true, confidence: 0.9 },
@@ -141,7 +151,7 @@ function makeLeadQueryChain() {
     Promise.resolve({ data: _mockLeadQueryRows, error: null, count: _mockLeadQueryRows.length });
   const leaf = () => chain;
   chain["in"] = leaf;
-  chain["eq"] = (_col: string, val: string) => {
+  chain["eq"] = (_col: string, val: unknown) => {
     if (_col === "id") {
       return {
         single: async () =>
@@ -150,6 +160,7 @@ function makeLeadQueryChain() {
             : { data: null, error: { code: "PGRST116" } },
       };
     }
+    _eqFilterCalls.push({ column: _col, value: val });
     return chain;
   };
   chain["gte"] = leaf;
@@ -234,6 +245,7 @@ vi.mock("../../api/src/db/client.js", () => ({
                 val === mockRejectedLeadRow.id
                   ? { data: mockRejectedLeadRow, error: null }
                   : { data: null, error: { code: "PGRST116" } },
+              maybeSingle: async () => ({ data: { favorite_contacts: [] }, error: null }),
             }),
             in: (_col: string, values: string[]) => Promise.resolve({
               data: _mockLeadQueryRows
@@ -361,6 +373,7 @@ describe("GET /api/v1/leads", () => {
   beforeEach(() => {
     process.env["API_JWT_SECRET"] = "test-secret-at-least-32-chars-long-1234";
     _orderCalls = [];
+    _eqFilterCalls = [];
     _mockLeadQueryRows = [mockLeadViewRow];
     _lastLlmUsageInsert = null;
     _mockLeadBriefError = null;
@@ -421,6 +434,74 @@ describe("GET /api/v1/leads", () => {
       })
     );
 
+    await app.close();
+  });
+
+  it("M3: el filtro sellable=true se traduce a un filtro eq sobre la columna sellable", async () => {
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/leads?sellable=true",
+      headers: { authorization: `Bearer ${token}` },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(_eqFilterCalls).toContainEqual({ column: "sellable", value: true });
+    await app.close();
+  });
+
+  it("C1: el filtro opportunity_no_web=true se traduce a eq sobre esa columna", async () => {
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/leads?opportunity_no_web=true",
+      headers: { authorization: `Bearer ${token}` },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(_eqFilterCalls).toContainEqual({ column: "opportunity_no_web", value: true });
+    await app.close();
+  });
+
+  it("has_social=true se traduce a eq sobre la columna has_social (filtro UI redes)", async () => {
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
+    const res = await app.inject({ method: "GET", url: "/api/v1/leads?has_social=true", headers: { authorization: `Bearer ${token}` } });
+    expect(res.statusCode).toBe(200);
+    expect(_eqFilterCalls).toContainEqual({ column: "has_social", value: true });
+    await app.close();
+  });
+
+  it("FS-02: has_social_candidate=true se traduce a eq sobre has_social_candidate (discovery sin perfil)", async () => {
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
+    const res = await app.inject({ method: "GET", url: "/api/v1/leads?has_social_candidate=true", headers: { authorization: `Bearer ${token}` } });
+    expect(res.statusCode).toBe(200);
+    expect(_eqFilterCalls).toContainEqual({ column: "has_social_candidate", value: true });
+    await app.close();
+  });
+
+  it("M3: sin el parámetro sellable no se filtra por esa columna", async () => {
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/leads",
+      headers: { authorization: `Bearer ${token}` },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(_eqFilterCalls.some((c) => c.column === "sellable")).toBe(false);
     await app.close();
   });
 
@@ -532,7 +613,9 @@ describe("GET /api/v1/leads", () => {
     });
 
     expect(res.statusCode).toBe(200);
-    expect(res.json().data.map((lead: { name: string }) => lead.name)).toEqual(["Lead marketing"]);
+    // Filtro inclusivo: "marketing" incluye al lead de doble oferta (Lead mixto, primary=software
+    // pero con marketing_score > 0). "Lead software" (marketing 0) queda fuera.
+    expect(res.json().data.map((lead: { name: string }) => lead.name)).toEqual(["Lead marketing", "Lead mixto"]);
     await app.close();
   });
 
@@ -938,6 +1021,12 @@ describe("GET /api/v1/leads/:id", () => {
     expect(res.json().data.digital_footprint.nested.contact_phone).toBe("***");
     expect(res.json().data.digital_footprint.nested.additional_phones).toEqual(["***"]);
     expect(res.json().data.lead_company_data.manager_phone).toBe("***");
+
+    // N0.2: assert recursivo — cero emails / links whatsapp / teléfonos UY en TODO el JSON.
+    const body = JSON.stringify(res.json().data);
+    expect(body).not.toMatch(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/i);
+    expect(body).not.toMatch(/wa\.me\/\d|api\.whatsapp\.com\/send\?phone=\d/i);
+    expect(body).not.toMatch(/\+?598\s?9\d[\d\s]{6,}/);
     await app.close();
   });
 

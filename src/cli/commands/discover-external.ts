@@ -1,14 +1,13 @@
 import { readFileSync } from "fs";
-import { MINTURProvider } from "../../modules/discovery/providers/mintur.js";
-import { OSMProvider } from "../../modules/discovery/providers/osm.js";
-import { YeluProvider } from "../../modules/discovery/providers/yelu.js";
-import { PedidosYaProvider } from "../../modules/discovery/providers/pedidosya.js";
+import { buildProvider } from "../../modules/discovery/registry.js";
 import { getDedupGeoRadiusMeters, getOnlineDedupThreshold } from "../../modules/discovery/config.js";
 import { findCrossSourceMatch, isFranchise } from "../../modules/discovery/deduplication.js";
 import { normalizeNiche } from "../../modules/discovery/filters.js";
 import { loadAllLeads } from "../../storage/leads.js";
 import { addCorroboratingSource, insertExternalLead } from "../../storage/external-leads.js";
-import { loadRuntimeLists } from "../../storage/system-lists.js";
+import { loadRuntimeLists, loadAllRuntime } from "../../storage/system-lists.js";
+import { normalizeCandidates } from "../../modules/discovery/candidate-normalizer.js";
+import type { AllRuntime } from "../../storage/system-lists.js";
 import { insertDiscoveryJob, updateDiscoveryJobStatus } from "../../storage/discovery-jobs.js";
 
 export interface DiscoverExternalOptions {
@@ -25,15 +24,6 @@ export interface ExternalDiscoveryExecutionSummary {
   fetched: number;
   inserted: number;
   corroborated: number;
-}
-
-function buildProvider(source: string) {
-  const sleepFn = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
-  if (source === "mintur") return new MINTURProvider();
-  if (source === "osm") return new OSMProvider();
-  if (source === "yelu") return new YeluProvider({ sleepFn });
-  if (source === "pedidosya") return new PedidosYaProvider({ sleepFn });
-  throw new Error(`Unknown provider source: ${source}`);
 }
 
 function loadLocations(opts: DiscoverExternalOptions): string[] {
@@ -57,6 +47,7 @@ async function runSingleLocation(opts: {
   dryRun: boolean;
   allLeads: Awaited<ReturnType<typeof loadAllLeads>>;
   runtimeLists: Awaited<ReturnType<typeof loadRuntimeLists>>;
+  nicheAliases: AllRuntime["mappings"]["nicheAliases"];
   dedupThreshold: number;
   geoRadiusMeters: number;
 }): Promise<{ fetched: number; inserted: number; corroborated: number }> {
@@ -64,6 +55,9 @@ async function runSingleLocation(opts: {
   const normalizedNiche = normalizeNiche(opts.niche);
 
   let candidates = await provider.discover({ niche: normalizedNiche, location: opts.location });
+  // Capa normalizadora común: reclasifica el niche con el vocabulario dinámico para TODOS los
+  // sources por igual (no ad-hoc por provider), preservando el origen.
+  candidates = normalizeCandidates(candidates, opts.nicheAliases);
   if (opts.limit !== undefined) {
     candidates = candidates.slice(0, opts.limit);
   }
@@ -103,8 +97,11 @@ export async function executeExternalDiscovery(opts: {
   limit?: number;
   dryRun: boolean;
 }): Promise<ExternalDiscoveryExecutionSummary> {
-  const allLeads = await loadAllLeads();
+  // Ley 18.331: excluir personas físicas del pool de dedup → un candidato nuevo no debe matchear
+  // (y quedar "corroborado"/descartado) contra una persona física ya minimizada.
+  const allLeads = (await loadAllLeads()).filter((l) => !l.is_natural_person);
   const runtimeLists = await loadRuntimeLists();
+  const runtime = await loadAllRuntime();
   const dedupThreshold = getOnlineDedupThreshold();
   const geoRadiusMeters = getDedupGeoRadiusMeters();
 
@@ -115,6 +112,7 @@ export async function executeExternalDiscovery(opts: {
     dryRun: opts.dryRun,
     allLeads,
     runtimeLists,
+    nicheAliases: runtime.mappings.nicheAliases,
     dedupThreshold,
     geoRadiusMeters,
   };

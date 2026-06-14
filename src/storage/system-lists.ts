@@ -298,7 +298,12 @@ export async function loadRuntimeLists(): Promise<RuntimeLists> {
       platformHosts,
       blockedInstagramHosts:  byName("blocked_instagram_hosts"),
       foreignTlds:            new Set(byName("foreign_tlds")),
-      foreignEmailTlds:       new Set(byName("foreign_tlds")),
+      // F6.2: antes leía foreign_tlds dos veces — los TLDs de email compuestos
+      // (com.br, com.ar…) nunca llegaban. Lista vacía → fallback hardcodeado.
+      foreignEmailTlds: (() => {
+        const raw = byName("foreign_email_tlds");
+        return raw.length > 0 ? new Set(raw) : fallbackLists().foreignEmailTlds;
+      })(),
       foreignGeoTerms:        byName("foreign_geo_terms"),
       foreignPhonePrefixes:   byName("foreign_phone_prefixes"),
       franchiseNames: (() => {
@@ -689,7 +694,8 @@ export async function detectAndSeedHeuristicDomains(minLeadCount = 2): Promise<n
 }
 
 /*
-  Seed inicial para franchise_names — ejecutar una vez en la DB:
+  Seed de franchise_names: ahora vive en supabase/migrations/20260611000000_seed_franchise_names.sql (F2.7).
+  (Referencia histórica del contenido:)
 
   INSERT INTO system_lists (list_name, value, scope, source, confidence, reason, enabled) VALUES
     ('franchise_names', 'Abitab', NULL, 'seed', 1.0, 'cadena financiera UY', true),

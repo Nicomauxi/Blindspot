@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { getLogger } from "../../../../src/shared/logger.js";
 import { getDb } from "../../db/client.js";
 import { buildBackupOverview, getDefaultBackupSchedulerSnapshot, type BackupOverview } from "../backups/service.js";
 import { getBackupScheduler } from "../backups/runtime.js";
@@ -244,6 +245,128 @@ async function safeBackupOverview(): Promise<BackupOverview | null> {
   }
 }
 
+// ─── Lista unificada de runs (Estado del run, IA Parte A) ────────────────────────
+// pipeline_runs (con fases) + tabla runs (enrichment/scoring/social) + discovery_jobs,
+// normalizados a un shape común para la UI — incluye terminados, no sólo activos.
+
+export const UNIFIED_RUN_KINDS = ["pipeline", "enrichment", "scoring", "social", "discovery"] as const;
+
+export interface UnifiedRunItem {
+  id: string;
+  kind: string;
+  status: string;
+  started_at: string | null;
+  finished_at: string | null;
+  label: string | null;
+  // Encadenamiento (p. ej. scoring post-enrich): id del run que lo originó.
+  source_run_id: string | null;
+  progress: Record<string, unknown> | null;
+  phases: unknown;
+}
+
+// Los runs de enrichment por filtro usan sentinels __enrichment_*__ en niche/location:
+// no son labels visibles.
+function cleanRunLabel(parts: Array<string | null | undefined>): string | null {
+  const visible = parts.filter(
+    (p): p is string => typeof p === "string" && p.length > 0 && !p.startsWith("__")
+  );
+  return visible.length > 0 ? visible.join(" · ") : null;
+}
+
+export async function listUnifiedRuns(
+  opts: { types?: string[]; limit?: number } = {}
+): Promise<UnifiedRunItem[]> {
+  const db = getDb();
+  const limit = Math.max(1, Math.min(opts.limit ?? 30, 100));
+
+  const [pipelineRes, runsRes, discoveryRes] = await Promise.allSettled([
+    db
+      .from("pipeline_runs")
+      .select("id, status, triggered_by, created_at, started_at, completed_at, phase_results")
+      .order("created_at", { ascending: false })
+      .limit(limit),
+    db
+      .from("runs")
+      .select("id, kind, status, started_at, finished_at, niche, location, config, stats")
+      .order("started_at", { ascending: false })
+      .limit(limit),
+    db
+      .from("discovery_jobs")
+      .select("id, source, location, niche, status, created_at, started_at, completed_at")
+      .order("created_at", { ascending: false })
+      .limit(limit),
+  ]);
+
+  // N111: un fallo de cualquiera de las 3 queries se veía como "dashboard vacío"
+  // sin rastro — se loguea el rechazo.
+  for (const [name, res] of [["pipeline_runs", pipelineRes], ["runs", runsRes], ["discovery_jobs", discoveryRes]] as const) {
+    if (res.status === "rejected") {
+      getLogger().error({ source: name, err: String(res.reason) }, "listUnifiedRuns: query failed (sección omitida)");
+    } else if ((res.value as { error?: { message: string } | null }).error) {
+      getLogger().error({ source: name, err: (res.value as { error: { message: string } }).error.message }, "listUnifiedRuns: query error (sección omitida)");
+    }
+  }
+
+  const items: UnifiedRunItem[] = [];
+
+  if (pipelineRes.status === "fulfilled") {
+    type PipelineRow = { id: string; status: string; triggered_by: string | null; created_at: string | null; started_at: string | null; completed_at: string | null; phase_results: unknown };
+    for (const r of (((pipelineRes.value as { data: unknown }).data ?? []) as PipelineRow[])) {
+      items.push({
+        id: r.id,
+        kind: "pipeline",
+        status: r.status,
+        started_at: r.started_at ?? r.created_at ?? null,
+        finished_at: r.completed_at ?? null,
+        label: cleanRunLabel([r.triggered_by ? `por ${r.triggered_by}` : null]),
+        source_run_id: null,
+        progress: null,
+        phases: r.phase_results ?? null,
+      });
+    }
+  }
+
+  if (runsRes.status === "fulfilled") {
+    type RunRow = { id: string; kind: string | null; status: string; started_at: string | null; finished_at: string | null; niche: string | null; location: string | null; config: Record<string, unknown> | null; stats: Record<string, unknown> | null };
+    for (const r of (((runsRes.value as { data: unknown }).data ?? []) as RunRow[])) {
+      const sourceRunId = r.config?.["source_run_id"];
+      items.push({
+        id: r.id,
+        kind: r.kind ?? "enrichment",
+        status: r.status,
+        started_at: r.started_at,
+        finished_at: r.finished_at ?? null,
+        label: cleanRunLabel([r.niche, r.location]),
+        source_run_id: typeof sourceRunId === "string" ? sourceRunId : null,
+        progress: r.stats ?? null,
+        phases: null,
+      });
+    }
+  }
+
+  if (discoveryRes.status === "fulfilled") {
+    type DiscoveryRow = { id: string; source: string | null; location: string | null; niche: string | null; status: string; created_at: string | null; started_at: string | null; completed_at: string | null };
+    for (const r of (((discoveryRes.value as { data: unknown }).data ?? []) as DiscoveryRow[])) {
+      items.push({
+        id: r.id,
+        kind: "discovery",
+        status: r.status,
+        started_at: r.started_at ?? r.created_at ?? null,
+        finished_at: r.completed_at ?? null,
+        label: cleanRunLabel([r.source, r.location, r.niche]),
+        source_run_id: null,
+        progress: null,
+        phases: null,
+      });
+    }
+  }
+
+  const filtered =
+    opts.types && opts.types.length > 0 ? items.filter((i) => opts.types!.includes(i.kind)) : items;
+  filtered.sort((a, b) => (b.started_at ?? "").localeCompare(a.started_at ?? ""));
+  return filtered.slice(0, limit);
+}
+
 export async function buildMonitoringOverview() {
   const db = getDb();
   const dbStartedAt = Date.now();
@@ -297,8 +420,18 @@ export async function buildMonitoringOverview() {
     db.from("discovery_jobs").select("*", { count: "exact", head: true }).eq("status", "running"),
     db.from("discovery_jobs").select("*", { count: "exact", head: true }).eq("status", "completed"),
     db.from("discovery_jobs").select("*", { count: "exact", head: true }).eq("status", "failed"),
+    // Runs activos de la tabla `runs` (enrichment/scoring/social, incluye los lanzados por terminal).
+    db
+      .from("runs")
+      .select("id, kind, status, started_at, niche, location")
+      .eq("status", "running")
+      .order("started_at", { ascending: false })
+      .limit(50),
   ]);
   const dbLatency = round(diffMs(dbStartedAt, Date.now()), 1);
+  const activeRunsTableRows = settled[11]?.status === "fulfilled"
+    ? ((settled[11].value as { data: unknown }).data as Array<{ id: string; kind: string | null; status: string; started_at: string; niche: string | null; location: string | null }> ?? [])
+    : [];
 
   const settled0 = settled[0].status === "fulfilled" ? settled[0].value : { data: null, error: new Error("query failed") };
   const settled1 = settled[1].status === "fulfilled" ? settled[1].value : { data: null, error: new Error("query failed") };
@@ -334,6 +467,24 @@ export async function buildMonitoringOverview() {
     isWithinRange(row.occurred_at, performanceWindow.start, performanceWindow.end)
   );
   const lastRun = runsRecent[0] ?? null;
+
+  // Lista UNIFICADA de runs activos: pipeline + enrichment/scoring/social (tabla runs,
+  // incluye los lanzados por terminal) + discovery jobs en curso. El "run activo" es el más
+  // nuevo y active_run_count es cuántos corren en simultáneo.
+  type ActiveRun = { id: string; kind: string; status: string; started_at: string | null; label: string | null };
+  const activeRunsUnified: ActiveRun[] = [];
+  if (activeRun) {
+    activeRunsUnified.push({ id: activeRun.id, kind: "pipeline", status: activeRun.status, started_at: activeRun.started_at ?? activeRun.created_at ?? null, label: null });
+  }
+  for (const r of activeRunsTableRows) {
+    activeRunsUnified.push({ id: r.id, kind: r.kind ?? "enrichment", status: r.status, started_at: r.started_at, label: [r.niche, r.location].filter(Boolean).join(" · ") || null });
+  }
+  for (const j of discoveryRecent) {
+    if (j.status === "running" || j.status === "queued") {
+      activeRunsUnified.push({ id: j.id, kind: "discovery", status: j.status, started_at: j.started_at ?? j.created_at ?? null, label: [j.source, j.location].filter(Boolean).join(" · ") || null });
+    }
+  }
+  activeRunsUnified.sort((a, b) => (b.started_at ?? "").localeCompare(a.started_at ?? ""));
 
   const cronMissed =
     config?.enabled &&
@@ -485,7 +636,9 @@ export async function buildMonitoringOverview() {
       last_run_at: lastRun?.completed_at ?? lastRun?.created_at ?? null,
       last_completed_at: config?.last_completed_at ?? null,
       last_status: lastRun?.status ?? null,
-      active_run: activeRun,
+      active_run: activeRunsUnified[0] ?? activeRun,
+      active_runs: activeRunsUnified,
+      active_run_count: activeRunsUnified.length,
       recent: runsRecent.slice(0, 10),
       runs_by_trigger: summarizeRuns(runsRecent),
     },

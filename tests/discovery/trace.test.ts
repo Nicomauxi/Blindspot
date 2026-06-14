@@ -11,6 +11,12 @@ const mockLogger = vi.hoisted(() => ({
   debug: vi.fn(),
 }));
 
+// N74: el CLI ahora tiene gate de presupuesto GP — null = sin config, gate se omite.
+vi.mock("../../src/storage/pipeline-config.js", () => ({
+  getGooglePlacesBudgetStatus: vi.fn(async () => null),
+  incrementGooglePlacesBudgetSpent: vi.fn(async () => null),
+}));
+
 vi.mock("fs/promises", () => ({
   mkdir: vi.fn(async () => undefined),
   writeFile: vi.fn(async (p: string, content: string) => { writtenFiles.set(String(p), content); }),

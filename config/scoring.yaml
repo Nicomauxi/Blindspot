@@ -1,4 +1,4 @@
-version: 2
+version: 3
 recent_reviews_threshold_days: 180
 
 # business_quality: 0-100. Qué tan "valioso como negocio offline" es este lead.
@@ -129,7 +129,7 @@ mutual_exclusions:
 cap: 100
 
 # Fórmula de prospect_score
-prospect_formula: "commercial_score_v2"
+prospect_formula: "commercial_score_v3"
 
 commercial_score:
   gap_depth_cap: 60
@@ -139,6 +139,7 @@ commercial_score:
     yelu: 10
     pedidosya: 15
     mintur: 20
+    miem_dei: 20 # fuente oficial (RUT/MIEM); antes caía a ?? 0 silencioso (N-SCORE.3)
   commercial_breadth:
     secondary_threshold: 30
     secondary_bonus: 8
@@ -156,8 +157,27 @@ commercial_score:
     corroboration_bonus: 2
     cap: 15
   accessibility:
-    tier_base: { X: 0.30, D: 0.65, C: 0.90, B: 1.15, A: 1.30 }
+    tier_base: { X: 0.35, D: 0.7, C: 0.92, B: 1.12, A: 1.28 }
     reliability_adjustment: { base: 0.75, weight: 0.25 }
+    score_adjustment: { base: 0.9, weight: 0.22 }
+    contact_score:
+      weights:
+        email: 30           # F3.4: bajado de 45 — un email aislado no debe alcanzar tier B
+        extra_email: 5      #       solo (45=umbral B). Canal válido pero no inmediato.
+        whatsapp_direct: 28
+        whatsapp_derived: 18
+        phone: 18           # móvil (señal de dueño)
+        phone_landline: 8   # fijo vale menos: suele ser gestor/oficina (DEI) — F3.3
+        phone_confirmed_bonus: 6
+        address: 8
+        website: 6
+        contact_form: 4
+        social_dm_channel: 3
+        whatsapp_web_link: 5
+        multi_channel_bonus: 6
+        high_confidence_bonus: 4
+      thresholds: { A: 70, B: 45, C: 24, D: 8 }
+      cap: 100
   timing:
     urgency_high: 0.15
     new_business_window: 0.05
@@ -173,8 +193,8 @@ commercial_score:
   urgency_bonus: { high: 5, medium: 2, low: 0 }
 
 thresholds:
-  hot: 55
-  pitcheable: 40
+  hot: 50
+  pitcheable: 35
   pool: 25
 
 pitch_hooks:
@@ -256,8 +276,8 @@ buyer_types:
       catalogo: 0.20
     inferred_bonuses:
       has_delivery: 10
-    inferred_penalties:
-      has_reservations: -100
+    # N08: inferred_penalties has_reservations eliminado — inalcanzable (el gate
+    # inferred_required ya bloquea has_reservations=true)
 
   catalogo_digital:
     niche_required:
@@ -269,8 +289,7 @@ buyer_types:
       catalogo:  0.55
       web_nuevo: 0.25
       marketing: 0.20
-    inferred_penalties:
-      has_online_catalog: -100
+    # N08: ídem — el gate ya bloquea has_online_catalog=true
 
   whatsapp_business:
     tag_required: whatsapp-confirmed

@@ -50,16 +50,9 @@ export const adminNavGroups: NavGroup[] = [
         icon: LeadsIcon,
       },
       {
-        href: "/admin/discovery",
-        label: "Discovery",
-        description: "Jobs de discovery y entrada de nuevos leads",
-        icon: DiscoveryIcon,
-        roles: ["admin"],
-      },
-      {
         href: "/admin/operations",
         label: "Operaciones",
-        description: "Pipeline, monitoreo y control del sistema",
+        description: "Pipeline, discovery, monitoreo y control del sistema",
         icon: PipelineIcon,
         roles: ["admin"],
       },
@@ -123,6 +116,13 @@ export const adminNavGroups: NavGroup[] = [
         label: "Usuarios",
         description: "Roles, filtros y acceso operativo",
         icon: UsersIcon,
+        roles: ["admin"],
+      },
+      {
+        href: "/admin/merge-candidates",
+        label: "Unión de leads",
+        description: "Revisar y confirmar uniones cross-source dudosas",
+        icon: MergeIcon,
         roles: ["admin"],
       },
       {
@@ -374,15 +374,6 @@ function LeadsIcon({ className }: IconProps) {
   );
 }
 
-function DiscoveryIcon({ className }: IconProps) {
-  return (
-    <svg {...iconProps(className)}>
-      <circle cx="11" cy="11" r="6" />
-      <path d="m20 20-4.2-4.2" />
-    </svg>
-  );
-}
-
 function PipelineIcon({ className }: IconProps) {
   return (
     <svg {...iconProps(className)}>
@@ -432,6 +423,16 @@ function PlatformIcon({ className }: IconProps) {
       <path d="M7 4v16" />
       <path d="M17 10v10" />
       <path d="M4 17h16" />
+    </svg>
+  );
+}
+
+function MergeIcon({ className }: IconProps) {
+  return (
+    <svg {...iconProps(className)}>
+      <path d="M7 4v6a4 4 0 0 0 4 4h6" />
+      <path d="M17 4v6a4 4 0 0 1-4 4H7" />
+      <path d="M14 11l3 3-3 3" />
     </svg>
   );
 }
@@ -572,7 +573,7 @@ export function AdminPageLayout({
 }) {
   return (
     <div className="space-y-6">
-      <header className="theme-panel rounded-2xl px-6 py-5">
+      <header className="theme-panel relative z-20 overflow-visible rounded-2xl px-6 py-5">
         {eyebrow ? (
           <p className="text-xs font-semibold uppercase tracking-[0.2em] text-sky-700">{eyebrow}</p>
         ) : null}

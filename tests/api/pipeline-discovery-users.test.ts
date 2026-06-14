@@ -125,6 +125,9 @@ vi.mock("../../api/src/db/client.js", () => ({
                   google_places_budget_total: 200,
                   google_places_budget_spent: 40,
                   google_places_alert_threshold: 10,
+                  fetch_timeout_ms: 5000,
+                  fetch_retries: 1,
+                  enrich_heuristic_max_concurrency: 6,
                 },
                 error: null,
               }),
@@ -171,17 +174,19 @@ vi.mock("../../api/src/db/client.js", () => ({
                 maybeSingle: async () => ({ data: null }),
               }),
             }),
-            in: (_c: string, values: unknown[]) => ({
-              limit: (_n: number) => ({
-                maybeSingle: async () => ({
-                  data: _activePipelineRun && values.includes(_activePipelineRun["status"]) ? _activePipelineRun : null,
+            in: (_c: string, values: unknown[]) => {
+              // N45: el abort ahora encadena .order().order().limit().maybeSingle()
+              const chain: Record<string, unknown> = {
+                limit: (_n: number) => ({
+                  maybeSingle: async () => ({
+                    data: _activePipelineRun && values.includes(_activePipelineRun["status"]) ? _activePipelineRun : null,
+                  }),
+                  then: (resolve: (v: unknown) => void) => resolve({ data: [], error: null, count: 0 }),
                 }),
-              }),
-              order: () => ({
-                limit: (_n: number) =>
-                  Promise.resolve({ data: [], error: null, count: 0 }),
-              }),
-            }),
+              };
+              chain["order"] = () => chain;
+              return chain;
+            },
           }),
           insert: () => ({
             select: () => ({
@@ -205,6 +210,11 @@ vi.mock("../../api/src/db/client.js", () => ({
                 error: null,
                 count: _mockLeads.length,
               }),
+              // N55: las rutas paginan con range()
+              range: (from: number, to: number) => Promise.resolve({
+                data: _mockLeads.slice(from, to + 1).map((lead) => ({ ...lead, contact_tier: (lead.contact_tier ?? null) })),
+                error: null,
+              }),
             }),
           }),
         };
@@ -217,6 +227,10 @@ vi.mock("../../api/src/db/client.js", () => ({
                 data: _mockDiscoveryJobs,
                 error: null,
                 count: _mockDiscoveryJobs.length,
+              }),
+              range: (from: number, to: number) => Promise.resolve({
+                data: _mockDiscoveryJobs.slice(from, to + 1),
+                error: null,
               }),
             }),
             eq: () => ({
@@ -645,6 +659,22 @@ describe("Discovery routes", () => {
     await app.close();
   });
 
+  it("POST /discovery/job-batches acepta la fuente miem_dei (DEI)", async () => {
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/discovery/job-batches",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ sources: ["miem_dei"], location: "Florida", niche: "", enrich_after_discovery: false }),
+    });
+    expect(res.statusCode).toBe(201);
+    const body = res.json();
+    expect(body.data.jobs[0]?.source).toBe("miem_dei");
+    await app.close();
+  });
+
   it("POST /discovery/job-batches supports discovery-only mode", async () => {
     const { buildServer } = await import("../../api/src/server.js");
     const app = await buildServer();
@@ -681,6 +711,10 @@ describe("Discovery routes", () => {
       filters: { source: "google_places", prospect_score_gte: 70, contact_tier: undefined, niche: undefined, primary_offer: undefined, q: undefined },
       withHeuristic: true,
       concurrency: 4,
+      forceRefresh: false,
+      heuristicConcurrency: 4,
+      leadLimit: 250,
+      rescoreOnComplete: false,
     });
     await app.close();
   });
@@ -697,6 +731,145 @@ describe("Discovery routes", () => {
     });
     expect(res.statusCode).toBe(400);
     expect(res.json().error_code).toBe("filters_required");
+    await app.close();
+  });
+
+  it("POST /admin/enrichment/filter-jobs pasa force_refresh y heuristicConcurrency al job", async () => {
+    startFilterEnrichmentJob.mockResolvedValue({ runId: "filter-run-2" });
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/admin/enrichment/filter-jobs",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ source: "google_places", with_heuristic: true, concurrency: 4, force_refresh: true }),
+    });
+    expect(res.statusCode).toBe(202);
+    expect(res.json().data.force_refresh).toBe(true);
+    expect(startFilterEnrichmentJob).toHaveBeenCalledWith(
+      expect.objectContaining({ forceRefresh: true, heuristicConcurrency: 4, leadLimit: 250 })
+    );
+    await app.close();
+  });
+
+  it("POST /admin/enrichment/filter-jobs pasa rescore_on_complete al job", async () => {
+    startFilterEnrichmentJob.mockResolvedValue({ runId: "filter-run-4" });
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/admin/enrichment/filter-jobs",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ source: "google_places", with_heuristic: true, concurrency: 4, rescore_on_complete: true }),
+    });
+    expect(res.statusCode).toBe(202);
+    expect(res.json().data.rescore_on_complete).toBe(true);
+    expect(startFilterEnrichmentJob).toHaveBeenCalledWith(
+      expect.objectContaining({ rescoreOnComplete: true })
+    );
+    await app.close();
+  });
+
+  it("POST /admin/enrichment/filter-jobs scope=all acepta colecciones grandes (hasta 10000)", async () => {
+    countLeadsByFilterSelection.mockResolvedValue(1234);
+    startFilterEnrichmentJob.mockResolvedValue({ runId: "filter-run-3" });
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/admin/enrichment/filter-jobs",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ source: "google_places", with_heuristic: true, concurrency: 4, scope: "all" }),
+    });
+    expect(res.statusCode).toBe(202);
+    const body = res.json();
+    expect(body.data.lead_count).toBe(1234);
+    expect(body.data.scope).toBe("all");
+    expect(startFilterEnrichmentJob).toHaveBeenCalledWith(
+      expect.objectContaining({ leadLimit: 10000 })
+    );
+    await app.close();
+  });
+
+  it("POST /admin/enrichment/filter-jobs scope selección (default) mantiene el tope de 250", async () => {
+    countLeadsByFilterSelection.mockResolvedValue(1234);
+    startFilterEnrichmentJob.mockClear();
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/admin/enrichment/filter-jobs",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ source: "google_places", with_heuristic: true, concurrency: 4 }),
+    });
+    expect(res.statusCode).toBe(400);
+    const body = res.json();
+    expect(body.error_code).toBe("lead_limit_exceeded");
+    expect(body.details).toEqual({ lead_count: 1234, limit: 250 });
+    expect(startFilterEnrichmentJob).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it("POST /admin/enrichment/filter-jobs scope=all rechaza más de 10000 leads", async () => {
+    countLeadsByFilterSelection.mockResolvedValue(10001);
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/admin/enrichment/filter-jobs",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ source: "google_places", with_heuristic: true, concurrency: 4, scope: "all" }),
+    });
+    expect(res.statusCode).toBe(400);
+    const body = res.json();
+    expect(body.error_code).toBe("lead_limit_exceeded");
+    expect(body.details).toEqual({ lead_count: 10001, limit: 10000 });
+    await app.close();
+  });
+
+  it("POST /admin/enrichment/filter-jobs settea los knobs de velocidad del config en el env del proceso", async () => {
+    delete process.env["FETCH_TIMEOUT_MS"];
+    delete process.env["FETCH_RETRIES"];
+    delete process.env["ENRICH_HEURISTIC_MAX_CONCURRENCY"];
+    countLeadsByFilterSelection.mockResolvedValue(2);
+    startFilterEnrichmentJob.mockResolvedValue({ runId: "filter-run-5" });
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/admin/enrichment/filter-jobs",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ source: "google_places", with_heuristic: true, concurrency: 4 }),
+    });
+    expect(res.statusCode).toBe(202);
+    // El mock de pipeline_config define 5000/1/6: el job in-process los lee del env por llamada.
+    expect(process.env["FETCH_TIMEOUT_MS"]).toBe("5000");
+    expect(process.env["FETCH_RETRIES"]).toBe("1");
+    expect(process.env["ENRICH_HEURISTIC_MAX_CONCURRENCY"]).toBe("6");
+    delete process.env["FETCH_TIMEOUT_MS"];
+    delete process.env["FETCH_RETRIES"];
+    delete process.env["ENRICH_HEURISTIC_MAX_CONCURRENCY"];
+    await app.close();
+  });
+
+  it("POST /admin/enrichment/filter-jobs scope=all no aplica a re_discovery", async () => {
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/admin/enrichment/filter-jobs",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ source: "google_places", with_heuristic: true, concurrency: 4, scope: "all", mode: "re_discovery" }),
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error_code).toBe("scope_not_supported");
     await app.close();
   });
 
@@ -802,6 +975,80 @@ describe("Discovery routes", () => {
     await app.close();
   });
 
+  it("GET /admin/geo/lead-density clampea bbox fuera de rango (zoom-out extremo) en vez de 400", async () => {
+    _mockLeads = [
+      {
+        id: "lead-gps",
+        source: "yelu",
+        niche: "restaurant",
+        address: "Pocitos, Montevideo, Uruguay",
+        prospect_score: 81,
+        contact_tier: "A",
+        gps: { lat: -34.905, lng: -56.191 },
+        corroborating_sources: [],
+      },
+    ];
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
+    // Viewport que da la vuelta al mundo: west=-638, east=454, north=89.4 (válido), south=-85.
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/admin/geo/lead-density?prospect_score_gte=0&limit=4000&heat_metric=mixed&zoom=0&south=-85.051129&west=-638.4375&north=89.400096&east=454.21875",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(Array.isArray(body.data.locations)).toBe(true);
+    await app.close();
+  });
+
+  it("GET /admin/geo/lead-density does not 500 when geocoding one lead fails", async () => {
+    geocodeAddress.mockImplementation(async (address: string) => {
+      if (address.includes("Falla")) throw new Error("geocoder unavailable");
+      return null;
+    });
+    _mockLeads = [
+      {
+        id: "lead-gps-ok",
+        source: "yelu",
+        niche: "restaurant",
+        address: "Montevideo, Uruguay",
+        prospect_score: 72,
+        contact_tier: "A",
+        gps: { lat: -34.9, lng: -56.2 },
+        corroborating_sources: [],
+      },
+      {
+        id: "lead-geocode-fails",
+        source: "osm",
+        niche: "restaurant",
+        address: "Calle Falla 123, Montevideo",
+        prospect_score: 65,
+        contact_tier: "B",
+        gps: null,
+        corroborating_sources: [],
+      },
+    ];
+
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/admin/geo/lead-density?prospect_score_gte=0&limit=30&include_geocode=true",
+      headers: { authorization: "Bearer " + token },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.data.meta.filtered_leads).toBe(2);
+    expect(body.data.meta.positioned_leads).toBe(1);
+    expect(body.data.meta.unresolved_address_leads).toBe(1);
+    expect(body.data.locations.length).toBeGreaterThan(0);
+    await app.close();
+  });
+
   it("GET /admin/geo/lead-density applies zone_ids with the same AND semantics as the rest of the filters", async () => {
     _mockLeads = [
       { id: "zone-mvd-match", source: "yelu", niche: "restaurant", address: "Montevideo, Uruguay", prospect_score: 82, contact_tier: "A", gps: { lat: -34.9, lng: -56.2 }, corroborating_sources: [] },
@@ -841,11 +1088,16 @@ describe("Discovery routes", () => {
   }
 
   async function buildWorkbookUpload(rows: Record<string, unknown>[]) {
-    const { utils, write } = await import("xlsx");
-    const workbook = utils.book_new();
-    const sheet = utils.json_to_sheet(rows);
-    utils.book_append_sheet(workbook, sheet, "places");
-    const buffer = Buffer.from(write(workbook, { type: "buffer", bookType: "xlsx" }));
+    // N70: exceljs (xlsx@0.18 removido por CVEs)
+    const { default: ExcelJS } = await import("exceljs");
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet("places");
+    const headers = Array.from(new Set(rows.flatMap((r) => Object.keys(r))));
+    sheet.addRow(headers);
+    for (const row of rows) {
+      sheet.addRow(headers.map((h) => row[h] ?? null));
+    }
+    const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
     return buildBinaryUpload(buffer, "places.xlsx");
   }
 
@@ -1472,6 +1724,51 @@ describe("GET /admin/geo/zone-leads — MAP-4 individual mode", () => {
     await app.close();
   });
 
+  it("returns zone leads without 500 when geocoding a scoped lead fails", async () => {
+    geocodeAddress.mockImplementation(async () => {
+      throw new Error("geocoder unavailable");
+    });
+    _mockLeads = [
+      {
+        id: "lead-zone-gps",
+        name: "Restaurante GPS",
+        source: "yelu",
+        niche: "restaurant",
+        contact_tier: "A",
+        prospect_score: 80,
+        address: "Montevideo, Uruguay",
+        gps: { lat: -34.9, lng: -56.2 },
+        corroborating_sources: [],
+      },
+      {
+        id: "lead-zone-geocode-fails",
+        name: "Restaurante Sin GPS",
+        source: "osm",
+        niche: "restaurant",
+        contact_tier: "B",
+        prospect_score: 60,
+        address: "Calle Falla 123, Montevideo",
+        gps: null,
+        corroborating_sources: [],
+      },
+    ];
+
+    const { buildServer } = await import("../../api/src/server.js");
+    const app = await buildServer();
+    const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/admin/geo/zone-leads?location_key=montevideo",
+      headers: { authorization: "Bearer " + token },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.total).toBe(1);
+    expect(body.data.map((lead: { id: string }) => lead.id)).toEqual(["lead-zone-gps"]);
+    await app.close();
+  });
+
   it("honors the shared filter contract when drilling into zone-leads", async () => {
     _mockLeads = [
       { id: "lead-zone-filter-match", name: "Restaurante Centro", source: "yelu", niche: "restaurant", contact_tier: "A", prospect_score: 82, address: "Montevideo, Uruguay", gps: { lat: -34.9, lng: -56.2 }, corroborating_sources: [], website: "https://centro.example.com", phone: "+59899111222", review_count: 48, primary_offer: "software_pos", pitch_hook: "POS con oportunidad inmediata", contact_ready: true, tags: ["instagram-confirmed"] },
@@ -1539,7 +1836,7 @@ describe("GET /admin/geo/zone-leads — MAP-4 individual mode", () => {
     const token = app.jwt.sign({ user_id: "admin-user-id", email: "admin@blindspot.local" });
     const densityRes = await app.inject({
       method: "GET",
-      url: "/api/v1/admin/geo/lead-density?limit=10",
+      url: "/api/v1/admin/geo/lead-density?limit=10&include_geocode=true",
       headers: { authorization: `Bearer ${token}` },
     });
     expect(densityRes.statusCode).toBe(200);

@@ -12,8 +12,10 @@ const mocks = vi.hoisted(() => ({
   completeRun: vi.fn(),
   failRun: vi.fn(),
   updateDiscoveryJobStatus: vi.fn(),
+  claimDiscoveryJob: vi.fn(async () => true),
   updateDiscoveryJobEnrichmentStatus: vi.fn(),
   enrichCommand: vi.fn(),
+  executeGooglePlacesDiscoveryJob: vi.fn(),
 }));
 
 vi.mock("../../src/shared/supabase.js", () => ({
@@ -35,6 +37,7 @@ vi.mock("../../src/storage/runs.js", () => ({
 vi.mock("../../src/storage/discovery-jobs.js", () => ({
   updateDiscoveryJobStatus: mocks.updateDiscoveryJobStatus,
   updateDiscoveryJobEnrichmentStatus: mocks.updateDiscoveryJobEnrichmentStatus,
+  claimDiscoveryJob: mocks.claimDiscoveryJob,
 }));
 
 vi.mock("../../src/cli/commands/enrich.js", () => ({
@@ -42,7 +45,7 @@ vi.mock("../../src/cli/commands/enrich.js", () => ({
 }));
 
 vi.mock("../../src/modules/pipeline/google-places-discovery-job.js", () => ({
-  executeGooglePlacesDiscoveryJob: vi.fn(),
+  executeGooglePlacesDiscoveryJob: mocks.executeGooglePlacesDiscoveryJob,
 }));
 
 import { processQueuedDiscoveryJobs } from "../../src/modules/pipeline/discovery-jobs.js";
@@ -79,7 +82,7 @@ describe("processQueuedDiscoveryJobs", () => {
   it("chains enrichment after a queued discovery job when enabled", async () => {
     const result = await processQueuedDiscoveryJobs(1);
 
-    expect(result).toEqual({ jobs_processed: 1, leads_found: 12, leads_new: 4 });
+    expect(result).toEqual({ jobs_processed: 1, jobs_failed: 0, leads_found: 12, leads_new: 4 });
     expect(mocks.createRun).toHaveBeenCalledWith(expect.objectContaining({
       location: "Montevideo",
       niche: "restaurant",
@@ -116,13 +119,67 @@ describe("processQueuedDiscoveryJobs", () => {
     expect(result.jobs_processed).toBe(2);
     expect(result.leads_found).toBe(18);
     expect(result.leads_new).toBe(5);
-    expect(mocks.updateDiscoveryJobStatus).toHaveBeenCalledWith("job-1", "running");
-    expect(mocks.updateDiscoveryJobStatus).toHaveBeenCalledWith("job-2", "running");
+    expect(mocks.claimDiscoveryJob).toHaveBeenCalledWith("job-1"); // N40: claim CAS
+    expect(mocks.claimDiscoveryJob).toHaveBeenCalledWith("job-2");
+  });
+
+  it("N4.3/N40: un job ya claimeado por otro proceso se saltea (claim CAS)", async () => {
+    mocks.claimDiscoveryJob.mockResolvedValueOnce(false);
+
+    const summary = await processQueuedDiscoveryJobs(1);
+
+    expect(summary.jobs_processed).toBe(0);
+    expect(mocks.executeExternalDiscovery).not.toHaveBeenCalled();
   });
 
   it("returns empty summary when no jobs are queued", async () => {
     mocks.listChain.limit.mockResolvedValue({ data: [], error: null });
     const result = await processQueuedDiscoveryJobs(4);
-    expect(result).toEqual({ jobs_processed: 0, leads_found: 0, leads_new: 0 });
+    expect(result).toEqual({ jobs_processed: 0, jobs_failed: 0, leads_found: 0, leads_new: 0 });
+  });
+
+  it("D14: serializa los jobs google_places (nunca corren 2 en paralelo)", async () => {
+    mocks.listChain.limit.mockResolvedValue({
+      data: [
+        { id: "gp-1", source: "google_places", location: "Montevideo", niche: "restaurant", profile: null, concurrency: null, max_results: 50, cost_cap_usd: 5, cpu_budget: null, enrich_after_discovery: false },
+        { id: "gp-2", source: "google_places", location: "Canelones", niche: "hotel", profile: null, concurrency: null, max_results: 50, cost_cap_usd: 5, cpu_budget: null, enrich_after_discovery: false },
+      ],
+      error: null,
+    });
+    let active = 0;
+    let maxActive = 0;
+    mocks.executeGooglePlacesDiscoveryJob.mockImplementation(async () => {
+      active++;
+      maxActive = Math.max(maxActive, active);
+      await new Promise((r) => setTimeout(r, 5));
+      active--;
+      return { fetched: 3, inserted: 1, estimatedCostUsd: 1, actualCostUsd: 1, runId: "gp-run", budgetAborted: false };
+    });
+
+    const result = await processQueuedDiscoveryJobs(4);
+
+    expect(maxActive).toBe(1);
+    expect(result.jobs_processed).toBe(2);
+  });
+
+  it("D5: cuenta los jobs fallidos en jobs_failed sin contarlos como exitosos", async () => {
+    mocks.listChain.limit.mockResolvedValue({
+      data: [
+        { id: "job-ok", source: "yelu", location: "Montevideo", niche: "restaurant", profile: null, concurrency: null, max_results: 100, cost_cap_usd: null, cpu_budget: null, enrich_after_discovery: false },
+        { id: "job-fail", source: "yelu", location: "Canelones", niche: "hotel", profile: null, concurrency: null, max_results: 100, cost_cap_usd: null, cpu_budget: null, enrich_after_discovery: false },
+      ],
+      error: null,
+    });
+    mocks.createRun.mockResolvedValueOnce({ id: "run-ok" }).mockResolvedValueOnce({ id: "run-fail" });
+    mocks.executeExternalDiscovery
+      .mockResolvedValueOnce({ fetched: 10, inserted: 3, corroborated: 0 })
+      .mockRejectedValueOnce(new Error("provider timeout"));
+
+    const result = await processQueuedDiscoveryJobs(2);
+
+    expect(result.jobs_processed).toBe(2);
+    expect(result.jobs_failed).toBe(1);
+    expect(result.leads_found).toBe(10);
+    expect(result.leads_new).toBe(3);
   });
 });

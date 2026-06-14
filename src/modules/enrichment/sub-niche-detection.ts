@@ -61,7 +61,7 @@ async function llmDetect(name: string, address: string): Promise<string | null> 
   try {
     if (provider === "gemini") {
       const apiKey = process.env["GEMINI_API_KEY"] ?? "";
-      const model = process.env["LLM_MODEL"] ?? "gemini-2.0-flash";
+      const model = process.env["LLM_MODEL"] ?? "gemini-2.5-flash";
       if (!apiKey) return null;
       const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
       const res = await fetch(url, {
