@@ -79,7 +79,7 @@ export function OfferBarsPreview({ offerings, pitchHook, max = 3, className }: O
       <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Ofertas sugeridas</div>
       <div className="mt-1.5 space-y-1.5">
         {ranked.map((offering) => (
-          <div key={offering.kind + offering.id} className="flex items-center gap-2">
+          <div key={`${offering.kind}::${offering.id}`} className="flex items-center gap-2">
             <span
               title={OFFER_KIND_LABEL[offering.kind]}
               className={cn("h-2 w-2 shrink-0 rounded-full", OFFER_KIND_DOT[offering.kind])}
@@ -100,8 +100,8 @@ export function OfferBarsPreview({ offerings, pitchHook, max = 3, className }: O
             {pitchHook ? <p className="text-[11px] text-slate-600">{pitchHook}</p> : null}
             {topOffer.signals.length > 0 ? (
               <ul className="space-y-0.5">
-                {topOffer.signals.slice(0, 4).map((signal) => (
-                  <li key={signal.label} className="flex items-center gap-1.5 text-[11px] text-slate-600">
+                {topOffer.signals.slice(0, 4).map((signal, index) => (
+                  <li key={`${signal.label}::${index}`} className="flex items-center gap-1.5 text-[11px] text-slate-600">
                     <span className={cn("text-[9px]", SIGNAL_WEIGHT_CLASS[signal.weight])}>
                       {SIGNAL_WEIGHT_ICON[signal.weight]}
                     </span>
