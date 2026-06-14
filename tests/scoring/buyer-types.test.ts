@@ -129,14 +129,14 @@ describe("software_pos", () => {
     expect(s.score).toBe(54); // N08 normalizado
   });
 
-  it("BL-03: has_pos 'unknown' aplica penalización SUAVE (-15 = -50*0.3), no cero", () => {
+  it("BL-03: has_pos 'unknown' aplica penalización SUAVE (-7 = round(-50*0.15)), no cero", () => {
     const l = lead({
       ...withSubScores({ software: 60 }),
       inferred_state: { has_pos: { value: null, confidence: 0 }, digitalization_level: "none", computed_at: "2026-01-01T00:00:00Z" } as Lead["inferred_state"],
     });
     const s = computeAllBuyerScores(l).find((x) => x.buyer_type === "software_pos")!;
-    expect(s.breakdown.adjustments).toBe(-15);
-    expect(s.breakdown.applied_modifiers).toContain("penalty:has_pos:unknown:-15");
+    expect(s.breakdown.adjustments).toBe(-7);
+    expect(s.breakdown.applied_modifiers).toContain("penalty:has_pos:unknown:-7");
   });
 
   it("BL-03: has_pos verificado=false (confidence>0) NO penaliza (oferta relevante)", () => {

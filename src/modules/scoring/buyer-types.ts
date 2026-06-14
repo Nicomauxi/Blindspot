@@ -60,8 +60,9 @@ const UNCERTAINTY_MULTIPLIER = 0.5;
 const DERIVED_WHATSAPP_MULTIPLIER = 0.7;
 // BL-03: fracción de la penalización inferida que se aplica cuando el campo es 'unknown'
 // (no verificado). Hedge entre 0 (premiar ignorancia, comportamiento previo) y 1 (penalizar
-// como si estuviera confirmado). 0.3 = penalización suave.
-const UNKNOWN_PENALTY_FRACTION = 0.3;
+// como si estuviera confirmado). 0.15 = penalización suave (calibrado: con 0.3 se movían ~550
+// leads de software_pos→marketing; 0.15 reduce ese desplazamiento manteniendo el anti-ignorancia).
+const UNKNOWN_PENALTY_FRACTION = 0.15;
 
 function computeBuyerScore(
   lead: Lead,
