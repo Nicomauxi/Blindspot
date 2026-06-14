@@ -23,6 +23,7 @@ export interface CommercialScoreV3Snapshot {
   accessibility_bonus: number;
   timing_bonus: number;
   social_bonus: number;
+  digital_gap_bonus: number;
   dedupe_penalty: number;
   score_band: "normal" | "bueno" | "muy_bueno" | "excepcional";
   score_model: ScoreModelFamily;
@@ -182,7 +183,10 @@ export function simulateCommercialScoreV3(
   // F1: bonus por señal social (audiencia/actividad/audiencia-sin-web). Entra al base como
   // un término aditivo más, igual que source_quality_bonus.
   const socialBonus = computeSocialBonus(computeSocialSignal(lead), scenario.social);
-  const base = gapDepth + commercialBreadth + businessQualityPts + sourceQualityBonus + socialBonus;
+  // FS-22: la dimensión digital_gap (presencia/calidad digital) entra al base con un peso
+  // calibrado (default 0 = inerte). context.digital_gap.total ya viene cap-eado.
+  const digitalGapBonus = context.digital_gap.total * (scenario.digital_gap_weight ?? 0);
+  const base = gapDepth + commercialBreadth + businessQualityPts + sourceQualityBonus + socialBonus + digitalGapBonus;
 
   let score = 0;
   if (scenario.family === "additive_pure") {
@@ -218,6 +222,7 @@ export function simulateCommercialScoreV3(
     accessibility_bonus: accessibilityBonus,
     timing_bonus: timingBonus,
     social_bonus: socialBonus,
+    digital_gap_bonus: digitalGapBonus,
     dedupe_penalty: dedupePenalty,
     score_band: scoreBand,
     score_model: scenario.family,
@@ -268,6 +273,7 @@ export function buildScoreResultV3(lead: Lead, scenario: ScoreCalibrationScenari
       accessibility_bonus: snapshot.accessibility_bonus,
       timing_bonus: snapshot.timing_bonus,
       social_bonus: snapshot.social_bonus,
+      digital_gap_bonus: snapshot.digital_gap_bonus,
       dedupe_penalty: snapshot.dedupe_penalty,
       accessibility_factor: 0,
       timing_factor: 0,

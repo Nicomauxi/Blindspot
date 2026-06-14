@@ -177,6 +177,9 @@ export interface ScoreCalibrationScenario {
   preview_thresholds?: ScoreBandThresholds;
   dedupe?: DedupeCalibrationConfig;
   social?: SocialScoringConfig;
+  // FS-22: peso (0..1) con el que la dimensión digital_gap entra al base de v3. Default 0 =
+  // inerte (comportamiento previo). Solo el escenario activo lo sube, tras validar con score-eval.
+  digital_gap_weight?: number;
 }
 
 // Bonus por señal social (F1): audiencia (followers) + actividad (liveness) + el combo
@@ -306,6 +309,7 @@ export interface ScoreBreakdown {
   accessibility_bonus?: number;
   timing_bonus?: number;
   social_bonus?: number;
+  digital_gap_bonus?: number;
   dedupe_penalty?: number;
 }
 

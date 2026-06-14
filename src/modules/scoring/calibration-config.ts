@@ -77,6 +77,9 @@ const ScenarioSchema = z.object({
     active_bonus: z.number(),
     high_audience_no_web_bonus: z.number(),
   }).default({ audience_bonus: { low: 1, medium: 3, high: 6 }, active_bonus: 2, high_audience_no_web_bonus: 4 }),
+  // FS-22: peso de la dimensión digital_gap en el base. Default 0 (inerte) — solo el escenario
+  // activo lo sube tras validar el delta con score-eval.
+  digital_gap_weight: z.number().min(0).max(1).default(0),
 });
 
 const CalibrationConfigSchema = z.object({

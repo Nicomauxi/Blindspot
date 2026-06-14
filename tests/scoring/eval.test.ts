@@ -99,6 +99,21 @@ describe("buildScoreEvalReport", () => {
     }
   });
 
+  it("FS-22: digital_gap_weight es inerte en 0 y aditivo cuando es > 0", () => {
+    const { scenario, thresholds } = resolveActiveScenario();
+    const lead = makeLead({ id: "dg", place_id: "pdg", name: "Gap", tags: ["no-website", "high-reviews-no-web"] });
+    const inert = buildScoreResultV3(lead, { ...scenario, digital_gap_weight: 0 }, thresholds);
+    const weighted = buildScoreResultV3(lead, { ...scenario, digital_gap_weight: 0.15 }, thresholds);
+    expect(inert.score_breakdown?.digital_gap_bonus ?? 0).toBe(0);
+    expect(weighted.score_breakdown?.digital_gap_bonus ?? 0).toBeGreaterThan(0);
+    expect(weighted.prospect_score).toBeGreaterThanOrEqual(inert.prospect_score);
+  });
+
+  it("FS-22: el escenario activo mantiene digital_gap_weight en 0 (Camino B — no inflar prod)", () => {
+    const { scenario } = resolveActiveScenario();
+    expect(scenario.digital_gap_weight ?? 0).toBe(0);
+  });
+
   it("derives the hot threshold from the active scenario, not a hardcoded 55 (FS-12a)", () => {
     const { thresholds } = resolveActiveScenario();
     // Active scenario hybrid_bounded_v32_candidate uses very_good_min=58, not 55.

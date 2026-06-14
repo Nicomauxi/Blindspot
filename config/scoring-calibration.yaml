@@ -257,6 +257,14 @@ scenarios:
   hybrid_bounded_v32_candidate:
     family: hybrid_bounded
     gap_depth_cap: 52
+    # FS-22 (medido vía score-eval, 2026-06-14): digital_gap se mantiene en 0. Se probó 0.15 y 0.05
+    # contra el baseline y AMBOS inflan/double-countean: digital_gap se solapa con gap_depth (oferta
+    # web_nuevo por no-web), socialBonus y systems_gap → no aporta señal ortogonal, solo desplaza toda
+    # la distribución hacia arriba y vuelve "hot" a leads tier D (8→289 con 0.15; 8→21 con 0.05) y
+    # empeora el promedio de franquicias (WARN). Conclusión = Camino B del plan: NO pesar como está.
+    # El knob queda disponible (default 0) para un futuro uso quirúrgico sobre SOLO las reglas técnicas
+    # no-solapadas (ssl_missing/not_responsive/stack_obsolete/…), que requeriría una sub-dimensión aparte.
+    digital_gap_weight: 0
     source_quality_bonus:
       google_places: 0
       osm: 2
