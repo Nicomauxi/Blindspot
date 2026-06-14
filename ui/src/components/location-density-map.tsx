@@ -29,6 +29,7 @@ import {
   type NicheMarkerIconOption,
 } from "@/lib/location-density-map";
 import { cn } from "@/lib/utils";
+import { OfferBarsPreview } from "@/components/lead/offer-bars-preview";
 
 const DEFAULT_CENTER: [number, number] = [-32.5228, -55.7658];
 const DEFAULT_ZOOM = 7;
@@ -318,6 +319,7 @@ function LeadReviewCard({
       <div className="mt-4 rounded-2xl border border-slate-100 bg-slate-50 px-3 py-3">
         <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Lectura rápida</div>
         <p className="mt-2 text-sm text-slate-700">{lead.pitch_hook ?? "Sin pitch hook visible; conviene abrir la ficha antes de contactar."}</p>
+        <OfferBarsPreview offerings={lead.commercial_offerings} pitchHook={lead.pitch_hook} />
       </div>
 
       <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">

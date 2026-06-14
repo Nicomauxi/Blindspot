@@ -2347,6 +2347,7 @@ export type ZoneLead = {
   pitch_hook?: string | null;
   contact_ready?: boolean | null;
   tags?: string[] | null;
+  commercial_offerings?: CommercialOfferings | null;
 };
 
 export async function getZoneLeads(

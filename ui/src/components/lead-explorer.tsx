@@ -2,6 +2,7 @@
 
 import { HOT_LEAD_THRESHOLD } from "@/lib/hot-leads";
 import { contactReadyCopy, contactReadyState } from "@/lib/contact-ready";
+import { OfferBarsPreview } from "@/components/lead/offer-bars-preview";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
@@ -399,12 +400,6 @@ function getCommercialOfferTypeBadgeClass(type: CommercialOfferType | "unknown")
   return "bg-slate-100 text-slate-600";
 }
 
-function formatCommercialScores(lead: LeadDashboard) {
-  const summary = lead.commercial_offers_summary;
-  if (!summary) return "Sin score comercial derivado";
-  return "MKT " + summary.marketing_score + " · SW " + summary.software_score;
-}
-
 // === Cluster C — "Contactos y Redes": señales que lee un vendedor de un vistazo. ===
 const GENERIC_EMAIL_RE = /^(info|ventas|contacto|contactenos|admin|hola|ayuda|soporte|support|sales|reservas|comercial|administracion|gerencia)/i;
 
@@ -575,8 +570,8 @@ function LeadRow({ lead }: { lead: LeadDashboard }) {
               </SmallPill>
             ) : null}
           </div>
-          <p className="mt-1 text-xs text-slate-500">{formatCommercialScores(lead)}</p>
-          <p className="mt-1 text-xs text-slate-500">
+          <OfferBarsPreview offerings={lead.commercial_offerings} pitchHook={lead.pitch_hook} />
+          <p className="mt-2 text-xs text-slate-500">
             {contactReadyCopy(lead.contact_ready).hint}
           </p>
         </div>

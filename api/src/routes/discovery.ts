@@ -28,6 +28,7 @@ import {
   type OpportunityLead,
 } from "../../../src/modules/discovery/location-opportunity.js";
 import { createLeadGeocodingService } from "../services/lead-geocoding.js";
+import { buildCommercialOfferings } from "../../../src/modules/scoring/offerings.js";
 
 const permissiveUuid = z
   .string()
@@ -1512,12 +1513,19 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
       if (!matchesLeadDensityFilters(lead, densityFilters, rawCoordinate)) continue;
       const mapPoint = await resolveZoneLocationMatch(lead, requestedParentLocationKey, requestedGridLocationKey);
       if (mapPoint) {
+        // Ofertas derivadas para mostrar barras + "por qué" en la card del mapa (mismo dato que la grilla).
+        const commercialOfferings = buildCommercialOfferings(
+          Array.isArray(lead.tags) ? lead.tags : [],
+          lead.score_breakdown && typeof lead.score_breakdown === "object" ? (lead.score_breakdown as Record<string, unknown>) : null,
+          lead.digital_footprint && typeof lead.digital_footprint === "object" ? (lead.digital_footprint as Record<string, unknown>) : null
+        );
         matching.push({
           ...lead,
           prospect_score: asNullableNumber(lead.prospect_score),
           rating: asNullableNumber(lead.rating),
           review_count: asNullableNumber(lead.review_count),
           map_point: mapPoint,
+          commercial_offerings: commercialOfferings,
         });
       }
     }
