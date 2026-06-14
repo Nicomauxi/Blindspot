@@ -34,6 +34,20 @@ const CHAT_WIDGET_PATTERNS = [
 ];
 const ECOMMERCE_PLATFORMS = [
   "mercadopago.com/integrations",
+  // Pasarelas/medios de pago locales UY (Wappalyzer-gap): no estaban y son señal fuerte de e-commerce
+  // real en el mercado uruguayo. dLocal/Plexo/Scanntech/Geopagos/Prometeo (SDK/checkout) + redes de
+  // cobranza (Abitab/RedPagos, vía redirect de pago) + MercadoPago .uy/sdk.
+  "sdk.mercadopago",
+  "mercadopago.com.uy",
+  "dlocal.com",
+  "dlocalgo",
+  "plexo.com.uy",
+  "scanntech.com",
+  "geopagos.com",
+  "prometeoapi.com",
+  "abitab.com.uy",
+  "redpagos.com.uy",
+  "bamboopayment.com",
   "js.stripe.com",
   "paypal.com/sdk",
   "cdn.shopify.com",

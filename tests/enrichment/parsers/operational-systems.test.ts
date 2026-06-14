@@ -138,6 +138,22 @@ describe("parseOperationalSystems", () => {
     );
   });
 
+  it("detecta pasarelas de pago locales UY (dLocal/Plexo/Scanntech/Abitab) como ecommerce", () => {
+    const html = `<html><body>
+      <script src="https://js.dlocalgo.com/sdk.js"></script>
+      <a href="https://checkout.plexo.com.uy/pay/abc">Pagar con Plexo</a>
+      <a href="https://pagos.scanntech.com/checkout">Scanntech</a>
+      <a href="https://www.abitab.com.uy/pago">Pagá en Abitab</a>
+    </body></html>`;
+    const result = parseOperationalSystems(html).ecommerce_platforms;
+    expect(result).toEqual(expect.arrayContaining(["dlocalgo", "plexo.com.uy", "scanntech.com", "abitab.com.uy"]));
+  });
+
+  it("no marca ecommerce si no hay pasarela (sitio informativo)", () => {
+    const html = `<html><body><a href="/nosotros">Nosotros</a></body></html>`;
+    expect(parseOperationalSystems(html).ecommerce_platforms).toEqual([]);
+  });
+
   it("detects WhatsApp Business link as whatsapp_web_link", () => {
     const html = `<html><body>
       <a href="https://wa.me/59899123456">Escribinos</a>
