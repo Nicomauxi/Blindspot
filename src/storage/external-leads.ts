@@ -32,6 +32,7 @@ export async function insertExternalLead(
   // tiene contacto accionable y no es una fuente-señal standalone.
   const qualification = qualifyExternalLead({
     source: candidate.source,
+    name: candidate.name,
     hasContact: candidateHasContact(candidate),
     corroborated: false,
     foreign: isForeignAddress(candidate.address),
@@ -120,7 +121,7 @@ export async function insertExternalLead(
 
 // Razones de higiene que NUNCA se rescatan automáticamente (las puso un proceso de
 // dedup/limpieza, no la calificación de contacto).
-const NON_RESCUABLE_REASONS = new Set(["duplicate-secondary", "placeholder-name"]);
+const NON_RESCUABLE_REASONS = new Set(["duplicate-secondary", "placeholder-name", "persona-fisica"]);
 
 // N16: re-descubrimiento de la misma fuente → refrescar SOLO los datos crudos del
 // provider (source_data, name, address, phone, website, gps faltante), preservando
@@ -136,6 +137,7 @@ async function updateExistingExternalLead(
   const corroborated = (existing.corroborating_sources ?? []).length > 0;
   const qualification = qualifyExternalLead({
     source: candidate.source,
+    name: candidate.name ?? existing.name,
     hasContact: candidateHasContact(candidate) || leadHasContact(existing),
     corroborated,
     foreign: isForeignAddress(candidate.address ?? existing.address),
@@ -243,6 +245,7 @@ export async function addCorroboratingSource(
     !rescueReasons.some((reason) => NON_RESCUABLE_REASONS.has(reason)) &&
     qualifyExternalLead({
       source: candidate.source,
+      name: mergedLead.name ?? candidate.name,
       hasContact: leadHasContact({ ...mergedLead, ...mergedResult }) || candidateHasContact(candidate),
       corroborated: true,
       foreign: isForeignAddress(lead.address ?? candidate.address),

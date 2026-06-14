@@ -1,5 +1,6 @@
 import type { DiscoveryCandidate, DiscoverySource, Lead } from "../../shared/types.js";
 import type { Vertical } from "./vertical.js";
+import { isLikelyNaturalPerson } from "./person-classifier.js";
 
 // Fuentes que solo aportan valor como SEÑAL al corroborar otro lead (no como lead standalone).
 // SoT en shared/discovery-sources.ts (derivado de signalOnly); se re-exporta por compat.
@@ -10,6 +11,8 @@ export interface QualificationInput {
   source: DiscoverySource;
   hasContact: boolean;
   corroborated: boolean;
+  /** Nombre / razón social — para el gate de persona física (Ley 18.331). */
+  name?: string | null;
   /** El negocio está fuera de Uruguay (AR/BR). Excluye del pool aun si corrobora. F1.3. */
   foreign?: boolean;
   /**
@@ -34,6 +37,13 @@ export function qualifyExternalLead(input: QualificationInput): QualificationRes
   // Fuera de Uruguay → nunca entra al pool, ni siquiera corroborado (F1.3).
   if (input.foreign) {
     return { passed_filter: false, rejection_reasons: ["geo-out-of-country"] };
+  }
+
+  // Ley 18.331: no registramos personas físicas (empresas unipersonales = datos personales del
+  // individuo). Exclusión dura, aun corroborado. Heurística conservadora sobre el nombre/razón
+  // social; la fuente autoritativa será el tipo de entidad de DGI (futuro).
+  if (isLikelyNaturalPerson(input.name)) {
+    return { passed_filter: false, rejection_reasons: ["persona-fisica"] };
   }
 
   // Vertical B2B (industrial/otro) → segmentada fuera del pool comercial, aun corroborada. F1.4.

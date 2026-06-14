@@ -71,6 +71,16 @@ describe("qualifyExternalLead", () => {
     const r = qualifyExternalLead({ source: "miem_dei", hasContact: true, corroborated: false, vertical: "comercio-local" });
     expect(r).toEqual({ passed_filter: true, rejection_reasons: [] });
   });
+
+  it("Ley 18.331: persona física NO entra al pool, ni corroborada ni con contacto", () => {
+    const r = qualifyExternalLead({ source: "yelu", name: "Aguirre Berretta Maria Viviana", hasContact: true, corroborated: true });
+    expect(r).toEqual({ passed_filter: false, rejection_reasons: ["persona-fisica"] });
+  });
+
+  it("Ley 18.331: una empresa (forma societaria o nombre comercial) pasa el gate normal", () => {
+    expect(qualifyExternalLead({ source: "miem_dei", name: "LARIALES S.A.", hasContact: true, corroborated: false }).passed_filter).toBe(true);
+    expect(qualifyExternalLead({ source: "yelu", name: "Hotel Humberto", hasContact: true, corroborated: false }).passed_filter).toBe(true);
+  });
 });
 
 describe("candidateHasContact", () => {
