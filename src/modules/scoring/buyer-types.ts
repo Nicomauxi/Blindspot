@@ -58,6 +58,10 @@ function inferredTri(lead: Lead, field: string): boolean | "unknown" {
 
 const UNCERTAINTY_MULTIPLIER = 0.5;
 const DERIVED_WHATSAPP_MULTIPLIER = 0.7;
+// BL-03: fracción de la penalización inferida que se aplica cuando el campo es 'unknown'
+// (no verificado). Hedge entre 0 (premiar ignorancia, comportamiento previo) y 1 (penalizar
+// como si estuviera confirmado). 0.3 = penalización suave.
+const UNKNOWN_PENALTY_FRACTION = 0.3;
 
 function computeBuyerScore(
   lead: Lead,
@@ -152,10 +156,22 @@ function computeBuyerScore(
     }
   }
 
+  // BL-03: la penalización aplica cuando el lead YA tiene la feature (ej. has_pos → la oferta
+  // software_pos es menos relevante). Con inferredBool, 'unknown' contaba como ausencia VERIFICADA
+  // → un lead sin dato escapaba la penalización igual que uno confirmado-sin-la-feature ("premia
+  // ignorancia"). Con inferredTri: true → penalización completa; 'unknown' → penalización SUAVE
+  // (hedge por incertidumbre); false (verificado sin la feature) → sin penalización (oferta relevante).
   for (const [field, penalty] of Object.entries(config.inferred_penalties ?? {})) {
-    if (inferredBool(lead, field)) {
+    const tri = inferredTri(lead, field);
+    if (tri === true) {
       adjustments += penalty;
       modifiers.push(`penalty:${field}:${penalty}`);
+    } else if (tri === "unknown") {
+      const soft = Math.round(penalty * UNKNOWN_PENALTY_FRACTION);
+      if (soft !== 0) {
+        adjustments += soft;
+        modifiers.push(`penalty:${field}:unknown:${soft}`);
+      }
     }
   }
 

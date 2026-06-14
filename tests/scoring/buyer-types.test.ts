@@ -128,6 +128,25 @@ describe("software_pos", () => {
     const s = computeAllBuyerScores(l).find((x) => x.buyer_type === "software_pos")!;
     expect(s.score).toBe(54); // N08 normalizado
   });
+
+  it("BL-03: has_pos 'unknown' aplica penalización SUAVE (-15 = -50*0.3), no cero", () => {
+    const l = lead({
+      ...withSubScores({ software: 60 }),
+      inferred_state: { has_pos: { value: null, confidence: 0 }, digitalization_level: "none", computed_at: "2026-01-01T00:00:00Z" } as Lead["inferred_state"],
+    });
+    const s = computeAllBuyerScores(l).find((x) => x.buyer_type === "software_pos")!;
+    expect(s.breakdown.adjustments).toBe(-15);
+    expect(s.breakdown.applied_modifiers).toContain("penalty:has_pos:unknown:-15");
+  });
+
+  it("BL-03: has_pos verificado=false (confidence>0) NO penaliza (oferta relevante)", () => {
+    const l = lead({
+      ...withSubScores({ software: 60 }),
+      ...withInferredState({ has_pos: false }), // value:false, confidence:0.9 → verificado
+    });
+    const s = computeAllBuyerScores(l).find((x) => x.buyer_type === "software_pos")!;
+    expect(s.breakdown.adjustments).toBe(0);
+  });
 });
 
 // ─── delivery_propio ─────────────────────────────────────────────────────────
