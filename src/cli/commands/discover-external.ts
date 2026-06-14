@@ -97,7 +97,9 @@ export async function executeExternalDiscovery(opts: {
   limit?: number;
   dryRun: boolean;
 }): Promise<ExternalDiscoveryExecutionSummary> {
-  const allLeads = await loadAllLeads();
+  // Ley 18.331: excluir personas físicas del pool de dedup → un candidato nuevo no debe matchear
+  // (y quedar "corroborado"/descartado) contra una persona física ya minimizada.
+  const allLeads = (await loadAllLeads()).filter((l) => !l.is_natural_person);
   const runtimeLists = await loadRuntimeLists();
   const runtime = await loadAllRuntime();
   const dedupThreshold = getOnlineDedupThreshold();

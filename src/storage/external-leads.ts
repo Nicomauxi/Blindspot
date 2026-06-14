@@ -4,6 +4,7 @@ import { calculateContactReliability, calculateDataConfidence } from "../modules
 import { isValidCoord } from "../modules/discovery/geo-text.js";
 import { isForeignAddress } from "../modules/discovery/geo-validator.js";
 import { candidateHasContact, leadHasContact, qualifyExternalLead } from "../modules/discovery/qualification.js";
+import { isPersonaFisicaRejection, personaFisicaRedaction } from "../modules/discovery/persona-fisica.js";
 import { classifyVertical, verticalTag } from "../modules/discovery/vertical.js";
 import { mergeCanonicalFields } from "./canonical-field.js";
 
@@ -84,6 +85,8 @@ export async function insertExternalLead(
         isValidCoord(candidate.latitude, candidate.longitude)
           ? { gps: `SRID=4326;POINT(${candidate.longitude} ${candidate.latitude})` }
           : {}),
+        // Ley 18.331: persona física → minimizar (los nulls de la redacción ganan sobre los PII de arriba).
+        ...(isPersonaFisicaRejection(qualification.rejection_reasons) ? personaFisicaRedaction() : {}),
       },
       { onConflict: "place_id", ignoreDuplicates: false }
     )
@@ -93,7 +96,8 @@ export async function insertExternalLead(
   if (error) throw new Error(`insertExternalLead failed: ${error.message}`);
   const lead = data as Lead;
 
-  if (candidate.email) {
+  // No persistir email de una persona física (dato personal minimizado).
+  if (candidate.email && !isPersonaFisicaRejection(qualification.rejection_reasons)) {
     const existing = (lead.canonical_fields ?? {}) as Record<string, unknown>;
     // N33: shape contractual {value, confidence, sources, conflict} — el string plano
     // dejaba el email invisible para lead_dashboard/KPIs (->>'value' devuelve NULL).
@@ -133,6 +137,11 @@ async function updateExistingExternalLead(
   vertical: ReturnType<typeof classifyVertical> | undefined
 ): Promise<Lead> {
   const db = getSupabase();
+
+  // Ley 18.331: un lead ya marcado persona física no se reprocesa (no re-escribir datos personales).
+  if (isPersonaFisicaRejection(existing.rejection_reasons)) {
+    return existing;
+  }
 
   const corroborated = (existing.corroborating_sources ?? []).length > 0;
   const qualification = qualifyExternalLead({
@@ -194,6 +203,10 @@ export async function addCorroboratingSource(
   if (fetchError) throw new Error(`addCorroboratingSource lead fetch failed: ${fetchError.message}`);
 
   const lead = leadRow as Lead;
+  // Ley 18.331: no enriquecer/escribir datos sobre un lead marcado persona física.
+  if (isPersonaFisicaRejection(lead.rejection_reasons) || lead.is_natural_person === true) {
+    return lead;
+  }
   const existing: CorroboratingSource[] = lead.corroborating_sources ?? [];
   if (existing.some((source) => source.source === candidate.source)) return lead;
 

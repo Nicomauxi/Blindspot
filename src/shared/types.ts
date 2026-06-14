@@ -440,6 +440,8 @@ export interface Lead {
   prospect_score_v1: number | null;
   passed_filter: boolean;
   rejection_reasons: string[];
+  /** Ley 18.331: el lead es (probable) persona física → oculto + datos personales minimizados. */
+  is_natural_person?: boolean;
   score_breakdown: Record<string, unknown> | null;
   score_breakdown_v1: Record<string, unknown> | null;
   systems_gap_breakdown: Record<string, unknown> | null;
