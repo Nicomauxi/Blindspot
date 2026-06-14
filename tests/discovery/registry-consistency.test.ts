@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { load } from "js-yaml";
 import type { DiscoverySource } from "../../src/shared/types.js";
@@ -17,13 +17,22 @@ const REPO_ROOT = join(__dirname, "..", "..");
 const sorted = (xs: readonly string[]): string[] => [...xs].sort();
 const sleepFn = (): Promise<void> => Promise.resolve();
 
-// Extrae las fuentes de un CHECK `source = ANY (ARRAY[...])` del SQL.
-function checkSourcesFor(sql: string, constraintName: string): string[] {
-  const idx = sql.indexOf(constraintName);
-  const region = sql.slice(idx);
-  const arr = region.match(/ARRAY\[([\s\S]*?)\]/);
-  if (!arr) throw new Error(`No ARRAY found near ${constraintName}`);
-  return [...arr[1]!.matchAll(/'([a-z_]+)'::text/g)].map((m) => m[1]!);
+// CHECK efectivo de un constraint = el ÚLTIMO `ADD CONSTRAINT <name> ... CHECK (... ARRAY[...])`
+// a través de TODAS las migraciones (cada migración hace DROP+ADD; gana la más reciente). Tolera
+// cualquier cast ('x'::text / ::varchar / sin cast) para no romperse si cambia el estilo SQL.
+function effectiveCheckSources(migrationsDir: string, constraintName: string): string[] {
+  const files = readdirSync(migrationsDir).filter((f) => f.endsWith(".sql")).sort();
+  const addRe = new RegExp(`ADD\\s+CONSTRAINT\\s+${constraintName}\\s+CHECK\\s*\\(([\\s\\S]*?ARRAY\\[[\\s\\S]*?\\][\\s\\S]*?)\\)`, "gi");
+  let lastArrayBody: string | null = null;
+  for (const file of files) {
+    const sql = readFileSync(join(migrationsDir, file), "utf-8");
+    for (const m of sql.matchAll(addRe)) {
+      const arr = m[1]!.match(/ARRAY\[([\s\S]*?)\]/);
+      if (arr) lastArrayBody = arr[1]!;
+    }
+  }
+  if (lastArrayBody === null) throw new Error(`No ADD CONSTRAINT ${constraintName} with ARRAY found in migrations`);
+  return [...lastArrayBody.matchAll(/'([a-z_]+)'(?:::[a-z ]+)?/gi)].map((m) => m[1]!);
 }
 
 describe("provider registry consistency (SoT = shared/discovery-sources)", () => {
@@ -33,13 +42,10 @@ describe("provider registry consistency (SoT = shared/discovery-sources)", () =>
     expect(sorted(Object.keys(DISCOVERY_SOURCE_META))).toEqual(sorted(ALL_DISCOVERY_SOURCES));
   });
 
-  it("DB CHECK (leads + lead_source_references) == DB_CONSTRAINED_SOURCES", () => {
-    const sql = readFileSync(
-      join(REPO_ROOT, "supabase/migrations/20260610000000_add_miem_dei_source.sql"),
-      "utf-8"
-    );
-    const leadsCheck = checkSourcesFor(sql, "leads_source_check");
-    const lsrCheck = checkSourcesFor(sql, "lead_source_references_source_check");
+  it("DB CHECK efectivo (leads + lead_source_references) == DB_CONSTRAINED_SOURCES", () => {
+    const migrationsDir = join(REPO_ROOT, "supabase/migrations");
+    const leadsCheck = effectiveCheckSources(migrationsDir, "leads_source_check");
+    const lsrCheck = effectiveCheckSources(migrationsDir, "lead_source_references_source_check");
     expect(sorted(leadsCheck)).toEqual(sorted(DB_CONSTRAINED_SOURCES));
     expect(sorted(lsrCheck)).toEqual(sorted(DB_CONSTRAINED_SOURCES));
   });
