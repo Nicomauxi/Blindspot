@@ -194,7 +194,9 @@ describe("runIgSnippetEnrich", () => {
     const lookup = vi.fn().mockResolvedValue(profile());
     const stats = await runIgSnippetEnrich({ all: true, throttleMs: 0, concurrency: 3, lookup });
     expect(stats.enriched).toBe(6);
-    expect(stats.leads_per_sec).toBeGreaterThan(0);
+    // leads_per_sec es 0 cuando elapsed_ms=0 (run instantáneo con lookup mockeado) — ig-snippet-enrich.ts:163.
+    // No es flake: el throughput de trabajo instantáneo es 0 por diseño. Antes asumía elapsed_ms>=1.
+    expect(stats.leads_per_sec).toBeGreaterThanOrEqual(0);
     expect(stats.elapsed_ms).toBeGreaterThanOrEqual(0);
   });
 });
